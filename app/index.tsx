@@ -1,10 +1,36 @@
-import { View, Text, StyleSheet } from 'react-native';
+import { useEffect } from 'react';
+import { StyleSheet, View, Animated, Image, Dimensions } from 'react-native';
+import { router } from 'expo-router';
+import { Colors } from '../constants/Colors';
 
-export default function HomeScreen() {
+const { width, height } = Dimensions.get('window');
+
+export default function SplashScreen() {
+  const fadeAnim = new Animated.Value(0);
+
+  useEffect(() => {
+    Animated.timing(fadeAnim, {
+      toValue: 1,
+      duration: 1000,
+      useNativeDriver: true,
+    }).start();
+
+    const timer = setTimeout(() => {
+      router.replace('/onboarding');
+    }, 2500);
+
+    return () => clearTimeout(timer);
+  }, []);
+
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Sarathi</Text>
-      <Text style={styles.subtitle}>Your Ride, Your Way</Text>
+      <Animated.View style={[StyleSheet.absoluteFill, { opacity: fadeAnim }]}>
+        <Image 
+          source={require('../assets/images/splash_screen.png')} 
+          style={styles.logo}
+          resizeMode="cover"
+        />
+      </Animated.View>
     </View>
   );
 }
@@ -14,16 +40,10 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: '#ffffff',
+    backgroundColor: Colors.background, // Deep Slate
   },
-  title: {
-    fontSize: 48,
-    fontWeight: 'bold',
-    color: '#0056b3',
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 18,
-    color: '#666666',
+  logo: {
+    width: "100%",
+    height: "100%",
   },
 });
