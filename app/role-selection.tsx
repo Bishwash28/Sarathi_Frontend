@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
-import { Dimensions, SafeAreaView, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+
 import { Colors } from '../constants/Colors';
 
 const { width } = Dimensions.get('window');
@@ -20,7 +21,7 @@ export default function RoleSelectionScreen() {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <View style={styles.safeArea}>
       <View style={styles.container}>
         {/* Header */}
         <View style={styles.header}>
@@ -116,7 +117,7 @@ export default function RoleSelectionScreen() {
           </TouchableOpacity>
         </View>
       </View>
-    </SafeAreaView>
+    </View>
   );
 }
 

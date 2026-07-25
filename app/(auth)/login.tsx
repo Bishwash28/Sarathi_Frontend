@@ -2,20 +2,25 @@ import React, { useState } from 'react';
 import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { router } from 'expo-router';
 import { Colors } from '../../constants/Colors';
+import { useApp } from '../../context/AppContext';
 
 export default function LoginScreen() {
+  const { login } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
 
-  const handleLogin = () => {
-    // We will integrate Auth later
-    console.log('Login with:', { email, password });
-    router.push('/(auth)/complete-profile');
+  const handleLogin = async () => {
+    if (!email || !password) {
+      alert('Please enter email and password');
+      return;
+    }
+    await login(email);
+    router.replace('/role-selection');
   };
 
-  const handleGoogleLogin = () => {
-    // Google Auth integration later
-    console.log('Login with Google');
+  const handleGoogleLogin = async () => {
+    await login('google_user@sarathi.com');
+    router.replace('/role-selection');
   };
 
   return (
@@ -72,7 +77,6 @@ export default function LoginScreen() {
 
         {/* Social Auth */}
         <TouchableOpacity style={styles.googleButton} onPress={handleGoogleLogin}>
-          {/* Note: In a real app, use an SVG icon for Google here */}
           <Text style={styles.googleButtonText}>Continue with Google</Text>
         </TouchableOpacity>
 
@@ -127,7 +131,7 @@ const styles = StyleSheet.create({
   input: {
     backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: '#E2E8F0', // Very light gray border
+    borderColor: '#E2E8F0',
     borderRadius: 12,
     padding: 16,
     fontSize: 16,
