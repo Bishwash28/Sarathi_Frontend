@@ -1,5 +1,7 @@
 import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
+import { supabase } from '../lib/supabase';
+import { User } from '@supabase/supabase-js';
 
 // Landmark coordinates on our map & GPS grid
 export interface Landmark {
@@ -75,6 +77,7 @@ interface UserProfile {
 
 interface AppContextType {
   user: UserProfile | null;
+  supabaseUser: User | null;
   isAuthenticated: boolean;
   rides: Ride[];
   bookings: Booking[];
@@ -84,8 +87,8 @@ interface AppContextType {
   notifications: string[];
   activeTripProgress: number; // 0 to 100 representing percentage along route
   activeTripCoords: { x: number; y: number } | null;
-  login: (email: string) => Promise<void>;
-  signup: (profile: Partial<UserProfile>) => Promise<void>;
+  login: (email: string, password?: string) => Promise<{ success: boolean; error?: string }>;
+  signup: (profile: Partial<UserProfile> & { password?: string }) => Promise<{ success: boolean; error?: string }>;
   completeProfile: (profile: Partial<UserProfile>) => void;
   updateEmergencyContact: (contact: string) => void;
   requestBooking: (rideId: string) => void;
@@ -94,7 +97,7 @@ interface AppContextType {
   sendDriverMessage: (rideId: string, text: string) => void;
   startRiderChat: (rideId: string) => void;
   nudgeDriverLocation: (bookingId: string) => void;
-  logout: () => void;
+  logout: () => Promise<void>;
 }
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
@@ -177,6 +180,7 @@ const initialDriverMessages: Record<string, DriverMessage[]> = {
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [rides] = useState<Ride[]>(initialRides);
   const [bookings, setBookings] = useState<Booking[]>([]);
@@ -199,6 +203,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTripProgress, setActiveTripProgress] = useState(0);
   const [activeTripCoords, setActiveTripCoords] = useState<{ x: number; y: number } | null>(null);
   const tripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // Listen for Supabase auth state changes
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      if (session?.user) {
+        setSupabaseUser(session.user);
+        setIsAuthenticated(true);
+        setUser(prev => prev || {
+          name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'User',
+          phone: session.user.user_metadata?.phone || '',
+          email: session.user.email || '',
+          role: session.user.user_metadata?.role || 'passenger',
+          collegeOrCompany: session.user.user_metadata?.college_or_company || 'N/A',
+          emergencyContact: '',
+          rating: 5.0,
+          photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+        });
+      }
+    });
+
+    const { data: authListener } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        setSupabaseUser(session.user);
+        setIsAuthenticated(true);
+        setUser(prev => prev || {
+          name: session.user.user_metadata?.full_name || session.user.email?.split('@')[0] || 'User',
+          phone: session.user.user_metadata?.phone || '',
+          email: session.user.email || '',
+          role: session.user.user_metadata?.role || 'passenger',
+          collegeOrCompany: session.user.user_metadata?.college_or_company || 'N/A',
+          emergencyContact: '',
+          rating: 5.0,
+          photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+        });
+      } else {
+        setSupabaseUser(null);
+        setIsAuthenticated(false);
+        setUser(null);
+      }
+    });
+
+    return () => {
+      authListener.subscription.unsubscribe();
+    };
+  }, []);
 
   // Poll simulator for pending bookings
   useEffect(() => {
@@ -288,7 +337,30 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, [bookings, rides]);
 
-  const login = async (email: string) => {
+  const login = async (email: string, password?: string) => {
+    if (password) {
+      const { data, error } = await supabase.auth.signInWithPassword({ email, password });
+      if (error) {
+        return { success: false, error: error.message };
+      }
+      if (data.user) {
+        setSupabaseUser(data.user);
+        setIsAuthenticated(true);
+        setUser({
+          name: data.user.user_metadata?.full_name || email.split('@')[0],
+          phone: data.user.user_metadata?.phone || '',
+          email: data.user.email || email,
+          role: data.user.user_metadata?.role || 'passenger',
+          collegeOrCompany: data.user.user_metadata?.college_or_company || 'N/A',
+          emergencyContact: '',
+          rating: 4.8,
+          photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+        });
+        return { success: true };
+      }
+    }
+    
+    // Fallback/Mock login if no password specified
     setUser({
       name: 'Sakar Aryal',
       phone: '9841234567',
@@ -300,19 +372,54 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
     });
     setIsAuthenticated(true);
+    return { success: true };
   };
 
-  const signup = async (profile: Partial<UserProfile>) => {
+  const signup = async (profile: Partial<UserProfile> & { password?: string }) => {
+    if (profile.email && profile.password) {
+      const { data, error } = await supabase.auth.signUp({
+        email: profile.email,
+        password: profile.password,
+        options: {
+          data: {
+            full_name: profile.name,
+            phone: profile.phone,
+            role: profile.role,
+            college_or_company: profile.collegeOrCompany,
+          },
+        },
+      });
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+      if (data.user) {
+        setSupabaseUser(data.user);
+        setUser({
+          name: profile.name || 'New Passenger',
+          phone: profile.phone || '98XXXXXXXX',
+          email: profile.email,
+          role: profile.role || 'passenger',
+          collegeOrCompany: profile.collegeOrCompany || 'N/A',
+          emergencyContact: '',
+          rating: 5.0,
+          photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+        });
+        return { success: true };
+      }
+    }
+
     setUser({
       name: profile.name || 'New Passenger',
       phone: profile.phone || '98XXXXXXXX',
       email: profile.email || 'passenger@sarathi.com',
-      role: 'passenger',
+      role: profile.role || 'passenger',
       collegeOrCompany: profile.collegeOrCompany || 'N/A',
       emergencyContact: '',
       rating: 5.0,
       photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
     });
+    return { success: true };
   };
 
   const completeProfile = (profile: Partial<UserProfile>) => {
@@ -460,8 +567,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveChatRideIds(prev => prev.includes(rideId) ? prev : [...prev, rideId]);
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await supabase.auth.signOut();
     setUser(null);
+    setSupabaseUser(null);
     setIsAuthenticated(false);
     setBookings([]);
   };
@@ -470,6 +579,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     <AppContext.Provider
       value={{
         user,
+        supabaseUser,
         isAuthenticated,
         rides,
         bookings,

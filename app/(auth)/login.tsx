@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground } from 'react-native';
 import { router } from 'expo-router';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
+import { validateEmail, hasScriptTags, sanitizeInput } from '../../utils/validation';
 
 export default function LoginScreen() {
   const { login } = useApp();
@@ -10,11 +11,29 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
 
   const handleLogin = async () => {
-    if (!email || !password) {
-      alert('Please enter email and password');
+    const cleanEmail = sanitizeInput(email);
+    
+    if (hasScriptTags(email) || hasScriptTags(password)) {
+      alert('Security Error: Script tags and HTML elements are not allowed.');
       return;
     }
-    await login(email);
+
+    const emailCheck = validateEmail(cleanEmail);
+    if (!emailCheck.isValid) {
+      alert(emailCheck.message);
+      return;
+    }
+
+    if (!password) {
+      alert('Please enter your password.');
+      return;
+    }
+
+    const result = await login(cleanEmail, password);
+    if (!result.success) {
+      alert(result.error || 'Login failed');
+      return;
+    }
     router.replace('/role-selection');
   };
 
@@ -30,11 +49,18 @@ export default function LoginScreen() {
     >
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         
-        {/* Header Section */}
-        <View style={styles.headerContainer}>
-          <Text style={styles.title}>Welcome Back</Text>
-          <Text style={styles.subtitle}>Log in to your Sarathi account</Text>
-        </View>
+        {/* Top Header Background Banner Image with Text Overlay */}
+        <ImageBackground 
+          source={require('../../assets/images/home_top.png')} 
+          style={styles.topHeaderBackground} 
+          resizeMode="cover"
+        >
+        
+          <View style={styles.headerContainer}>
+            <Text style={styles.title}>Welcome Back</Text>
+            <Text style={styles.subtitle}>Log in to your Sarathi account</Text>
+          </View>
+        </ImageBackground>
 
         {/* Form Section */}
         <View style={styles.formContainer}>
@@ -100,26 +126,35 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: 60,
     paddingBottom: 40,
-    justifyContent: 'center',
   },
+  topHeaderBackground: {
+    width: '100%',
+    height: 180,
+    justifyContent: 'center',
+    marginBottom: 30,
+  },
+ 
   headerContainer: {
     alignItems: 'center',
-    marginBottom: 40,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    zIndex: 2,
   },
   title: {
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: 'bold',
     color: Colors.textPrimary,
     marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 16,
     color: Colors.textMuted,
+    textAlign: 'center',
   },
   formContainer: {
+    paddingHorizontal: 24,
     marginBottom: 30,
   },
   label: {
@@ -161,6 +196,7 @@ const styles = StyleSheet.create({
   dividerContainer: {
     flexDirection: 'row',
     alignItems: 'center',
+    paddingHorizontal: 24,
     marginBottom: 30,
   },
   divider: {
@@ -181,6 +217,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderRadius: 12,
     alignItems: 'center',
+    marginHorizontal: 24,
     marginBottom: 30,
   },
   googleButtonText: {
@@ -192,6 +229,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 24,
   },
   footerText: {
     color: Colors.textMuted,

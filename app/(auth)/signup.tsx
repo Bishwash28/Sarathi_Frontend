@@ -1,37 +1,63 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground } from 'react-native';
 import { router } from 'expo-router';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
-import { Ionicons } from '@expo/vector-icons';
+import { validateName, validateEmail, validatePassword, hasScriptTags, sanitizeInput } from '../../utils/validation';
 
 export default function SignupScreen() {
   const { signup } = useApp();
   const [name, setName] = useState('');
-  const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
-  const [role, setRole] = useState<'passenger' | 'driver'>('passenger');
-  const [collegeOrCompany, setCollegeOrCompany] = useState('');
 
   const handleSignup = async () => {
-    if (!name || !phone || !email || !password || !collegeOrCompany) {
-      alert('Please fill in all fields');
+    // 1. Script Tag Security Check
+    if (hasScriptTags(name) || hasScriptTags(email) || hasScriptTags(password)) {
+      alert('Security Error: Script tags and HTML tags are strictly prohibited.');
+      return;
+    }
+
+    const cleanName = sanitizeInput(name);
+    const cleanEmail = sanitizeInput(email);
+
+    // 2. Name validation (no symbols)
+    const nameCheck = validateName(cleanName);
+    if (!nameCheck.isValid) {
+      alert(nameCheck.message);
+      return;
+    }
+
+    // 3. Email validation (no temp mail)
+    const emailCheck = validateEmail(cleanEmail);
+    if (!emailCheck.isValid) {
+      alert(emailCheck.message);
+      return;
+    }
+
+    // 4. Password validation (min 8 chars, upper, lower, symbol)
+    const passwordCheck = validatePassword(password);
+    if (!passwordCheck.isValid) {
+      alert(passwordCheck.message);
       return;
     }
     
-    await signup({
-      name,
-      phone,
-      email,
-      role,
-      collegeOrCompany,
+    const result = await signup({
+      name: cleanName,
+      email: cleanEmail,
+      password,
+      role: 'passenger',
     });
     
-    // Proceed to OTP screen
+    if (!result.success) {
+      alert(result.error || 'Signup failed');
+      return;
+    }
+
+    // Proceed to OTP / Next screen
     router.push({
       pathname: '/(auth)/otp',
-      params: { phone, email, name }
+      params: { email: cleanEmail, name: cleanName }
     });
   };
 
@@ -42,11 +68,17 @@ export default function SignupScreen() {
     >
       <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
         
-        {/* Header Section */}
-        <View style={styles.headerContainer}>
-          <Text style={styles.title}>Create Account</Text>
-          <Text style={styles.subtitle}>Join Sarathi to ride and share</Text>
-        </View>
+        {/* Top Header Background Banner Image with Text Overlay */}
+        <ImageBackground 
+          source={require('../../assets/images/home_top.png')} 
+          style={styles.topHeaderBackground} 
+          resizeMode="cover"
+        >
+          <View style={styles.headerContainer}>
+            <Text style={styles.title}>Create Account</Text>
+            <Text style={styles.subtitle}>Join Sarathi to ride and share</Text>
+          </View>
+        </ImageBackground>
 
         {/* Form Section */}
         <View style={styles.formContainer}>
@@ -57,16 +89,6 @@ export default function SignupScreen() {
             placeholderTextColor={Colors.textMuted}
             value={name}
             onChangeText={setName}
-          />
-
-          <Text style={styles.label}>Phone Number</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. 9841234567"
-            placeholderTextColor={Colors.textMuted}
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
           />
 
           <Text style={styles.label}>Email Address</Text>
@@ -83,43 +105,15 @@ export default function SignupScreen() {
           <Text style={styles.label}>Password</Text>
           <TextInput
             style={styles.input}
-            placeholder="Create password"
+            placeholder="Min 8 chars, 1 Upper, 1 Lower & 1 Symbol"
             placeholderTextColor={Colors.textMuted}
             value={password}
             onChangeText={setPassword}
             secureTextEntry
           />
 
-          <Text style={styles.label}>College / Company</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="e.g. Pulchowk Campus / Tech Inc"
-            placeholderTextColor={Colors.textMuted}
-            value={collegeOrCompany}
-            onChangeText={setCollegeOrCompany}
-          />
-
-          <Text style={styles.label}>Choose Your Role</Text>
-          <View style={styles.roleContainer}>
-            <TouchableOpacity 
-              style={[styles.roleOption, role === 'passenger' && styles.roleOptionSelected]}
-              onPress={() => setRole('passenger')}
-            >
-              <Ionicons name="person-outline" size={20} color={role === 'passenger' ? Colors.background : Colors.primary} />
-              <Text style={[styles.roleText, role === 'passenger' && styles.roleTextSelected]}>Passenger</Text>
-            </TouchableOpacity>
-
-            <TouchableOpacity 
-              style={[styles.roleOption, role === 'driver' && styles.roleOptionSelected]}
-              onPress={() => setRole('driver')}
-            >
-              <Ionicons name="car-outline" size={20} color={role === 'driver' ? Colors.background : Colors.primary} />
-              <Text style={[styles.roleText, role === 'driver' && styles.roleTextSelected]}>Rider/Driver</Text>
-            </TouchableOpacity>
-          </View>
-
           <TouchableOpacity style={styles.signupButton} onPress={handleSignup}>
-            <Text style={styles.signupButtonText}>Send OTP Verification</Text>
+            <Text style={styles.signupButtonText}>Create Account</Text>
           </TouchableOpacity>
         </View>
 
@@ -143,26 +137,38 @@ const styles = StyleSheet.create({
   },
   scrollContainer: {
     flexGrow: 1,
-    paddingHorizontal: 24,
-    paddingTop: 50,
     paddingBottom: 40,
+  },
+  topHeaderBackground: {
+    width: '100%',
+    height: 180,
     justifyContent: 'center',
+    marginBottom: 30,
+  },
+  overlayTint: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
   },
   headerContainer: {
     alignItems: 'center',
-    marginBottom: 30,
+    justifyContent: 'center',
+    paddingHorizontal: 24,
+    zIndex: 2,
   },
   title: {
-    fontSize: 28,
+    fontSize: 30,
     fontWeight: 'bold',
     color: Colors.textPrimary,
     marginBottom: 8,
+    textAlign: 'center',
   },
   subtitle: {
     fontSize: 16,
     color: Colors.textMuted,
+    textAlign: 'center',
   },
   formContainer: {
+    paddingHorizontal: 24,
     marginBottom: 20,
   },
   label: {
@@ -227,6 +233,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
+    paddingHorizontal: 24,
     marginTop: 10,
   },
   footerText: {

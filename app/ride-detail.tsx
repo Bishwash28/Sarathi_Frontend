@@ -184,6 +184,10 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#FFF',
   },
+  safeArea: {
+    flex: 1,
+    backgroundColor: '#FFF',
+  },
   errorContainer: {
     flex: 1,
     justifyContent: 'center',
