@@ -1,7 +1,7 @@
-import React, { useState } from 'react';
-import { Alert, Image, ImageBackground, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import React, { useState } from 'react';
+import { Alert, Image, ImageBackground, KeyboardAvoidingView, Platform, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
 
@@ -31,32 +31,33 @@ export default function ProfileScreen() {
         style={styles.keyboardContainer}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        <ScrollView contentContainerStyle={styles.container} showsVerticalScrollIndicator={false}>
+        {/* Fixed Profile Header */}
+        <ImageBackground
+          source={require('../../assets/images/home_top1.png')} 
+          style={styles.profileHeaderCard}
+          imageStyle={styles.profileHeaderImageStyle}
+        >
+          <Image
+            source={{ uri: user?.photo || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80' }}
+            style={styles.avatar}
+          />
+          <Text style={styles.userName}>{user?.name || 'Sakar Aryal'}</Text>
 
-          {/* Header Card with home_top.png ImageBackground and no rounded borders */}
-          <ImageBackground
-            source={require('../../assets/images/home_top.png')}
-            style={styles.profileHeaderCard}
-            imageStyle={styles.profileHeaderImageStyle}
-          >
-            <Image
-              source={{ uri: user?.photo || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80' }}
-              style={styles.avatar}
-            />
-            <Text style={styles.userName}>{user?.name || 'Sakar Aryal'}</Text>
-
-            <View style={styles.badgeRow}>
-              <View style={styles.roleBadge}>
-                <Text style={styles.roleText}>{user?.role?.toUpperCase() || 'PASSENGER'}</Text>
-              </View>
-              <View style={styles.ratingBadge}>
-                <Ionicons name="star" size={14} color="#FFF" />
-                <Text style={styles.ratingText}>{user?.rating?.toFixed(1) || '4.8'}</Text>
-              </View>
+          <View style={styles.badgeRow}>
+            <View style={styles.roleBadge}>
+              <Text style={styles.roleText}>{user?.role?.toUpperCase() || 'PASSENGER'}</Text>
             </View>
-          </ImageBackground>
+            <View style={styles.ratingBadge}>
+              <Ionicons name="star" size={14} color="#FFF" />
+              <Text style={styles.ratingText}>{user?.rating?.toFixed(1) || '4.8'}</Text>
+            </View>
+          </View>
+        </ImageBackground>
 
-          {/* User Details Section - Flat & No rounded borders */}
+        {/* Scrollable Content Below */}
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+
+          {/* User Details Section */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Account Details</Text>
 
@@ -172,17 +173,13 @@ const styles = StyleSheet.create({
   keyboardContainer: {
     flex: 1,
   },
-  container: {
-    paddingBottom: 120,
-  },
   profileHeaderCard: {
     paddingVertical: 28,
     paddingHorizontal: 20,
     alignItems: 'center',
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
-    marginBottom: 16,
-    borderRadius: 0, // No rounded borders
+    zIndex: 10,
   },
   profileHeaderImageStyle: {
     resizeMode: 'cover',
@@ -231,6 +228,9 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: 'bold',
   },
+  scrollContent: {
+    paddingBottom: 120,
+  },
   sectionCard: {
     backgroundColor: Colors.background,
     paddingHorizontal: 20,
@@ -238,7 +238,6 @@ const styles = StyleSheet.create({
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
     marginBottom: 12,
-    borderRadius: 0, // Flat & non-rounded
   },
   sectionHeaderRow: {
     flexDirection: 'row',
@@ -278,7 +277,7 @@ const styles = StyleSheet.create({
   },
   divider: {
     height: 1,
-    backgroundColor: '#F1F5F9',
+    backgroundColor: Colors.accent + '15',
     marginVertical: 10,
   },
   editContactContainer: {
@@ -287,7 +286,7 @@ const styles = StyleSheet.create({
   contactInput: {
     backgroundColor: Colors.surface,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: Colors.accent + '25',
     borderRadius: 8,
     padding: 12,
     fontSize: 14,
@@ -320,12 +319,12 @@ const styles = StyleSheet.create({
   driverBanner: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
+    backgroundColor: Colors.surface,
     padding: 16,
     marginHorizontal: 20,
     marginBottom: 20,
     borderWidth: 1,
-    borderColor: '#E2E8F0',
+    borderColor: Colors.accent + '15',
     borderRadius: 12,
   },
   driverBannerIcon: {
@@ -379,3 +378,4 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 });
+

@@ -10,24 +10,24 @@ const { width } = Dimensions.get('window');
 const slides = [
   {
     id: '1',
-    title: 'Every Journey Begins With Someone',
-    description: "No road is too long when you're not traveling it alone. Welcome to Sarathi — where every ride tells a story of connection.",
+    title: 'Har Yatra, Ek Sathi',
+    description: "Every journey, a companion. Some journeys are meant to be shared. Sarathi brings people together — one route, one ride, one story at a time.",
     bgImage: require('../assets/images/onboard_img01.png'),
     isDarkBg: false,
     bgColor: Colors.background,
   },
   {
     id: '2',
-    title: 'Your Path, Shared',
-    description: "Somewhere on your route, someone's heading the same way. Sarathi finds them — turning a daily commute into company along the way.",
+    title: 'Not Just a Ride, a Connection',
+    description: "We don't just match routes — we match moments. Find someone heading your way, and let the road bring you together.",
     bgImage: require('../assets/images/onboard_img02.png'),
     isDarkBg: false,
     bgColor: Colors.background,
   },
   {
     id: '3',
-    title: 'Strangers Today, Familiar Faces Tomorrow',
-    description: "Verified riders. Real trust. Because the best journeys are the ones where you feel safe enough to simply enjoy the ride.",
+    title: 'Built on Trust, Made for You',
+    description: "Every rider verified. Every journey safer. Because Sarathi isn't just about getting there — it's about who you get there with.",
     bgImage: require('../assets/images/onboard_img03.png'),
     isDarkBg: false,
     bgColor: Colors.background,
@@ -171,7 +171,7 @@ const styles = StyleSheet.create({
   },
   skipText: {
     fontSize: 16,
-    color: Colors.secondary || '#C62026',
+    color: Colors.primary,
     fontWeight: '600',
   },
   content: {
@@ -184,13 +184,13 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: Colors.secondary || '#C62026',
+    color: Colors.primary,
     textAlign: 'center',
     marginBottom: 15,
   },
   description: {
     fontSize: 16,
-    color: Colors.secondary || '#C62026',
+    color: Colors.textMuted,
     textAlign: 'center',
     lineHeight: 24,
   },
@@ -225,7 +225,7 @@ const styles = StyleSheet.create({
     backgroundColor: 'rgba(255, 255, 255, 0.5)',
   },
   button: {
-    backgroundColor: Colors.accent,
+    backgroundColor: Colors.primary,
     paddingVertical: 14,
     paddingHorizontal: 32,
     borderRadius: 30,

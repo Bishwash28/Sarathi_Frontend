@@ -1,355 +1,231 @@
-import React, { useState, useEffect } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, ScrollView, Image, FlatList, ImageBackground, Modal } from 'react-native';
-import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import * as Location from 'expo-location';
+import { router } from 'expo-router';
+import React, { useState } from 'react';
+import {
+  Image,
+  ImageBackground,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { Colors } from '../../constants/Colors';
-import { useApp, LANDMARKS, Ride } from '../../context/AppContext';
+import { useApp } from '../../context/AppContext';
+
+// Sample recent searches using landmarks
+const RECENT_SEARCHES = [
+  { from: 'Kalanki', to: 'Koteshwor' },
+  { from: 'Balkhu', to: 'Chabahil' },
+  { from: 'Tripureshwor', to: 'Putalisadak' },
+  { from: 'Kalanki', to: 'Lagankhel' },
+];
 
 export default function HomeScreen() {
-  const { rides, user, notifications } = useApp();
-  const [pickupQuery, setPickupQuery] = useState('Kalanki (Current Location)');
-  const [destinationQuery, setDestinationQuery] = useState('');
-  const [selectedDestination, setSelectedDestination] = useState<string | null>(null);
-  const [vehicleFilter, setVehicleFilter] = useState<'all' | 'bike' | 'car'>('all');
-  const [timeFilter, setTimeFilter] = useState<'all' | 'soon' | 'later'>('all');
-  const [showSuggestions, setShowSuggestions] = useState(false);
+  const { notifications } = useApp();
   const [showNotificationsModal, setShowNotificationsModal] = useState(false);
+  const [activeTab, setActiveTab] = useState<'recent' | 'saved'>('recent');
 
-  // Auto-detect user location on mount using expo-location
-  useEffect(() => {
-    (async () => {
-      try {
-        const { status } = await Location.requestForegroundPermissionsAsync();
-        if (status === 'granted') {
-          const loc = await Location.getCurrentPositionAsync({});
-          if (loc && loc.coords) {
-            setPickupQuery('Kalanki (Current Location)');
-          }
-        }
-      } catch (error) {
-        setPickupQuery('Kalanki');
-      }
-    })();
-  }, []);
-
-  const landmarksList = Object.keys(LANDMARKS);
-
-  // Filter landmarks for destination suggestions
-  const filteredLandmarks = landmarksList.filter(l =>
-    l.toLowerCase().includes(destinationQuery.toLowerCase()) &&
-    l.toLowerCase() !== selectedDestination?.toLowerCase()
-  );
-
-  // Filter rides based on both pickup & destination search queries and filters
-  const filteredRides = rides.filter(ride => {
-    if (selectedDestination) {
-      const destinationInRoute = ride.route.some(
-        landmark => landmark.toLowerCase() === selectedDestination.toLowerCase()
-      );
-      if (!destinationInRoute) return false;
-    } else if (destinationQuery.trim()) {
-      const destinationInRoute = ride.route.some(
-        landmark => landmark.toLowerCase().includes(destinationQuery.toLowerCase().trim())
-      );
-      if (!destinationInRoute) return false;
-    }
-
-    if (pickupQuery.trim() && !pickupQuery.includes('Current Location')) {
-      const pickupInRoute = ride.route.some(
-        landmark => landmark.toLowerCase().includes(pickupQuery.toLowerCase().trim())
-      );
-      if (!pickupInRoute) return false;
-    }
-
-    if (vehicleFilter !== 'all' && ride.vehicleType !== vehicleFilter) {
-      return false;
-    }
-
-    if (timeFilter === 'soon') {
-      const isSoon = ride.departureTime.includes('5 mins') || ride.departureTime.includes('10 mins');
-      if (!isSoon) return false;
-    } else if (timeFilter === 'later') {
-      const isSoon = ride.departureTime.includes('5 mins') || ride.departureTime.includes('10 mins');
-      if (isSoon) return false;
-    }
-
-    return true;
-  });
-
-  const handleSelectLandmark = (landmarkName: string) => {
-    setSelectedDestination(landmarkName);
-    setDestinationQuery(landmarkName);
-    setShowSuggestions(false);
+  const handleRecentSearchTap = (from: string, to: string) => {
+    router.push({
+      pathname: '/search-ride',
+      params: { prefillFrom: from, prefillTo: to },
+    });
   };
 
-  const handleClearDestination = () => {
-    setSelectedDestination(null);
-    setDestinationQuery('');
-    setShowSuggestions(false);
+  const handleFindRide = () => {
+    router.push('/search-ride');
   };
-
-  const handleClearPickup = () => {
-    setPickupQuery('');
-  };
-
-  const renderRideCard = ({ item }: { item: Ride }) => (
-    <TouchableOpacity
-      style={styles.rideCard}
-      onPress={() => router.push({ pathname: '/ride-detail', params: { id: item.id } })}
-      activeOpacity={0.9}
-    >
-      <View style={styles.cardHeader}>
-        <Image source={{ uri: item.riderPhoto }} style={styles.driverPhoto} />
-        <View style={styles.driverInfo}>
-          <Text style={styles.driverName}>{item.riderName}</Text>
-          <View style={styles.ratingRow}>
-            <Ionicons name="star" size={14} color="#F59E0B" />
-            <Text style={styles.ratingText}>{item.rating}</Text>
-          </View>
-        </View>
-        <View style={styles.vehicleBadge}>
-          <Ionicons
-            name={item.vehicleType === 'bike' ? 'bicycle' : 'car'}
-            size={18}
-            color={Colors.primary}
-          />
-          <Text style={styles.vehicleLabel}>
-            {item.vehicleType.toUpperCase()}
-          </Text>
-        </View>
-      </View>
-
-      <View style={styles.routeContainer}>
-        <Ionicons name="location-sharp" size={16} color={Colors.accent} />
-        <Text style={styles.routeText} numberOfLines={1}>
-          {item.route.join(' → ')}
-        </Text>
-      </View>
-
-      <View style={styles.cardFooter}>
-        <View style={styles.footerDetail}>
-          <Ionicons name="time-outline" size={16} color={Colors.textMuted} />
-          <Text style={styles.footerText}>{item.departureTime}</Text>
-        </View>
-        <View style={styles.footerDetail}>
-          <Ionicons name="people-outline" size={16} color={Colors.textMuted} />
-          <Text style={styles.footerText}>{item.seatsLeft} seats left</Text>
-        </View>
-        <Text style={styles.priceText}>NPR {item.price}</Text>
-      </View>
-    </TouchableOpacity>
-  );
 
   return (
     <View style={styles.safeArea}>
-      <View style={styles.container}>
-        
-        {/* Top Section with home_top.png Image Background */}
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── 2. Full Background Hero Section with Header ── */}
         <ImageBackground
-          source={require('../../assets/images/home_top.png')}
-          style={styles.headerBackground}
-          imageStyle={styles.headerImageStyle}
+          source={require('../../assets/images/home_top1.png')}
+          style={styles.heroSection}
+          imageStyle={styles.heroImageStyle}
         >
-          {/* Header Banner with Notification Icon */}
-          <View style={styles.headerTextGroup}>
-            <View style={styles.headerTitleRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.welcomeText}>Hello, {user?.name?.split(' ')[0] || 'Passenger'} 👋</Text>
-                <Text style={styles.subWelcome}>Let's find your partner for today's ride</Text>
-              </View>
-
-              {/* Notification Icon Button on Home Page */}
-              <TouchableOpacity
-                style={styles.notifBellButton}
-                onPress={() => setShowNotificationsModal(true)}
-              >
-                <Ionicons name="notifications" size={20} color={Colors.primary} />
-                {notifications.length > 0 && (
-                  <View style={styles.notifBadgeCircle}>
-                    <Text style={styles.notifBadgeText}>{notifications.length}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
+          <View style={styles.heroOverlay} />
+          
+          {/* Header Bar inside ImageBackground */}
+          <View style={styles.headerBar}>
+            <View style={styles.logoContainer}>
+              <Image
+                source={require('../../assets/images/text_logo.png')}
+                style={styles.logoImage}
+                resizeMode="contain"
+              />
             </View>
+            <TouchableOpacity
+              style={styles.notifBellButton}
+              onPress={() => setShowNotificationsModal(true)}
+            >
+              <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
+              {notifications.length > 0 && (
+                <View style={styles.notifBadgeCircle}>
+                  <Text style={styles.notifBadgeText}>{notifications.length}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
           </View>
 
-          {/* Dual Search Card Box (Pickup & Destination) */}
-          <View style={styles.searchCard}>
-            {/* Box 1: Starting Location (Pickup) */}
-            <View style={styles.inputRow}>
-              <View style={styles.iconCircleBlue}>
-                <Ionicons name="disc" size={16} color="#2563EB" />
-              </View>
-              <TextInput
-                style={styles.inputField}
-                placeholder="Starting location (e.g. Kalanki)..."
-                placeholderTextColor={Colors.textMuted}
-                value={pickupQuery}
-                onChangeText={setPickupQuery}
-              />
-              {pickupQuery.length > 0 && (
-                <TouchableOpacity style={styles.clearIconButton} onPress={handleClearPickup}>
-                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Vertical Connector Line */}
-            <View style={styles.connectorLineContainer}>
-              <View style={styles.connectorDotLine} />
-            </View>
-
-            {/* Box 2: Ending Location (Destination) */}
-            <View style={styles.inputRow}>
-              <View style={styles.iconCircleRed}>
-                <Ionicons name="location" size={16} color="#C62026" />
-              </View>
-              <TextInput
-                style={styles.inputField}
-                placeholder="Where are you going? (Ending location)..."
-                placeholderTextColor={Colors.textMuted}
-                value={destinationQuery}
-                onChangeText={(text) => {
-                  setDestinationQuery(text);
-                  setShowSuggestions(true);
-                  if (selectedDestination && text !== selectedDestination) {
-                    setSelectedDestination(null);
-                  }
-                }}
-                onFocus={() => setShowSuggestions(true)}
-              />
-              {destinationQuery.length > 0 && (
-                <TouchableOpacity style={styles.clearIconButton} onPress={handleClearDestination}>
-                  <Ionicons name="close-circle" size={18} color="#94A3B8" />
-                </TouchableOpacity>
-              )}
-            </View>
-
-            {/* Auto-complete Suggestions Dropdown */}
-            {showSuggestions && filteredLandmarks.length > 0 && (
-              <View style={styles.suggestionsContainer}>
-                <Text style={styles.suggestionsTitle}>Select Landmark:</Text>
-                {filteredLandmarks.map((landmark) => (
-                  <TouchableOpacity
-                    key={landmark}
-                    style={styles.suggestionItem}
-                    onPress={() => handleSelectLandmark(landmark)}
-                  >
-                    <Ionicons name="location-outline" size={16} color={Colors.primary} />
-                    <Text style={styles.suggestionText}>{landmark}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            )}
+          <View style={styles.heroTextContainer}>
+            <Text style={styles.heroHeading}>
+              Going somewhere?{'\n'}Find someone on{'\n'}the same route.
+            </Text>
+            <Text style={styles.heroSubtext}>
+              Search your route and connect{'\n'}with riders headed your way.
+            </Text>
           </View>
         </ImageBackground>
 
-        {/* Available Rides Section */}
-        <View style={styles.listContainer}>
-          
-          {/* Filters Bar */}
-          <View style={styles.filtersRow}>
-            {/* Vehicle Chips */}
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsScroll}>
-              <TouchableOpacity
-                style={[styles.chip, vehicleFilter === 'all' && styles.chipActive]}
-                onPress={() => setVehicleFilter('all')}
-              >
-                <Text style={[styles.chipText, vehicleFilter === 'all' && styles.chipTextActive]}>All Rides</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.chip, vehicleFilter === 'bike' && styles.chipActive]}
-                onPress={() => setVehicleFilter('bike')}
-              >
-                <Ionicons name="bicycle" size={14} color={vehicleFilter === 'bike' ? '#FFF' : Colors.textPrimary} />
-                <Text style={[styles.chipText, vehicleFilter === 'bike' && styles.chipTextActive]}>Bikes</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.chip, vehicleFilter === 'car' && styles.chipActive]}
-                onPress={() => setVehicleFilter('car')}
-              >
-                <Ionicons name="car" size={14} color={vehicleFilter === 'car' ? '#FFF' : Colors.textPrimary} />
-                <Text style={[styles.chipText, vehicleFilter === 'car' && styles.chipTextActive]}>Cars</Text>
-              </TouchableOpacity>
-
-              <View style={styles.filterDivider} />
-
-              {/* Time Chips */}
-              <TouchableOpacity
-                style={[styles.chip, timeFilter === 'soon' && styles.chipActive]}
-                onPress={() => setTimeFilter(timeFilter === 'soon' ? 'all' : 'soon')}
-              >
-                <Text style={[styles.chipText, timeFilter === 'soon' && styles.chipTextActive]}>⚡ Leaving Soon</Text>
-              </TouchableOpacity>
-            </ScrollView>
-          </View>
-
-          <Text style={styles.sectionTitle}>
-            Available Shared Rides ({filteredRides.length})
-          </Text>
-
-          <FlatList
-            data={filteredRides}
-            keyExtractor={(item) => item.id}
-            renderItem={renderRideCard}
-            contentContainerStyle={styles.listScroll}
-            showsVerticalScrollIndicator={false}
-            ListEmptyComponent={
-              <View style={styles.emptyContainer}>
-                <Ionicons name="car-outline" size={48} color={Colors.textMuted} />
-                <Text style={styles.emptyTitle}>No rides found</Text>
-                <Text style={styles.emptySubtitle}>
-                  Try selecting a different landmark or clearing search filters.
-                </Text>
-                {(selectedDestination || pickupQuery.length > 0) && (
-                  <TouchableOpacity style={styles.resetButton} onPress={handleClearDestination}>
-                    <Text style={styles.resetButtonText}>Clear Search</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            }
-          />
+        {/* ── 3. Find a Ride Button ── */}
+        <View style={styles.searchBarSection}>
+          <TouchableOpacity
+            style={styles.findRideBar}
+            onPress={handleFindRide}
+            activeOpacity={0.85}
+          >
+            <Ionicons name="search" size={20} color="#FFF" />
+            <Text style={styles.findRideText}>Find a Ride</Text>
+          </TouchableOpacity>
         </View>
 
-        {/* Notifications Updates Modal */}
-        <Modal
-          visible={showNotificationsModal}
-          transparent={true}
-          animationType="slide"
-          onRequestClose={() => setShowNotificationsModal(false)}
-        >
-          <View style={styles.modalOverlay}>
-            <View style={styles.modalContent}>
-              <View style={styles.modalHeader}>
-                <Text style={styles.modalTitle}>Updates & Notifications</Text>
-                <TouchableOpacity onPress={() => setShowNotificationsModal(false)}>
-                  <Ionicons name="close" size={24} color={Colors.textPrimary} />
-                </TouchableOpacity>
-              </View>
-
-              <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScroll}>
-                {notifications.length === 0 ? (
-                  <Text style={styles.noNotifText}>No notifications yet.</Text>
-                ) : (
-                  notifications.map((notif, index) => (
-                    <View key={`notif-${index}`} style={styles.notifCardItem}>
-                      <View style={styles.notifIconBox}>
-                        <Ionicons name="notifications" size={16} color={Colors.accent} />
-                      </View>
-                      <View style={{ flex: 1 }}>
-                        <Text style={styles.notifCardText}>{notif}</Text>
-                        <Text style={styles.notifTimeText}>Just now</Text>
-                      </View>
-                    </View>
-                  ))
-                )}
-              </ScrollView>
-            </View>
+        {/* ── 4. Recent / Saved Tabs Toggle ── */}
+        <View style={styles.tabsSection}>
+          <View style={styles.tabToggleContainer}>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'recent' && styles.activeTabButton]}
+              onPress={() => setActiveTab('recent')}
+            >
+              <Text style={[styles.tabButtonText, activeTab === 'recent' && styles.activeTabButtonText]}>
+                Recent
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.tabButton, activeTab === 'saved' && styles.activeTabButton]}
+              onPress={() => setActiveTab('saved')}
+            >
+              <Text style={[styles.tabButtonText, activeTab === 'saved' && styles.activeTabButtonText]}>
+                Saved
+              </Text>
+            </TouchableOpacity>
           </View>
-        </Modal>
 
-      </View>
+          {/* Conditional Content rendering */}
+          {activeTab === 'recent' ? (
+            <ScrollView
+              horizontal
+              showsHorizontalScrollIndicator={false}
+              contentContainerStyle={styles.recentChipsScroll}
+            >
+              {RECENT_SEARCHES.map((search, index) => (
+                <TouchableOpacity
+                  key={`recent-${index}`}
+                  style={styles.recentChip}
+                  onPress={() => handleRecentSearchTap(search.from, search.to)}
+                  activeOpacity={0.7}
+                >
+                  <Text style={styles.recentChipText}>
+                    {search.from} → {search.to}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          ) : (
+            <View style={styles.savedItemsList}>
+              {/* Add Home */}
+              <TouchableOpacity style={styles.savedItemRow} activeOpacity={0.7}>
+                <View style={styles.savedIconContainer}>
+                  <Ionicons name="home" size={20} color={Colors.primary} />
+                </View>
+                <Text style={styles.savedItemText}>Add Home</Text>
+              </TouchableOpacity>
+
+              <View style={styles.savedDivider} />
+
+              {/* Add Work */}
+              <TouchableOpacity style={styles.savedItemRow} activeOpacity={0.7}>
+                <View style={styles.savedIconContainer}>
+                  <Ionicons name="briefcase" size={20} color={Colors.primary} />
+                </View>
+                <Text style={styles.savedItemText}>Add Work</Text>
+              </TouchableOpacity>
+
+              <View style={styles.savedDivider} />
+
+              {/* Add New */}
+              <TouchableOpacity style={styles.savedItemRow} activeOpacity={0.7}>
+                <View style={styles.savedIconContainer}>
+                  <Ionicons name="bookmark" size={20} color={Colors.primary} />
+                </View>
+                <Text style={styles.savedItemText}>Add New</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+        </View>
+
+        {/* ── 5. Info Banner ── */}
+        <View style={styles.infoBanner}>
+          <View style={styles.infoBannerIconCircle}>
+            <Ionicons name="information-circle" size={24} color={Colors.primary} />
+          </View>
+          <View style={styles.infoBannerTextContainer}>
+            <Text style={styles.infoBannerText}>
+              Sarathi connects you with riders already heading your way — search a route, request to join, and split the cost.
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.infoBannerClose}>
+            <Ionicons name="close" size={18} color={Colors.textMuted} />
+          </TouchableOpacity>
+        </View>
+
+        {/* Bottom spacer */}
+        <View style={{ height: 100 }} />
+      </ScrollView>
+
+      {/* ── Notifications Modal ── */}
+      <Modal
+        visible={showNotificationsModal}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setShowNotificationsModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Updates & Notifications</Text>
+              <TouchableOpacity onPress={() => setShowNotificationsModal(false)}>
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScroll}>
+              {notifications.length === 0 ? (
+                <Text style={styles.noNotifText}>No notifications yet.</Text>
+              ) : (
+                notifications.map((notif, index) => (
+                  <View key={`notif-${index}`} style={styles.notifCardItem}>
+                    <View style={styles.notifIconBox}>
+                      <Ionicons name="notifications" size={16} color={Colors.accent} />
+                    </View>
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.notifCardText}>{notif}</Text>
+                      <Text style={styles.notifTimeText}>Just now</Text>
+                    </View>
+                  </View>
+                ))
+              )}
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -359,55 +235,47 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: Colors.background,
   },
-  container: {
+  scrollView: {
     flex: 1,
   },
-  headerBackground: {
-    paddingHorizontal: 20,
-    paddingTop: 16,
+  scrollContent: {
     paddingBottom: 20,
-    borderBottomLeftRadius: 24,
-    borderBottomRightRadius: 24,
-    overflow: 'hidden',
   },
-  headerImageStyle: {
-    resizeMode: 'cover',
-    opacity: 0.95,
-  },
-  headerTextGroup: {
-    marginBottom: 16,
-  },
-  headerTitleRow: {
+
+  /* ── Header Bar ── */
+  headerBar: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: 24,
+    paddingTop: 16,
+    paddingBottom: 14,
+    width: '100%',
   },
-  welcomeText: {
-    fontSize: 22,
-    fontWeight: 'bold',
-    color: '#0F172A',
+  logoContainer: {
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 8,
+    paddingHorizontal: 14,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  subWelcome: {
-    fontSize: 13,
-    color: '#475569',
-    fontWeight: '500',
-    marginTop: 2,
+  logoImage: {
+    width: 90,
+    height: 24,
   },
   notifBellButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 42,
+    height: 42,
+    borderRadius: 21,
     backgroundColor: '#FFFFFF',
     alignItems: 'center',
     justifyContent: 'center',
     position: 'relative',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-    elevation: 2,
   },
   notifBadgeCircle: {
     position: 'absolute',
@@ -425,261 +293,193 @@ const styles = StyleSheet.create({
     fontSize: 10,
     fontWeight: 'bold',
   },
-  searchCard: {
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 20,
-    padding: 14,
-    borderWidth: 1,
-    borderColor: 'rgba(226, 232, 240, 0.8)',
-    shadowColor: '#0F172A',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 4,
+
+  /* ── Hero Section ── */
+  heroSection: {
+    width: '100%',
+    overflow: 'hidden',
+    paddingTop: 8,
+    paddingBottom: 50,
+    minHeight: 330,
+    justifyContent: 'flex-start',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
   },
-  inputRow: {
+  heroImageStyle: {
+    resizeMode: 'cover',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+  },
+  heroOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: 'rgba(255, 255, 255, 0.55)',
+    borderBottomLeftRadius: 24,
+    borderBottomRightRadius: 24,
+  },
+  heroTextContainer: {
+    zIndex: 1,
+    paddingHorizontal: 24,
+    marginTop: 24,
+  },
+  heroHeading: {
+    fontSize: 26,
+    fontWeight: '800',
+    color: Colors.primary,
+    lineHeight: 34,
+    letterSpacing: -0.3,
+    marginBottom: 10,
+  },
+  heroSubtext: {
+    fontSize: 14,
+    color: '#475569',
+    lineHeight: 20,
+    fontWeight: '600',
+  },
+
+  /* ── Find a Ride Bar ── */
+  searchBarSection: {
+    marginHorizontal: 16,
+    marginTop: -22,
+    zIndex: 10,
+  },
+  findRideBar: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    paddingHorizontal: 12,
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
+    borderRadius: 16,
+    gap: 10,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  findRideText: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: '#FFF',
+    letterSpacing: 0.3,
+  },
+
+  /* ── Recent / Saved Tabs Toggle ── */
+  tabsSection: {
+    marginTop: 24,
+    paddingHorizontal: 20,
+  },
+  tabToggleContainer: {
+    flexDirection: 'row',
+    marginBottom: 16,
+    gap: 10,
+  },
+  tabButton: {
     paddingVertical: 10,
+    paddingHorizontal: 20,
+    borderRadius: 20,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E2E8F0',
   },
-  iconCircleBlue: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
+  activeTabButton: {
+    backgroundColor: Colors.surface,
+    borderColor: Colors.accent + '25',
   },
-  iconCircleRed: {
-    width: 28,
-    height: 28,
-    borderRadius: 14,
-    backgroundColor: '#FEF2F2',
-    alignItems: 'center',
-    justifyContent: 'center',
-    marginRight: 10,
+  tabButtonText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textMuted,
   },
-  inputField: {
-    flex: 1,
+  activeTabButtonText: {
+    color: Colors.primary,
+  },
+
+  /* ── Recent Searches (horizontal) ── */
+  recentChipsScroll: {
+    gap: 10,
+    paddingRight: 20,
+  },
+  recentChip: {
+    backgroundColor: Colors.surface,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 24,
+    borderWidth: 1,
+    borderColor: Colors.accent + '25',
+  },
+  recentChipText: {
     fontSize: 13,
     fontWeight: '600',
-    color: Colors.textPrimary,
+    color: Colors.primary,
   },
-  clearIconButton: {
+
+  /* ── Saved Items List (vertical) ── */
+  savedItemsList: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  savedItemRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+  },
+  savedIconContainer: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginRight: 16,
+  },
+  savedItemText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  savedDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+  },
+
+  /* ── Info Banner ── */
+  infoBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: Colors.surface,
+    marginHorizontal: 16,
+    marginTop: 20,
+    padding: 16,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: Colors.accent + '15',
+    gap: 12,
+  },
+  infoBannerIconCircle: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primary + '15',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  infoBannerTextContainer: {
+    flex: 1,
+  },
+  infoBannerText: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    lineHeight: 19,
+    fontWeight: '500',
+  },
+  infoBannerClose: {
     padding: 2,
   },
-  connectorLineContainer: {
-    paddingLeft: 24,
-    height: 12,
-    justifyContent: 'center',
-  },
-  connectorDotLine: {
-    width: 2,
-    height: 10,
-    backgroundColor: '#CBD5E1',
-    borderRadius: 1,
-  },
-  suggestionsContainer: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 12,
-    marginTop: 10,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  suggestionsTitle: {
-    fontSize: 11,
-    fontWeight: 'bold',
-    color: Colors.textMuted,
-    marginBottom: 6,
-  },
-  suggestionItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 8,
-    paddingHorizontal: 6,
-    borderRadius: 8,
-    gap: 8,
-  },
-  suggestionText: {
-    fontSize: 13,
-    color: Colors.textPrimary,
-    fontWeight: '600',
-  },
-  listContainer: {
-    flex: 1,
-    paddingHorizontal: 20,
-    paddingTop: 16,
-  },
-  filtersRow: {
-    marginBottom: 16,
-  },
-  chipsScroll: {
-    alignItems: 'center',
-    gap: 8,
-  },
-  chip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-    borderRadius: 20,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    gap: 6,
-  },
-  chipActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  chipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  chipTextActive: {
-    color: '#FFF',
-  },
-  filterDivider: {
-    width: 1,
-    height: 20,
-    backgroundColor: '#E2E8F0',
-    marginHorizontal: 4,
-  },
-  sectionTitle: {
-    fontSize: 16,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 12,
-  },
-  listScroll: {
-    paddingBottom: 120,
-  },
-  rideCard: {
-    backgroundColor: Colors.background,
-    paddingVertical: 16,
-    paddingHorizontal: 4,
-    marginBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-  },
-  cardHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginBottom: 12,
-  },
-  driverPhoto: {
-    width: 44,
-    height: 44,
-    borderRadius: 22,
-    marginRight: 12,
-  },
-  driverInfo: {
-    flex: 1,
-  },
-  driverName: {
-    fontSize: 15,
-    fontWeight: 'bold',
-    color: Colors.textPrimary,
-  },
-  ratingRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    marginTop: 2,
-    gap: 3,
-  },
-  ratingText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textMuted,
-  },
-  vehicleBadge: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
-    borderRadius: 8,
-    gap: 4,
-  },
-  vehicleLabel: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  routeContainer: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    padding: 10,
-    borderRadius: 10,
-    marginBottom: 12,
-    gap: 6,
-  },
-  routeText: {
-    flex: 1,
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  cardFooter: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  footerDetail: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-  },
-  footerText: {
-    fontSize: 12,
-    color: Colors.textMuted,
-  },
-  priceText: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.accent,
-  },
-  emptyContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 40,
-  },
-  emptyTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.textPrimary,
-    marginTop: 12,
-    marginBottom: 6,
-  },
-  emptySubtitle: {
-    fontSize: 13,
-    color: Colors.textMuted,
-    textAlign: 'center',
-    paddingHorizontal: 20,
-    marginBottom: 16,
-  },
-  resetButton: {
-    backgroundColor: Colors.surface,
-    paddingVertical: 8,
-    paddingHorizontal: 16,
-    borderRadius: 8,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  resetButtonText: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: Colors.primary,
-  },
+
+  /* ── Notifications Modal ── */
   modalOverlay: {
     flex: 1,
     backgroundColor: 'rgba(0, 0, 0, 0.4)',

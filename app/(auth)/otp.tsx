@@ -111,7 +111,7 @@ const styles = StyleSheet.create({
   otpInput: {
     backgroundColor: Colors.surface,
     borderWidth: 1.5,
-    borderColor: '#E2E8F0',
+    borderColor: Colors.accent + '25',
     borderRadius: 16,
     paddingVertical: 18,
     fontSize: 28,
@@ -126,7 +126,7 @@ const styles = StyleSheet.create({
     elevation: 2,
   },
   verifyButton: {
-    backgroundColor: Colors.accent,
+    backgroundColor: Colors.primary,
     paddingVertical: 16,
     borderRadius: 12,
     alignItems: 'center',

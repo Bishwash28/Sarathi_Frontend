@@ -25,6 +25,7 @@ export default function RootLayout() {
             <Stack.Screen name="role-selection" options={{ headerShown: false }} />
             <Stack.Screen name="kyc" options={{ headerShown: false }} />
             <Stack.Screen name="(tabs)" options={{ headerShown: false }} />
+            <Stack.Screen name="search-ride" options={{ headerShown: false }} />
             <Stack.Screen name="ride-detail" options={{ presentation: 'modal', headerShown: false }} />
             <Stack.Screen name="booking-status" options={{ headerShown: false }} />
             <Stack.Screen name="active-trip" options={{ headerShown: false }} />

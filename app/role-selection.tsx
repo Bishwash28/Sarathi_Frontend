@@ -1,7 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
-import { Dimensions, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Dimensions, Image, ImageBackground, Modal, StatusBar, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 import { Colors } from '../constants/Colors';
 
@@ -11,6 +12,7 @@ type Role = 'passenger' | 'driver' | null;
 
 export default function RoleSelectionScreen() {
   const [selectedRole, setSelectedRole] = useState<Role>(null);
+  const [showHelpModal, setShowHelpModal] = useState(false);
 
   const handleContinue = () => {
     if (selectedRole === 'passenger') {
@@ -21,110 +23,144 @@ export default function RoleSelectionScreen() {
   };
 
   return (
-    <View style={styles.safeArea}>
-      <View style={styles.container}>
-        {/* Header */}
-        <View style={styles.header}>
-          <Text style={styles.headerLogo}>SARATHI</Text>
-          <TouchableOpacity>
-            <Ionicons name="help-circle-outline" size={28} color={Colors.textPrimary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Title Area */}
-        <View style={styles.titleContainer}>
-          <Text style={styles.title}>How will you use Sarathi?</Text>
-          <Text style={styles.subtitle}>Choose your role to get started with your journey.</Text>
-        </View>
-
-        {/* Role Cards */}
-        <View style={styles.cardsContainer}>
-          {/* Passenger Card */}
-          <TouchableOpacity
-            style={[
-              styles.card,
-              selectedRole === 'passenger' && styles.selectedCard
-            ]}
-            onPress={() => setSelectedRole('passenger')}
-            activeOpacity={0.8}
-          >
-            <View style={[styles.iconContainer, { backgroundColor: '#FEF2F2' }]}>
-              <Ionicons name="location-outline" size={24} color={Colors.secondary} />
-            </View>
-            <View style={styles.cardTextContainer}>
-              <Text style={[styles.cardTitle, { color: Colors.secondary }]}>Book a Ride</Text>
-              <Text style={styles.cardSubtitle}>Get a reliable ride in minutes</Text>
-            </View>
-            {/* Background decorative icon */}
-            <Ionicons
-              name="bicycle-outline"
-              size={100}
-              color="#F8ECEC"
-              style={styles.bgIcon}
+    <ImageBackground
+      source={require('../assets/images/white_map_bg.png')}
+      style={styles.backgroundImage}
+      resizeMode="cover"
+    >
+      <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
+      <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
+        <View style={styles.container}>
+          {/* Unified Header with direct map background integration */}
+          <View style={styles.header}>
+            <Image
+              source={require('../assets/images/text_logo.png')}
+              style={styles.headerLogoImage}
+              resizeMode="contain"
             />
-          </TouchableOpacity>
+            <TouchableOpacity
+              onPress={() => setShowHelpModal(true)}
+              hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+            >
+              <Ionicons name="help-circle-outline" size={28} color={Colors.primary} />
+            </TouchableOpacity>
+          </View>
 
-          {/* Driver Card */}
-          <TouchableOpacity
-            style={[
-              styles.card,
-              selectedRole === 'driver' && styles.selectedCard
-            ]}
-            onPress={() => setSelectedRole('driver')}
-            activeOpacity={0.8}
+          {/* Title Area */}
+          <View style={styles.titleContainer}>
+            <Text style={styles.title}>How will you use Sarathi?</Text>
+            <Text style={styles.subtitle}>Choose your role to get started with your journey.</Text>
+          </View>
+
+          {/* Role Cards */}
+          <View style={styles.cardsContainer}>
+            {/* Passenger Card */}
+            <TouchableOpacity
+              style={[
+                styles.card,
+                selectedRole === 'passenger' && styles.selectedCard
+              ]}
+              onPress={() => setSelectedRole('passenger')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.cardTextContainer}>
+                <Text style={[styles.cardTitle, { color: Colors.primary }]}>Book a Ride</Text>
+                <Text style={styles.cardSubtitle}>Get a reliable ride in minutes</Text>
+              </View>
+              {selectedRole === 'passenger' && (
+                <Ionicons name="checkmark-circle" size={24} color={Colors.primary} />
+              )}
+            </TouchableOpacity>
+
+            {/* Driver Card */}
+            <TouchableOpacity
+              style={[
+                styles.card,
+                selectedRole === 'driver' && styles.selectedCard
+              ]}
+              onPress={() => setSelectedRole('driver')}
+              activeOpacity={0.8}
+            >
+              <View style={styles.cardTextContainer}>
+                <Text style={[styles.cardTitle, { color: Colors.primary }]}>Offer a Ride</Text>
+                <Text style={styles.cardSubtitle}>Earn by sharing your journey</Text>
+              </View>
+              {selectedRole === 'driver' && (
+                <Ionicons name="checkmark-circle" size={24} color={Colors.primary} />
+              )}
+            </TouchableOpacity>
+          </View>
+
+          {/* Footer */}
+          <View style={styles.footer}>
+            <TouchableOpacity
+              style={[
+                styles.continueButton,
+                !selectedRole && styles.disabledButton
+              ]}
+              onPress={handleContinue}
+              disabled={!selectedRole}
+            >
+              <Text style={[
+                styles.continueButtonText,
+                !selectedRole && styles.disabledButtonText
+              ]}>
+                Continue
+              </Text>
+              <Ionicons
+                name="arrow-forward"
+                size={20}
+                color={!selectedRole ? '#9CA3AF' : '#FFFFFF'}
+                style={{ marginLeft: 8 }}
+              />
+            </TouchableOpacity>
+          </View>
+
+          {/* Working Help Modal */}
+          <Modal
+            visible={showHelpModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowHelpModal(false)}
           >
-            <View style={[styles.iconContainer, { backgroundColor: '#F0F4FA' }]}>
-              <Ionicons name="car-sport-outline" size={24} color={Colors.primary} />
+            <View style={styles.modalOverlay}>
+              <View style={styles.modalContent}>
+                <View style={styles.modalHeader}>
+                  <Ionicons name="help-circle" size={36} color={Colors.primary} />
+                  <Text style={styles.modalTitle}>Need Assistance?</Text>
+                </View>
+
+                <Text style={styles.modalText}>
+                  <Text style={{ fontWeight: 'bold' }}>• Book a Ride:</Text> Select this if you are a commuter looking to find rides along your route.
+                </Text>
+                <Text style={styles.modalText}>
+                  <Text style={{ fontWeight: 'bold' }}>• Offer a Ride:</Text> Select this if you are a driver with a vehicle wanting to share your route and earn.
+                </Text>
+
+                <TouchableOpacity
+                  style={styles.modalCloseButton}
+                  onPress={() => setShowHelpModal(false)}
+                >
+                  <Text style={styles.modalCloseButtonText}>Got it!</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-            <View style={styles.cardTextContainer}>
-              <Text style={[styles.cardTitle, { color: Colors.primary }]}>Offer a Ride</Text>
-              <Text style={styles.cardSubtitle}>Earn by sharing your journey</Text>
-            </View>
-            {/* Background decorative icon */}
-            <Ionicons
-              name="car-sport-outline"
-              size={100}
-              color="#F0F4FA"
-              style={styles.bgIcon}
-            />
-          </TouchableOpacity>
+          </Modal>
+
         </View>
-
-
-
-        {/* Footer */}
-        <View style={styles.footer}>
-          <TouchableOpacity
-            style={[
-              styles.continueButton,
-              !selectedRole && styles.disabledButton
-            ]}
-            onPress={handleContinue}
-            disabled={!selectedRole}
-          >
-            <Text style={[
-              styles.continueButtonText,
-              !selectedRole && styles.disabledButtonText
-            ]}>
-              Continue
-            </Text>
-            <Ionicons
-              name="arrow-forward"
-              size={20}
-              color={!selectedRole ? '#9CA3AF' : Colors.background}
-              style={{ marginLeft: 8 }}
-            />
-          </TouchableOpacity>
-        </View>
-      </View>
-    </View>
+      </SafeAreaView>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
+  backgroundImage: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
   safeArea: {
     flex: 1,
-    backgroundColor: Colors.background,
   },
   container: {
     flex: 1,
@@ -134,68 +170,50 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginTop: 40,
-    marginBottom: 50,
+    paddingVertical: 14,
+    marginBottom: 36,
   },
-  headerLogo: {
-    fontSize: 22,
-    fontWeight: '900',
-    color: Colors.secondary, // Used custom theme red
-    letterSpacing: 1,
+  headerLogoImage: {
+    width: 140,
+    height: 38,
   },
   titleContainer: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 32,
   },
   title: {
     fontSize: 26,
     fontWeight: 'bold',
-    color: Colors.textPrimary,
-    marginBottom: 12,
+    color: Colors.primary,
+    marginBottom: 10,
     textAlign: 'center',
   },
   subtitle: {
-    fontSize: 16,
-    color: Colors.textMuted,
+    fontSize: 15,
+    color: '#64748B',
     textAlign: 'center',
-    paddingHorizontal: 20,
+    paddingHorizontal: 10,
     lineHeight: 22,
   },
   cardsContainer: {
     marginBottom: 40,
   },
   card: {
-    backgroundColor: Colors.background,
-    borderRadius: 20,
+    backgroundColor: 'rgba(255, 255, 255, 0.9)',
+    borderRadius: 16,
     padding: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 20,
-    borderWidth: 1,
+    marginBottom: 16,
+    borderWidth: 1.5,
     borderColor: '#E2E8F0',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.05,
-    shadowRadius: 8,
-    elevation: 2,
-    overflow: 'hidden',
   },
   selectedCard: {
-    borderColor: Colors.secondary,
-    borderWidth: 1.5,
-  },
-  iconContainer: {
-    width: 56,
-    height: 56,
-    borderRadius: 16,
-    justifyContent: 'center',
-    alignItems: 'center',
-    marginRight: 16,
-    zIndex: 2,
+    borderColor: Colors.primary,
+    backgroundColor: '#FFFFFF',
   },
   cardTextContainer: {
     flex: 1,
-    zIndex: 2,
   },
   cardTitle: {
     fontSize: 18,
@@ -204,60 +222,80 @@ const styles = StyleSheet.create({
   },
   cardSubtitle: {
     fontSize: 14,
-    color: Colors.textMuted,
-  },
-  bgIcon: {
-    position: 'absolute',
-    right: -20,
-    top: -10,
-    zIndex: 1,
-    opacity: 0.5,
-  },
-  graphicContainer: {
-    flex: 1,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  circleGraphic: {
-    width: width * 0.7,
-    height: width * 0.7,
-    borderRadius: (width * 0.7) / 2,
-    backgroundColor: Colors.surface,
-    justifyContent: 'center',
-    alignItems: 'center',
-    overflow: 'hidden',
-  },
-  innerImage: {
-    width: '70%',
-    height: '40%',
-    borderRadius: 8,
+    color: '#64748B',
   },
   footer: {
     paddingVertical: 20,
-    justifyContent: 'flex-end',
     position: 'absolute',
-    bottom: 20,
-    left: 20,
-    right: 20,
-
+    bottom: 10,
+    left: 24,
+    right: 24,
   },
   continueButton: {
-    backgroundColor: Colors.accent,
-    paddingVertical: 18,
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
     borderRadius: 30,
     flexDirection: 'row',
     justifyContent: 'center',
     alignItems: 'center',
   },
   continueButtonText: {
-    color: Colors.background,
-    fontSize: 18,
+    color: '#FFFFFF',
+    fontSize: 17,
     fontWeight: 'bold',
   },
   disabledButton: {
-    backgroundColor: '#E5E7EB',
+    backgroundColor: '#E2E8F0',
   },
   disabledButtonText: {
-    color: '#9CA3AF',
+    color: '#94A3B8',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0, 0, 0, 0.5)',
+    justifyContent: 'center',
+    alignItems: 'center',
+    paddingHorizontal: 24,
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 24,
+    padding: 24,
+    width: '100%',
+    alignItems: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 10 },
+    shadowOpacity: 0.15,
+    shadowRadius: 20,
+    elevation: 8,
+  },
+  modalHeader: {
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: '#1E293B',
+    marginTop: 8,
+  },
+  modalText: {
+    fontSize: 14,
+    color: '#475569',
+    lineHeight: 20,
+    marginBottom: 12,
+    width: '100%',
+  },
+  modalCloseButton: {
+    backgroundColor: Colors.primary,
+    paddingVertical: 12,
+    paddingHorizontal: 32,
+    borderRadius: 20,
+    marginTop: 12,
+  },
+  modalCloseButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: 'bold',
   },
 });

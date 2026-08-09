@@ -1,10 +1,10 @@
-import React, { useEffect, useRef } from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Animated } from 'react-native';
-import { Tabs } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
+import { Tabs } from 'expo-router';
+import React, { useEffect, useRef } from 'react';
+import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
-import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 
 // Individual Animated Tab Button with Top Red Active Line
 interface TabButtonProps {
@@ -59,14 +59,14 @@ const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLong
       <Ionicons
         name={getIconName(route.name, isFocused) as any}
         size={22}
-        color={isFocused ? Colors.accent : '#718096'}
+        color={isFocused ? Colors.accent : Colors.textMuted}
         style={styles.icon}
       />
-      
+
       <Text style={[
         styles.tabLabel,
         {
-          color: isFocused ? Colors.accent : '#718096',
+          color: isFocused ? Colors.accent : Colors.textMuted,
           fontWeight: isFocused ? '600' : '400',
         }
       ]}>
@@ -86,8 +86,8 @@ const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, navigat
           options.tabBarLabel !== undefined
             ? (options.tabBarLabel as string)
             : options.title !== undefined
-            ? options.title
-            : route.name;
+              ? options.title
+              : route.name;
 
         const isFocused = state.index === index;
 
@@ -180,7 +180,7 @@ const styles = StyleSheet.create({
     height: '100%',
     position: 'relative',
     paddingTop: 6,
-    paddingBottom: 4,
+    paddingBottom: 2,
   },
   topIndicatorLine: {
     position: 'absolute',
