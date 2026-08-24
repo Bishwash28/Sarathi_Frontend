@@ -6,7 +6,7 @@ import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
 
 export default function ProfileScreen() {
-  const { user, updateEmergencyContact, logout } = useApp();
+  const { user, completeProfile, updateEmergencyContact, logout } = useApp();
   const [emergencyContact, setEmergencyContact] = useState(user?.emergencyContact || '');
   const [isEditingContact, setIsEditingContact] = useState(false);
 
@@ -21,8 +21,16 @@ export default function ProfileScreen() {
     router.replace('/(auth)/login');
   };
 
-  const handleSwitchToOffer = () => {
-    router.push('/driver-placeholder');
+  const handleSwitchMode = () => {
+    if (user?.role === 'driver') {
+      completeProfile({ role: 'passenger' });
+    } else {
+      if (user?.kycVerified !== undefined) {
+        completeProfile({ role: 'driver' });
+      } else {
+        router.push('/kyc');
+      }
+    }
   };
 
   return (
@@ -45,7 +53,7 @@ export default function ProfileScreen() {
 
           <View style={styles.badgeRow}>
             <View style={styles.roleBadge}>
-              <Text style={styles.roleText}>{user?.role?.toUpperCase() || 'PASSENGER'}</Text>
+              <Text style={styles.roleText}>{user?.role === 'driver' ? 'DRIVER MODE' : 'PASSENGER MODE'}</Text>
             </View>
             <View style={styles.ratingBadge}>
               <Ionicons name="star" size={14} color="#FFF" />
@@ -56,6 +64,59 @@ export default function ProfileScreen() {
 
         {/* Scrollable Content Below */}
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+
+          {/* KYC Status & Driver details section (If in Driver role OR verification started) */}
+          {user?.kycVerified !== undefined && (
+            <View style={styles.sectionCard}>
+              <Text style={styles.sectionTitle}>KYC & Vehicle Status</Text>
+              
+              <View style={styles.detailRow}>
+                <Ionicons 
+                  name={user.kycVerified ? "shield-checkmark-outline" : "shield-alert-outline"} 
+                  size={20} 
+                  color={user.kycVerified ? Colors.success : Colors.warning} 
+                />
+                <View style={styles.detailTextContainer}>
+                  <Text style={styles.detailLabel}>Verification Status</Text>
+                  <Text style={[styles.detailValue, { color: user.kycVerified ? Colors.success : Colors.warning }]}>
+                    {user.kycVerified ? 'Verified Driver' : 'Pending Verification'}
+                  </Text>
+                </View>
+              </View>
+
+              {!user.kycVerified && (
+                <TouchableOpacity 
+                  style={styles.completeKycButton} 
+                  onPress={() => router.push('/kyc')}
+                >
+                  <Text style={styles.completeKycText}>Complete KYC Verification</Text>
+                  <Ionicons name="arrow-forward" size={14} color={Colors.primary} />
+                </TouchableOpacity>
+              )}
+
+              {user.kycVerified && (
+                <>
+                  <View style={styles.divider} />
+                  <View style={styles.detailRow}>
+                    <Ionicons name="bicycle-outline" size={20} color={Colors.textMuted} />
+                    <View style={styles.detailTextContainer}>
+                      <Text style={styles.detailLabel}>Registered Vehicle</Text>
+                      <Text style={styles.detailValue}>{user.vehicleName} ({user.vehicleType?.toUpperCase()})</Text>
+                    </View>
+                  </View>
+                  
+                  <View style={styles.divider} />
+                  <View style={styles.detailRow}>
+                    <Ionicons name="barcode-outline" size={20} color={Colors.textMuted} />
+                    <View style={styles.detailTextContainer}>
+                      <Text style={styles.detailLabel}>Plate Number</Text>
+                      <Text style={styles.detailValue}>{user.vehicleNumber}</Text>
+                    </View>
+                  </View>
+                </>
+              )}
+            </View>
+          )}
 
           {/* User Details Section */}
           <View style={styles.sectionCard}>
@@ -136,14 +197,20 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {/* Driver Switch Banner */}
-          <TouchableOpacity style={styles.driverBanner} onPress={handleSwitchToOffer}>
-            <View style={styles.driverBannerIcon}>
-              <Ionicons name="car" size={24} color="#FFF" />
+          {/* Mode Switcher Banner */}
+          <TouchableOpacity style={styles.driverBanner} onPress={handleSwitchMode}>
+            <View style={[styles.driverBannerIcon, user?.role === 'driver' && { backgroundColor: Colors.accent }]}>
+              <Ionicons name={user?.role === 'driver' ? "people" : "car"} size={24} color="#FFF" />
             </View>
             <View style={styles.driverBannerTextContainer}>
-              <Text style={styles.driverBannerTitle}>Offer a Ride Instead?</Text>
-              <Text style={styles.driverBannerSubtitle}>Switch to driver mode and share your route</Text>
+              <Text style={styles.driverBannerTitle}>
+                {user?.role === 'driver' ? 'Switch to Passenger Mode' : 'Offer a Ride Instead?'}
+              </Text>
+              <Text style={styles.driverBannerSubtitle}>
+                {user?.role === 'driver' 
+                  ? 'Switch back to search and book rides' 
+                  : 'Switch to driver mode and share your route'}
+              </Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={Colors.primary} />
           </TouchableOpacity>
@@ -263,6 +330,7 @@ const styles = StyleSheet.create({
   },
   detailTextContainer: {
     marginLeft: 14,
+    flex: 1,
   },
   detailLabel: {
     fontSize: 11,
@@ -279,6 +347,18 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: Colors.accent + '15',
     marginVertical: 10,
+  },
+  completeKycButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 10,
+    alignSelf: 'flex-start',
+  },
+  completeKycText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: Colors.primary,
   },
   editContactContainer: {
     marginTop: 4,
@@ -378,4 +458,3 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
   },
 });
-

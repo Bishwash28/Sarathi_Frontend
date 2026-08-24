@@ -1,5 +1,5 @@
-import React, { useEffect } from 'react';
-import { StyleSheet, Text, View, Image, TouchableOpacity, Alert } from 'react-native';
+import React, { useEffect, useState } from 'react';
+import { StyleSheet, Text, View, Image, TouchableOpacity, Alert, TextInput } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
@@ -10,7 +10,10 @@ import { RouteMap } from '../components/RouteMap';
 
 export default function ActiveTripScreen() {
   const { rideId } = useLocalSearchParams();
-  const { bookings, rides, activeTripProgress, nudgeDriverLocation } = useApp();
+  const { bookings, rides, activeTripProgress, nudgeDriverLocation, startRideWithOTP, endRideWithOTP } = useApp();
+
+  const [startOtp, setStartOtp] = useState('');
+  const [endOtp, setEndOtp] = useState('');
 
   const ride = rides.find(r => r.id === rideId);
   const currentBooking = bookings.find(b => b.rideId === rideId);
@@ -61,6 +64,36 @@ export default function ActiveTripScreen() {
     );
   };
 
+  const handleVerifyStart = () => {
+    if (!startOtp) {
+      Alert.alert('Error', 'Please enter the Start OTP.');
+      return;
+    }
+    const success = startRideWithOTP(currentBooking.id, startOtp);
+    if (success) {
+      Alert.alert('Verification Successful', 'Your ride has started!');
+    } else {
+      Alert.alert('Incorrect OTP', 'The Start OTP you entered is incorrect. (Try 1234)');
+    }
+  };
+
+  const handleVerifyEnd = () => {
+    if (!endOtp) {
+      Alert.alert('Error', 'Please enter the End OTP.');
+      return;
+    }
+    const success = endRideWithOTP(currentBooking.id, endOtp);
+    if (success) {
+      Alert.alert(
+        'Trip Completed!',
+        'You have arrived at your destination landmark. Thank you for riding with Sarathi!',
+        [{ text: 'Return to Home', onPress: () => router.replace('/(tabs)') }]
+      );
+    } else {
+      Alert.alert('Incorrect OTP', 'The End OTP you entered is incorrect. (Try 5678)');
+    }
+  };
+
   const handleChat = () => {
     Alert.alert('Chat Support', `Messaging channel with ${ride.riderName} is open.`);
   };
@@ -89,7 +122,13 @@ export default function ActiveTripScreen() {
           <Text style={styles.headerTitle}>Live Tracking</Text>
           <View style={styles.etaContainer}>
             <Text style={styles.etaLabel}>Arriving in</Text>
-            <Text style={styles.etaValue}>{activeTripProgress === 100 ? 'Arrived' : `${eta} mins`}</Text>
+            <Text style={styles.etaValue}>
+              {currentBooking.status === 'accepted'
+                ? 'Arriving'
+                : activeTripProgress === 100
+                ? 'Arrived'
+                : `${eta} mins`}
+            </Text>
           </View>
         </View>
 
@@ -118,25 +157,65 @@ export default function ActiveTripScreen() {
 
           <View style={styles.panelDivider} />
 
-          <View style={styles.tripStatusRow}>
-            <View>
-              <Text style={styles.statusLabel}>Destination</Text>
-              <Text style={styles.statusValue}>{ride.route[ride.route.length - 1]}</Text>
+          {currentBooking.status === 'accepted' ? (
+            <View style={styles.otpSection}>
+              <Text style={styles.otpLabelText}>Enter Start OTP to begin the ride</Text>
+              <View style={styles.otpInputRow}>
+                <TextInput
+                  style={styles.otpTextInput}
+                  placeholder="OTP (e.g. 1234)"
+                  placeholderTextColor={Colors.textMuted}
+                  value={startOtp}
+                  onChangeText={setStartOtp}
+                  keyboardType="numeric"
+                  maxLength={4}
+                />
+                <TouchableOpacity style={styles.otpVerifyButton} onPress={handleVerifyStart}>
+                  <Text style={styles.otpVerifyButtonText}>Verify Start</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-            <View style={styles.progressContainer}>
-              <Text style={styles.statusLabel}>Trip Progress</Text>
-              <Text style={styles.statusValue}>{activeTripProgress}%</Text>
+          ) : currentBooking.status === 'arrived' ? (
+            <View style={styles.otpSection}>
+              <Text style={styles.otpLabelText}>Enter End OTP to complete the ride</Text>
+              <View style={styles.otpInputRow}>
+                <TextInput
+                  style={styles.otpTextInput}
+                  placeholder="OTP (e.g. 5678)"
+                  placeholderTextColor={Colors.textMuted}
+                  value={endOtp}
+                  onChangeText={setEndOtp}
+                  keyboardType="numeric"
+                  maxLength={4}
+                />
+                <TouchableOpacity style={[styles.otpVerifyButton, { backgroundColor: Colors.success }]} onPress={handleVerifyEnd}>
+                  <Text style={styles.otpVerifyButtonText}>Verify End</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-          </View>
+          ) : (
+            <>
+              <View style={styles.tripStatusRow}>
+                <View>
+                  <Text style={styles.statusLabel}>Destination</Text>
+                  <Text style={styles.statusValue}>{ride.route[ride.route.length - 1]}</Text>
+                </View>
+                <View style={styles.progressContainer}>
+                  <Text style={styles.statusLabel}>Trip Progress</Text>
+                  <Text style={styles.statusValue}>{activeTripProgress}%</Text>
+                </View>
+              </View>
 
-          {/* Dev Location Nudge Button */}
-          <TouchableOpacity 
-            style={styles.nudgeButton}
-            onPress={() => nudgeDriverLocation(currentBooking.id)}
-          >
-            <Ionicons name="navigate" size={16} color="#FFF" />
-            <Text style={styles.nudgeButtonText}>Dev: Nudge Rider GPS Location</Text>
-          </TouchableOpacity>
+              {/* Dev Location Nudge Button */}
+              <TouchableOpacity 
+                style={styles.nudgeButton}
+                onPress={() => nudgeDriverLocation(currentBooking.id)}
+              >
+                <Ionicons name="navigate" size={16} color="#FFF" />
+                <Text style={styles.nudgeButtonText}>Dev: Nudge Rider GPS Location</Text>
+              </TouchableOpacity>
+            </>
+          )}
 
           {/* Action Row */}
           <View style={styles.actionRow}>
@@ -337,6 +416,49 @@ const styles = StyleSheet.create({
   homeButtonText: {
     color: Colors.primary,
     fontWeight: '700',
+    fontSize: 14,
+  },
+  otpSection: {
+    marginBottom: 16,
+  },
+  otpLabelText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginBottom: 8,
+  },
+  otpInputRow: {
+    flexDirection: 'row',
+    gap: 12,
+  },
+  otpTextInput: {
+    flex: 1,
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    paddingHorizontal: 16,
+    height: 48,
+    fontSize: 16,
+    color: Colors.textPrimary,
+    fontWeight: 'bold',
+  },
+  otpVerifyButton: {
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    paddingHorizontal: 20,
+    height: 48,
+    alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 3,
+  },
+  otpVerifyButtonText: {
+    color: '#FFFFFF',
+    fontWeight: 'bold',
     fontSize: 14,
   },
 });

@@ -1,5 +1,7 @@
 import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
 import { Alert } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { supabase } from '../lib/supabase';
 import { User } from '@supabase/supabase-js';
 
@@ -42,7 +44,7 @@ export interface Booking {
   id: string;
   rideId: string;
   passengerId: string;
-  status: 'pending' | 'accepted' | 'cancelled' | 'completed';
+  status: 'pending' | 'accepted' | 'ongoing' | 'arrived' | 'completed' | 'cancelled';
   createdAt: Date;
   currentLat?: number;
   currentLng?: number;
@@ -73,10 +75,18 @@ interface UserProfile {
   emergencyContact: string;
   rating: number;
   photo: string;
+  kycVerified?: boolean;
+  nid?: string;
+  vehicleType?: 'bike' | 'car';
+  vehicleName?: string;
+  vehicleNumber?: string;
+  licenseImage?: string;
+  plateImage?: string;
 }
 
 interface AppContextType {
   user: UserProfile | null;
+  deviceLocation: string;
   supabaseUser: User | null;
   isAuthenticated: boolean;
   rides: Ride[];
@@ -97,6 +107,11 @@ interface AppContextType {
   sendDriverMessage: (rideId: string, text: string) => void;
   startRiderChat: (rideId: string) => void;
   nudgeDriverLocation: (bookingId: string) => void;
+  startRideWithOTP: (bookingId: string, otp: string) => boolean;
+  endRideWithOTP: (bookingId: string, otp: string) => boolean;
+  createRide: (ride: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => void;
+  acceptBooking: (bookingId: string) => void;
+  declineBooking: (bookingId: string) => void;
   logout: () => Promise<void>;
 }
 
@@ -180,9 +195,10 @@ const initialDriverMessages: Record<string, DriverMessage[]> = {
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [deviceLocation, setDeviceLocation] = useState<string>('Kalanki');
   const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
-  const [rides] = useState<Ride[]>(initialRides);
+  const [rides, setRides] = useState<Ride[]>(initialRides);
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [driverMessages, setDriverMessages] = useState<Record<string, DriverMessage[]>>(initialDriverMessages);
   const [activeChatRideIds, setActiveChatRideIds] = useState<string[]>(['ride-1']); // Sakar Aryal active by default
@@ -203,6 +219,41 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [activeTripProgress, setActiveTripProgress] = useState(0);
   const [activeTripCoords, setActiveTripCoords] = useState<{ x: number; y: number } | null>(null);
   const tripIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Load and fetch device location once at app startup
+  useEffect(() => {
+    (async () => {
+      try {
+        // Load cached location first
+        const cached = await AsyncStorage.getItem('@device_location');
+        if (cached) {
+          setDeviceLocation(cached);
+        }
+
+        // Fetch exact current location
+        let { status } = await Location.requestForegroundPermissionsAsync();
+        if (status !== 'granted') {
+          return;
+        }
+
+        let location = await Location.getCurrentPositionAsync({});
+        let geocode = await Location.reverseGeocodeAsync({
+          latitude: location.coords.latitude,
+          longitude: location.coords.longitude,
+        });
+
+        if (geocode.length > 0) {
+          const address = geocode[0];
+          const name = address.name || address.street || "My Location";
+          const city = address.city || "";
+          const friendlyAddress = `${name}${city ? ', ' + city : ''}`;
+          setDeviceLocation(friendlyAddress);
+          await AsyncStorage.setItem('@device_location', friendlyAddress);
+        }
+      } catch (err) {
+        console.warn('Error checking device location on startup:', err);
+      }
+    })();
+  }, []);
 
   // Listen for Supabase auth state changes
   useEffect(() => {
@@ -279,7 +330,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   // GPS Simulation Loop
   useEffect(() => {
-    const acceptedBooking = bookings.find(b => b.status === 'accepted');
+    const acceptedBooking = bookings.find(b => b.status === 'ongoing');
     if (acceptedBooking) {
       const ride = rides.find(r => r.id === acceptedBooking.rideId);
       if (ride && ride.route.length > 1) {
@@ -292,9 +343,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             if (prev >= 100) {
               clearInterval(tripIntervalRef.current!);
               setBookings(currBookings => 
-                currBookings.map(b => b.id === acceptedBooking.id ? { ...b, status: 'completed' } : b)
+                currBookings.map(b => b.id === acceptedBooking.id ? { ...b, status: 'arrived' } : b)
               );
-              setNotifications(prevNotifs => ['Your ride has completed successfully!', ...prevNotifs]);
+              setNotifications(prevNotifs => ['Your ride has reached the destination! Verify OTP to complete.', ...prevNotifs]);
               return 100;
             }
             const nextProgress = prev + 5;
@@ -457,7 +508,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const completeProfile = (profile: Partial<UserProfile>) => {
-    setUser(prev => prev ? { ...prev, ...profile } : null);
+    setUser(prev => {
+      if (prev) {
+        return { ...prev, ...profile };
+      } else {
+        return {
+          name: 'Sarathi Passenger',
+          phone: '',
+          email: 'passenger@sarathi.com',
+          role: 'passenger',
+          collegeOrCompany: 'N/A',
+          emergencyContact: '',
+          rating: 5.0,
+          photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+          ...profile,
+        };
+      }
+    });
     setIsAuthenticated(true);
   };
 
@@ -493,6 +560,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       prev.map(b => b.id === bookingId ? { ...b, status: 'cancelled' } : b)
     );
     setNotifications(prev => ['You cancelled your ride request.', ...prev]);
+  };
+
+  const acceptBooking = (bookingId: string) => {
+    setBookings(prev => 
+      prev.map(b => b.id === bookingId ? { ...b, status: 'accepted' } : b)
+    );
+    setNotifications(prev => ['You have accepted the passenger request!', ...prev]);
+  };
+
+  const declineBooking = (bookingId: string) => {
+    setBookings(prev => 
+      prev.map(b => b.id === bookingId ? { ...b, status: 'cancelled' } : b)
+    );
+    setNotifications(prev => ['You declined the passenger request.', ...prev]);
   };
 
   const nudgeDriverLocation = (bookingId: string) => {
@@ -601,6 +682,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setActiveChatRideIds(prev => prev.includes(rideId) ? prev : [...prev, rideId]);
   };
 
+  const startRideWithOTP = (bookingId: string, otp: string): boolean => {
+    if (otp === '1234') {
+      setBookings(prev => 
+        prev.map(b => b.id === bookingId ? { ...b, status: 'ongoing' } : b)
+      );
+      setNotifications(prevNotifs => ['Ride started successfully!', ...prevNotifs]);
+      return true;
+    }
+    return false;
+  };
+
+  const endRideWithOTP = (bookingId: string, otp: string): boolean => {
+    if (otp === '5678') {
+      setBookings(prev => 
+        prev.map(b => b.id === bookingId ? { ...b, status: 'completed' } : b)
+      );
+      setNotifications(prevNotifs => ['Ride completed successfully!', ...prevNotifs]);
+      return true;
+    }
+    return false;
+  };
+
   const logout = async () => {
     await supabase.auth.signOut();
     setUser(null);
@@ -609,10 +712,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setBookings([]);
   };
 
+  const createRide = (newRideData: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => {
+    const newRide: Ride = {
+      id: `ride-${Date.now()}`,
+      riderName: user?.name || 'Sarathi Driver',
+      riderPhoto: user?.photo || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+      rating: 5.0,
+      ...newRideData,
+    };
+    setRides(prev => [newRide, ...prev]);
+    setNotifications(prev => [`You have offered a new ride going to ${newRideData.route[newRideData.route.length - 1]}!`, ...prev]);
+  };
+
   return (
     <AppContext.Provider
       value={{
         user,
+        deviceLocation,
         supabaseUser,
         isAuthenticated,
         rides,
@@ -633,6 +749,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         sendDriverMessage,
         startRiderChat,
         nudgeDriverLocation,
+        startRideWithOTP,
+        endRideWithOTP,
+        createRide,
+        acceptBooking,
+        declineBooking,
         logout,
       }}
     >

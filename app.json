@@ -28,7 +28,12 @@
         "android.permission.ACCESS_FINE_LOCATION"
       ],
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.Sarathi_Frontend"
+      "package": "com.anonymous.Sarathi_Frontend",
+      "config": {
+        "googleMaps": {
+          "apiKey": "AIzaSyDummyKeyForGoogleMapsSDKToNotCrash"
+        }
+      }
     },
     "web": {
       "output": "static",
@@ -58,6 +63,12 @@
     "experiments": {
       "typedRoutes": true,
       "reactCompiler": true
+    },
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "bfbdb549-3357-4331-ab13-bcc8c06d88c8"
+      }
     }
   }
 }

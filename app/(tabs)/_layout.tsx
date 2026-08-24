@@ -5,6 +5,7 @@ import React, { useEffect, useRef } from 'react';
 import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
+import { useApp } from '../../context/AppContext';
 
 // Individual Animated Tab Button with Top Red Active Line
 interface TabButtonProps {
@@ -13,9 +14,10 @@ interface TabButtonProps {
   onPress: () => void;
   onLongPress: () => void;
   label: string;
+  role?: string;
 }
 
-const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLongPress, label }) => {
+const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLongPress, label, role }) => {
   const lineAnim = useRef(new Animated.Value(isFocused ? 1.0 : 0.0)).current;
 
   useEffect(() => {
@@ -29,6 +31,9 @@ const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLong
   const getIconName = (routeName: string, focused: boolean) => {
     switch (routeName) {
       case 'index':
+        if (role === 'driver') {
+          return focused ? 'add-circle' : 'add-circle-outline';
+        }
         return focused ? 'home' : 'home-outline';
       case 'activity':
         return focused ? 'receipt' : 'receipt-outline';
@@ -77,7 +82,7 @@ const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLong
 };
 
 // Custom Tab Bar Container
-const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, navigation }) => {
+const CustomTabBar: React.FC<BottomTabBarProps & { role?: string }> = ({ state, descriptors, navigation, role }) => {
   return (
     <View style={styles.tabBarContainer}>
       {state.routes.map((route, index) => {
@@ -118,6 +123,7 @@ const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, navigat
             onPress={onPress}
             onLongPress={onLongPress}
             label={label}
+            role={role}
           />
         );
       })}
@@ -126,10 +132,13 @@ const CustomTabBar: React.FC<BottomTabBarProps> = ({ state, descriptors, navigat
 };
 
 export default function TabLayout() {
+  const { user } = useApp();
+  const isDriver = user?.role === 'driver';
+
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top']}>
       <Tabs
-        tabBar={(props) => <CustomTabBar {...props} />}
+        tabBar={(props) => <CustomTabBar {...props} role={user?.role} />}
         screenOptions={{
           headerShown: false,
         }}
@@ -137,7 +146,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="index"
           options={{
-            title: 'Home',
+            title: isDriver ? 'Post' : 'Home',
           }}
         />
         <Tabs.Screen

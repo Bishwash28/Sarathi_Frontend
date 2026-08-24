@@ -12,7 +12,7 @@ export default function CompleteProfileScreen() {
 
   const handleCompleteProfile = () => {
     console.log('Profile Completed:', { phone, gender });
-    router.replace('/role-selection');
+    router.replace('/(tabs)');
   };
 
   return (

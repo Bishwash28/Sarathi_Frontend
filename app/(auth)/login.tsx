@@ -37,12 +37,12 @@ export default function LoginScreen() {
       alert(result.error || 'Login failed');
       return;
     }
-    router.replace('/role-selection');
+    router.replace('/(tabs)');
   };
 
   const handleGoogleLogin = async () => {
     await login('google_user@sarathi.com');
-    router.replace('/role-selection');
+    router.replace('/(tabs)');
   };
 
   return (

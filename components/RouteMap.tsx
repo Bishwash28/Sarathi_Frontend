@@ -30,10 +30,34 @@ export const RouteMap: React.FC<RouteMapProps> = ({
   style,
 }) => {
   const mapRef = useRef<MapView>(null);
+  const [routeCoords, setRouteCoords] = React.useState<Coordinate[]>([]);
+
+  useEffect(() => {
+    const fetchRoute = async () => {
+      try {
+        const url = `https://router.project-osrm.org/route/v1/driving/${startCoord.longitude},${startCoord.latitude};${endCoord.longitude},${endCoord.latitude}?overview=full&geometries=geojson`;
+        const res = await fetch(url);
+        const data = await res.json();
+        if (data.routes && data.routes[0]) {
+          const coords = data.routes[0].geometry.coordinates.map((coord: [number, number]) => ({
+            latitude: coord[1],
+            longitude: coord[0],
+          }));
+          setRouteCoords(coords);
+        } else {
+          setRouteCoords([startCoord, endCoord]);
+        }
+      } catch (err) {
+        console.warn("Failed to fetch OSRM route:", err);
+        setRouteCoords([startCoord, endCoord]);
+      }
+    };
+    fetchRoute();
+  }, [startCoord, endCoord]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' && mapRef.current) {
-      const coords = [startCoord, endCoord];
+      const coords = routeCoords.length > 0 ? [...routeCoords] : [startCoord, endCoord];
       if (liveCoord) {
         coords.push(liveCoord);
       }
@@ -42,7 +66,7 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         animated: true,
       });
     }
-  }, [startCoord, endCoord, liveCoord]);
+  }, [startCoord, endCoord, liveCoord, routeCoords]);
 
   const handleZoomIn = () => {
     if (mapRef.current) {
@@ -103,10 +127,12 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         provider={PROVIDER_DEFAULT}
         style={styles.map}
         initialRegion={initialRegion}
+        showsUserLocation={true}
+        showsMyLocationButton={true}
       >
-        {/* Red Dotted Polyline */}
+        {/* Routed Polyline */}
         <Polyline
-          coordinates={[startCoord, endCoord]}
+          coordinates={routeCoords.length > 0 ? routeCoords : [startCoord, endCoord]}
           strokeColor={strokeColor}
           strokeWidth={4}
           lineDashPattern={lineDashPattern}

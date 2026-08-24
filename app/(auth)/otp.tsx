@@ -25,7 +25,7 @@ export default function OTPScreen() {
       {
         text: 'Continue',
         onPress: () => {
-          router.replace('/role-selection');
+          router.replace('/(tabs)');
         }
       }
     ]);

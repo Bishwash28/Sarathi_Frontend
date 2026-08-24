@@ -6,11 +6,21 @@ import { Colors } from '../../constants/Colors';
 import { useApp, Booking } from '../../context/AppContext';
 
 export default function ActivityScreen() {
-  const { bookings, rides } = useApp();
+  const { bookings, rides, user } = useApp();
   const [activeSection, setActiveSection] = useState<'ongoing' | 'history'>('ongoing');
 
-  const ongoingBookings = bookings.filter(b => b.status === 'pending' || b.status === 'accepted');
-  const historyBookings = bookings.filter(b => b.status === 'completed' || b.status === 'cancelled');
+  // Filter offered rides by this user (if driver)
+  const myOffers = rides.filter(r => r.riderName === user?.name);
+  const myOfferIds = myOffers.map(o => o.id);
+
+  // Group bookings based on user role (Passenger vs Driver)
+  const ongoingBookings = user?.role === 'driver'
+    ? bookings.filter(b => (b.status === 'pending' || b.status === 'accepted') && myOfferIds.includes(b.rideId))
+    : bookings.filter(b => b.status === 'pending' || b.status === 'accepted');
+
+  const historyBookings = user?.role === 'driver'
+    ? bookings.filter(b => (b.status === 'completed' || b.status === 'cancelled') && myOfferIds.includes(b.rideId))
+    : bookings.filter(b => b.status === 'completed' || b.status === 'cancelled');
 
   const handleBookingPress = (booking: Booking) => {
     if (booking.status === 'pending') {
@@ -34,18 +44,25 @@ export default function ActivityScreen() {
     const ride = rides.find(r => r.id === item.rideId);
     if (!ride) return null;
 
+    const isDriver = user?.role === 'driver';
+    const titleName = isDriver ? item.passengerId.split('@')[0] : ride.riderName;
+    const subText = isDriver ? `Passenger requesting to join` : `${ride.vehicleName} • ${ride.vehicleNumber}`;
+    const avatarUrl = isDriver 
+      ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80'
+      : ride.riderPhoto;
+
     return (
       <TouchableOpacity
         key={item.id}
         style={styles.activityCard}
-        onPress={() => handleBookingPress(item)}
-        activeOpacity={0.8}
+        onPress={() => !isDriver && handleBookingPress(item)}
+        activeOpacity={isDriver ? 1.0 : 0.8}
       >
         <View style={styles.cardHeader}>
-          <Image source={{ uri: ride.riderPhoto }} style={styles.driverPhoto} />
+          <Image source={{ uri: avatarUrl }} style={styles.driverPhoto} />
           <View style={styles.driverInfo}>
-            <Text style={styles.driverName}>{ride.riderName}</Text>
-            <Text style={styles.vehicleText}>{ride.vehicleName} • {ride.vehicleNumber}</Text>
+            <Text style={styles.driverName}>{titleName}</Text>
+            <Text style={styles.vehicleText}>{subText}</Text>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(item.status)}15` }]}>
             <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
@@ -73,7 +90,7 @@ export default function ActivityScreen() {
           <Text style={styles.priceText}>NPR {ride.price}</Text>
         </View>
 
-        {(item.status === 'pending' || item.status === 'accepted') && (
+        {!isDriver && (item.status === 'pending' || item.status === 'accepted') && (
           <View style={styles.trackingHint}>
             <Ionicons name="navigate-circle" size={16} color={Colors.accent} />
             <Text style={styles.trackingHintText}>
@@ -92,10 +109,12 @@ export default function ActivityScreen() {
       <View style={styles.container}>
         {/* Screen Header */}
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Your Activity</Text>
+          <Text style={styles.headerTitle}>
+            {user?.role === 'driver' ? 'Driver Rides Logs' : 'Your Activity'}
+          </Text>
         </View>
 
-        {/* Minimal Tab Selector matching reference image */}
+        {/* Tab Selector */}
         <View style={styles.tabSelector}>
           <TouchableOpacity
             style={styles.tabButton}
@@ -125,9 +144,9 @@ export default function ActivityScreen() {
               <Ionicons name="receipt-outline" size={48} color={Colors.textMuted} />
               <Text style={styles.emptyTitle}>No {activeSection} rides</Text>
               <Text style={styles.emptySubtitle}>
-                {activeSection === 'ongoing' 
-                  ? 'Your active and pending ride requests will appear here.' 
-                  : 'Your past completed and cancelled trips will be logged here.'}
+                {user?.role === 'driver'
+                  ? 'Your active and past hosted ride offers will appear here.'
+                  : 'Your active and past completed bookings will be logged here.'}
               </Text>
             </View>
           ) : (
