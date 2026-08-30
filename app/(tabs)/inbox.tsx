@@ -1,13 +1,25 @@
 import React, { useEffect } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Image, KeyboardAvoidingView, Platform } from 'react-native';
-import { Ionicons } from '@expo/vector-icons';
+import {
+  Image,
+  KeyboardAvoidingView,
+  Platform,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TextInput,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/Colors';
-import { useApp, Message, Ride } from '../../context/AppContext';
+import { useApp, Message } from '../../context/AppContext';
 
 export default function InboxScreen() {
   const params = useLocalSearchParams<{ rideId?: string }>();
-  const { rides, messages, driverMessages, activeChatRideIds, sendChatMessage } = useApp();
+  const { rides, messages, driverMessages, activeChatRideIds, sendChatMessage, user } = useApp();
+
+  const isDriverMode = user?.role === 'driver' && user?.kycVerified === true;
   const [activeSection, setActiveSection] = React.useState<'chats' | 'ai'>('chats');
   const [inputText, setInputText] = React.useState('');
 
@@ -18,7 +30,7 @@ export default function InboxScreen() {
     }
   }, [params.rideId]);
 
-  const activeRiderChats = rides.filter(r => activeChatRideIds.includes(r.id));
+  const activeRiderChats = rides.filter((r) => activeChatRideIds.includes(r.id));
 
   const handleSendAiMessage = () => {
     if (!inputText.trim()) return;
@@ -27,7 +39,7 @@ export default function InboxScreen() {
   };
 
   const renderSuggestedRideCard = (rideId: string) => {
-    const ride = rides.find(r => r.id === rideId);
+    const ride = rides.find((r) => r.id === rideId);
     if (!ride) return null;
 
     return (
@@ -84,48 +96,59 @@ export default function InboxScreen() {
       >
         {/* Header Title */}
         <View style={styles.header}>
-          <Text style={styles.headerTitle}>Inbox & Messages</Text>
+          <Text style={styles.headerTitle}>
+            {isDriverMode ? 'Passenger Messages' : 'Inbox & Messages'}
+          </Text>
+          <Text style={styles.headerSubtitle}>
+            {isDriverMode
+              ? 'Connect directly with passengers requesting your published routes'
+              : 'Chat with drivers and receive ride updates'}
+          </Text>
         </View>
 
-        {/* Tab Selector: Rider Chats vs AI Assistant */}
-        <View style={styles.tabSelector}>
-          <TouchableOpacity
-            style={styles.tabButton}
-            onPress={() => setActiveSection('chats')}
-          >
-            <Text style={[styles.tabButtonText, activeSection === 'chats' && styles.tabButtonTextActive]}>
-              Rider Chats ({activeRiderChats.length})
-            </Text>
-            {activeSection === 'chats' && <View style={styles.activeTabIndicator} />}
-          </TouchableOpacity>
+        {/* In Driver Mode, strictly render clean Passenger Communications (No AI Assistant) */}
+        {!isDriverMode && (
+          <View style={styles.tabSelector}>
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => setActiveSection('chats')}
+            >
+              <Text style={[styles.tabButtonText, activeSection === 'chats' && styles.tabButtonTextActive]}>
+                Driver Chats ({activeRiderChats.length})
+              </Text>
+              {activeSection === 'chats' && <View style={styles.activeTabIndicator} />}
+            </TouchableOpacity>
 
-          <TouchableOpacity
-            style={styles.tabButton}
-            onPress={() => setActiveSection('ai')}
-          >
-            <Text style={[styles.tabButtonText, activeSection === 'ai' && styles.tabButtonTextActive]}>
-              AI Assistant
-            </Text>
-            {activeSection === 'ai' && <View style={styles.activeTabIndicator} />}
-          </TouchableOpacity>
-        </View>
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => setActiveSection('ai')}
+            >
+              <Text style={[styles.tabButtonText, activeSection === 'ai' && styles.tabButtonTextActive]}>
+                AI Assistant
+              </Text>
+              {activeSection === 'ai' && <View style={styles.activeTabIndicator} />}
+            </TouchableOpacity>
+          </View>
+        )}
 
         {/* Section Body */}
-        {activeSection === 'chats' ? (
-          /* Rider Chat List View */
+        {isDriverMode || activeSection === 'chats' ? (
+          /* Driver Passenger Chat List View */
           <ScrollView contentContainerStyle={styles.chatListScroll} showsVerticalScrollIndicator={false}>
             {activeRiderChats.length === 0 ? (
               <View style={styles.emptyChatsContainer}>
-                <Ionicons name="chatbubbles-outline" size={48} color={Colors.textMuted} />
-                <Text style={styles.emptyChatsTitle}>No active rider chats</Text>
+                <Ionicons name="chatbubbles-outline" size={48} color={Colors.primary} />
+                <Text style={styles.emptyChatsTitle}>No active passenger messages</Text>
                 <Text style={styles.emptyChatsSub}>
-                  To start a chat with a rider, open any ride details page from the home screen and tap the message button.
+                  When passengers request your published route, their inquiries and chat conversations will appear here.
                 </Text>
               </View>
             ) : (
               <>
-                <Text style={styles.subSectionTitle}>Active Rider Conversations:</Text>
-                {activeRiderChats.map(ride => {
+                <Text style={styles.subSectionTitle}>
+                  {isDriverMode ? 'Passenger Inquiries & Ride Chats:' : 'Active Driver Conversations:'}
+                </Text>
+                {activeRiderChats.map((ride) => {
                   const msgs = driverMessages[ride.id] || [];
                   const lastMsg = msgs[msgs.length - 1];
 
@@ -142,13 +165,18 @@ export default function InboxScreen() {
                           <Text style={styles.driverItemName}>{ride.riderName}</Text>
                           {lastMsg && (
                             <Text style={styles.driverItemTime}>
-                              {new Date(lastMsg.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
+                              {new Date(lastMsg.timestamp).toLocaleTimeString([], {
+                                hour: '2-digit',
+                                minute: '2-digit',
+                              })}
                             </Text>
                           )}
                         </View>
-                        <Text style={styles.driverItemSub}>{ride.vehicleName} • {ride.departureTime}</Text>
+                        <Text style={styles.driverItemSub}>
+                          {ride.route.join(' → ')}
+                        </Text>
                         <Text style={styles.driverLastMsg} numberOfLines={1}>
-                          {lastMsg ? lastMsg.text : 'Tap to open chat conversation'}
+                          {lastMsg ? lastMsg.text : 'Tap to reply to passenger'}
                         </Text>
                       </View>
                       <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
@@ -159,7 +187,7 @@ export default function InboxScreen() {
             )}
           </ScrollView>
         ) : (
-          /* AI Assistant Chat View */
+          /* AI Assistant Chat View (Passenger Only) */
           <View style={styles.aiChatContainer}>
             <ScrollView contentContainerStyle={styles.chatScroll} showsVerticalScrollIndicator={false}>
               {messages.map(renderAiMessageItem)}
@@ -196,13 +224,20 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 8,
-    alignItems: 'center',
+    paddingBottom: 10,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
   },
   headerTitle: {
-    fontSize: 20,
+    fontSize: 18,
     fontWeight: 'bold',
     color: Colors.textPrimary,
+  },
+  headerSubtitle: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
   },
   tabSelector: {
     flexDirection: 'row',
@@ -219,7 +254,7 @@ const styles = StyleSheet.create({
     position: 'relative',
   },
   tabButtonText: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: '500',
     color: '#4A5568',
   },
@@ -236,13 +271,14 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.accent,
   },
   chatListScroll: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
+    paddingVertical: 14,
     paddingBottom: 120,
   },
   emptyChatsContainer: {
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 50,
+    paddingVertical: 60,
     paddingHorizontal: 20,
   },
   emptyChatsTitle: {
@@ -253,31 +289,32 @@ const styles = StyleSheet.create({
     marginBottom: 6,
   },
   emptyChatsSub: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textMuted,
     textAlign: 'center',
     lineHeight: 18,
   },
   subSectionTitle: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: Colors.textMuted,
-    marginBottom: 12,
+    marginBottom: 10,
+    textTransform: 'uppercase',
   },
   driverChatItem: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.background,
-    paddingVertical: 14,
-    paddingHorizontal: 4,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    marginBottom: 4,
+    backgroundColor: '#FFFFFF',
+    padding: 14,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 10,
   },
   driverItemPhoto: {
-    width: 46,
-    height: 46,
-    borderRadius: 23,
+    width: 44,
+    height: 44,
+    borderRadius: 22,
     marginRight: 12,
   },
   driverItemInfo: {
@@ -290,22 +327,23 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   driverItemName: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 'bold',
     color: Colors.textPrimary,
   },
   driverItemTime: {
-    fontSize: 11,
+    fontSize: 10,
     color: Colors.textMuted,
   },
   driverItemSub: {
     fontSize: 11,
-    color: Colors.textMuted,
-    marginTop: 1,
+    color: Colors.primary,
+    fontWeight: '600',
+    marginTop: 2,
   },
   driverLastMsg: {
-    fontSize: 13,
-    color: Colors.textPrimary,
+    fontSize: 12,
+    color: Colors.textMuted,
     marginTop: 4,
     fontWeight: '500',
   },

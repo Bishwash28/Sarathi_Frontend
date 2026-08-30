@@ -13,51 +13,50 @@ import {
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/Colors';
-import { useApp } from '../context/AppContext';
+import { useApp, LANDMARKS } from '../context/AppContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
-
-const LANDMARKS = ['Kalanki', 'Balkhu', 'Tripureshwor', 'Putalisadak', 'Chabahil', 'Koteshwor', 'Balkumari', 'Lagankhel'];
+import { RouteMap } from '../components/RouteMap';
+import { getAutoRouteCorridor } from '../utils/routeValidation';
 
 export default function OfferRideScreen() {
   const { user, createRide } = useApp();
 
-  // Form States
-  const [pickup, setPickup] = useState('Kalanki');
-  const [destination, setDestination] = useState('');
-  const [route, setRoute] = useState<string[]>(['Kalanki']); // Starting landmark automatically added
-  const [price, setPrice] = useState('150');
-  const [seatsLeft, setSeatsLeft] = useState('1');
-  const [departureTime, setDepartureTime] = useState('Leaving in 10 mins');
+  // Route States: Point A (Start) and Point B (End)
+  const [pointA, setPointA] = useState('Butwal');
+  const [pointB, setPointB] = useState('Bhairahawa');
+
+  // Fare & Offer Details
+  const [price, setPrice] = useState('180');
+  const [seatsLeft, setSeatsLeft] = useState('2');
+  const [departureTime, setDepartureTime] = useState('Leaving in 15 mins');
+
+  // Map Height Expand Toggle
+  const [isMapExpanded, setIsMapExpanded] = useState(false);
 
   const handleBack = () => {
     router.back();
   };
 
-  const handleToggleLandmark = (landmark: string) => {
-    if (route.includes(landmark)) {
-      if (landmark === pickup) return; // Keep pickup in route
-      setRoute(prev => prev.filter(l => l !== landmark));
-    } else {
-      setRoute(prev => [...prev, landmark]);
-    }
-  };
+  // Automatically calculated full route corridor: [Point A, ...autoIntermediates, Point B]
+  const fullRouteCorridor = getAutoRouteCorridor(pointA, pointB, LANDMARKS);
 
   const handleCreateOffer = () => {
-    if (!pickup) {
-      Alert.alert('Missing Field', 'Please set a starting pickup location.');
+    if (!pointA || !pointA.trim()) {
+      Alert.alert('Missing Start', 'Please enter your Starting Location (Point A).');
       return;
     }
-    if (!destination) {
-      Alert.alert('Missing Field', 'Please enter your destination.');
+    if (!pointB || !pointB.trim()) {
+      Alert.alert('Missing Destination', 'Please enter your Ending Location (Point B).');
       return;
     }
-    if (route.length < 2) {
-      Alert.alert('Incomplete Route', 'Please select at least one more landmark for your route.');
+    if (pointA.trim().toLowerCase() === pointB.trim().toLowerCase()) {
+      Alert.alert('Invalid Route', 'Starting Location and Ending Location cannot be the same.');
       return;
     }
+
     const parsedPrice = parseFloat(price);
     if (isNaN(parsedPrice) || parsedPrice <= 0) {
-      Alert.alert('Invalid Price', 'Please enter a valid price in NPR.');
+      Alert.alert('Invalid Price', 'Please enter a valid price in NPR per seat.');
       return;
     }
     const parsedSeats = parseInt(seatsLeft, 10);
@@ -66,123 +65,162 @@ export default function OfferRideScreen() {
       return;
     }
 
-    // Insert destination as the last item in the route if not already present
-    let finalRoute = [...route];
-    if (!finalRoute.includes(destination)) {
-      finalRoute.push(destination);
-    }
-
     createRide({
       vehicleType: user?.vehicleType || 'bike',
-      vehicleName: user?.vehicleName || 'Pulsar 220F',
-      vehicleNumber: user?.vehicleNumber || 'BA 95 PA 8821',
-      departureTime,
+      vehicleName: user?.vehicleName || 'Royal Enfield Classic 350',
+      vehicleNumber: user?.vehicleNumber || 'LU 1 PA 7788',
+      departureTime: departureTime || 'Leaving soon',
       seatsLeft: parsedSeats,
       price: parsedPrice,
-      route: finalRoute,
-      pickupPoint: `${pickup} Chowk (near main gate)`,
+      route: fullRouteCorridor,
+      pickupPoint: `${pointA} Chowk Main Gate`,
     });
 
     Alert.alert(
-      'Ride Created',
-      `Your ride offer from ${pickup} to ${destination} is now live!`,
+      'Route Published!',
+      `Your route from ${pointA} to ${pointB} (${fullRouteCorridor.join(' → ')}) is now live for passenger matching!`,
       [
         {
-          text: 'Go to Dashboard',
+          text: 'Return to Home',
           onPress: () => router.replace('/(tabs)'),
         },
       ]
     );
   };
 
+  // Resolve coordinates for map preview
+  const resolveLandmarkCoord = (name: string, fallbackName: string) => {
+    const cleanName = name.trim().toLowerCase();
+    const matched = Object.entries(LANDMARKS).find(([key]) =>
+      key.toLowerCase().includes(cleanName) || cleanName.includes(key.toLowerCase())
+    );
+    if (matched) return { latitude: matched[1].latitude, longitude: matched[1].longitude };
+    const fallback = LANDMARKS[fallbackName] || LANDMARKS['Butwal'] || LANDMARKS['Kalanki'];
+    return { latitude: fallback.latitude, longitude: fallback.longitude };
+  };
+
+  const startCoord = resolveLandmarkCoord(pointA, 'Butwal');
+  const endCoord = resolveLandmarkCoord(pointB, 'Bhairahawa');
+
+  // Driver's current position Red Marker
+  const driverCurrentLocation = {
+    latitude: startCoord.latitude + 0.002,
+    longitude: startCoord.longitude + 0.002,
+  };
+
+  const waypointCoords = fullRouteCorridor
+    .slice(1, -1)
+    .map((name) => {
+      const coord = resolveLandmarkCoord(name, 'Tilottama');
+      return { coordinate: coord, title: name };
+    });
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
-      {/* Header */}
+      {/* Top Navigation Bar */}
       <View style={styles.header}>
         <TouchableOpacity style={styles.backButton} onPress={handleBack}>
           <Ionicons name="arrow-back" size={24} color={Colors.primary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Offer a Ride</Text>
-        <View style={{ width: 40 }} />
+        <Text style={styles.headerTitle}>Driver: Publish Route</Text>
+        <TouchableOpacity
+          style={styles.expandMapBtn}
+          onPress={() => setIsMapExpanded(!isMapExpanded)}
+        >
+          <Ionicons name={isMapExpanded ? 'contract' : 'expand'} size={20} color={Colors.primary} />
+        </TouchableOpacity>
       </View>
 
       <KeyboardAvoidingView
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
+        {/* Prominent Always-Visible Map View */}
+        <View style={[styles.mapContainer, isMapExpanded && { height: 380 }]}>
+          <RouteMap
+            startCoord={startCoord}
+            endCoord={endCoord}
+            startTitle={pointA}
+            endTitle={pointB}
+            driverLocation={driverCurrentLocation}
+            waypoints={waypointCoords}
+            vehicleType={user?.vehicleType || 'bike'}
+            strokeColor="#C62026"
+            showControls={true}
+          />
+
+          {/* Map Overlay Badge Info */}
+          <View style={styles.mapBadgeOverlay}>
+            <View style={styles.driverDotRed} />
+            <Text style={styles.mapBadgeText} numberOfLines={1}>
+              Driver Location (Red Pin) & Route: {fullRouteCorridor.join(' → ')}
+            </Text>
+          </View>
+        </View>
+
+        {/* Scrollable Form Below Map */}
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          {/* Driver Badge */}
+          {/* Driver Profile Summary Card */}
           <View style={styles.driverInfoCard}>
             <View style={styles.avatarCircle}>
-              <Ionicons name="car-sport" size={24} color={Colors.primary} />
+              <Ionicons name="car-sport" size={22} color={Colors.primary} />
             </View>
             <View style={{ flex: 1 }}>
-              <Text style={styles.driverWelcome}>Verified Driver: {user?.name}</Text>
+              <Text style={styles.driverWelcome}>Posting as Driver: {user?.name || 'Verified Driver'}</Text>
               <Text style={styles.vehicleMeta}>
-                {user?.vehicleName} ({user?.vehicleType === 'bike' ? 'Bike' : 'Car'}) • {user?.vehicleNumber}
+                {user?.vehicleName || 'Royal Enfield Classic'} • {user?.vehicleNumber || 'LU 1 PA 7788'}
               </Text>
             </View>
           </View>
 
-          {/* Pickup and Destination */}
-          <Text style={styles.inputLabel}>Pickup Landmark</Text>
+          {/* Starting Location */}
+          <Text style={styles.inputLabel}>Starting Location</Text>
           <View style={styles.inputContainer}>
-            <Ionicons name="disc-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
+            <Ionicons name="location-outline" size={20} color="#2563EB" style={styles.inputIcon} />
             <TextInput
               style={styles.input}
-              placeholder="e.g. Kalanki"
+              placeholder="e.g. Butwal, Kalanki"
               placeholderTextColor={Colors.textMuted}
-              value={pickup}
-              onChangeText={(text) => {
-                setPickup(text);
-                // Keep route starting node in sync
-                setRoute(prev => [text, ...prev.slice(1)]);
-              }}
+              value={pointA}
+              onChangeText={setPointA}
             />
           </View>
 
-          <Text style={styles.inputLabel}>Destination Landmark</Text>
+          {/* Ending Location */}
+          <Text style={styles.inputLabel}>Destination Location</Text>
           <View style={styles.inputContainer}>
-            <Ionicons name="location-sharp" size={20} color={Colors.accent} style={styles.inputIcon} />
+            <Ionicons name="flag-sharp" size={20} color="#DC2626" style={styles.inputIcon} />
             <TextInput
               style={styles.input}
-              placeholder="e.g. Koteshwor"
+              placeholder="e.g. Bhairahawa, Koteshwor"
               placeholderTextColor={Colors.textMuted}
-              value={destination}
-              onChangeText={setDestination}
+              value={pointB}
+              onChangeText={setPointB}
             />
           </View>
 
-          {/* Select Route Landmarks */}
-          <Text style={styles.inputLabel}>Select Your Route Landmarks</Text>
-          <Text style={styles.sectionSubtitle}>Tap the landmarks that you will pass through:</Text>
-          <View style={styles.landmarksGrid}>
-            {LANDMARKS.map(landmark => {
-              const isActive = route.includes(landmark);
-              return (
-                <TouchableOpacity
-                  key={landmark}
-                  style={[styles.landmarkChip, isActive && styles.landmarkChipActive]}
-                  onPress={() => handleToggleLandmark(landmark)}
-                >
-                  <Text style={[styles.landmarkChipText, isActive && styles.landmarkChipTextActive]}>
-                    {landmark}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+          {/* Automatically Generated Corridor Summary */}
+          <View style={styles.autoCorridorCard}>
+            <View style={styles.autoCorridorHeader}>
+              <Ionicons name="git-merge-outline" size={18} color={Colors.primary} />
+              <Text style={styles.autoCorridorTitle}>Auto-Detected Travel Corridor</Text>
+            </View>
+            <Text style={styles.autoCorridorSub}>
+              Landmarks along your travel path are detected automatically:
+            </Text>
+            <Text style={styles.routeSummaryText}>{fullRouteCorridor.join('  ➔  ')}</Text>
           </View>
 
-          {/* Price & Seats Container */}
+          {/* Seats Offered & Price */}
           <View style={styles.rowInputs}>
             <View style={{ flex: 1 }}>
-              <Text style={styles.inputLabel}>Seats Offered</Text>
+              <Text style={styles.inputLabel}>Available Seats</Text>
               <View style={styles.inputContainer}>
-                <Ionicons name="people-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
+                <Ionicons name="people-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
                   placeholder="1"
@@ -195,12 +233,12 @@ export default function OfferRideScreen() {
             </View>
 
             <View style={{ flex: 1 }}>
-              <Text style={styles.inputLabel}>Price per seat (NPR)</Text>
+              <Text style={styles.inputLabel}>Price / Seat (NPR)</Text>
               <View style={styles.inputContainer}>
                 <Text style={styles.currencyPrefix}>Rs.</Text>
                 <TextInput
                   style={styles.input}
-                  placeholder="150"
+                  placeholder="180"
                   placeholderTextColor={Colors.textMuted}
                   value={price}
                   onChangeText={setPrice}
@@ -223,9 +261,9 @@ export default function OfferRideScreen() {
             />
           </View>
 
-          {/* Create Button */}
+          {/* Confirm & Publish Button */}
           <TouchableOpacity style={styles.createButton} onPress={handleCreateOffer} activeOpacity={0.9}>
-            <Text style={styles.createText}>Post Ride Offer</Text>
+            <Text style={styles.createText}>Publish Route Offer</Text>
             <Ionicons name="paper-plane" size={18} color="#FFF" />
           </TouchableOpacity>
         </ScrollView>
@@ -250,41 +288,76 @@ const styles = StyleSheet.create({
     borderBottomColor: '#E2E8F0',
   },
   backButton: {
-    padding: 8,
+    padding: 6,
+  },
+  expandMapBtn: {
+    padding: 6,
   },
   headerTitle: {
     fontSize: 16,
     fontWeight: 'bold',
     color: Colors.textPrimary,
   },
+  mapContainer: {
+    height: 250,
+    width: '100%',
+    position: 'relative',
+    borderBottomWidth: 1,
+    borderBottomColor: '#CBD5E1',
+  },
+  mapBadgeOverlay: {
+    position: 'absolute',
+    bottom: 10,
+    left: 12,
+    right: 12,
+    backgroundColor: 'rgba(15, 23, 42, 0.88)',
+    borderRadius: 8,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  driverDotRed: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC2626',
+  },
+  mapBadgeText: {
+    color: '#FFF',
+    fontSize: 11,
+    fontWeight: '600',
+    flex: 1,
+  },
   scroll: {
     flex: 1,
   },
   scrollContent: {
-    padding: 20,
-    paddingBottom: 48,
+    padding: 16,
+    paddingBottom: 40,
   },
   driverInfoCard: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 16,
+    gap: 12,
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
-    padding: 16,
+    borderRadius: 14,
+    padding: 12,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    marginBottom: 24,
+    marginBottom: 12,
   },
   avatarCircle: {
-    width: 48,
-    height: 48,
-    borderRadius: 24,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     backgroundColor: Colors.surface,
     alignItems: 'center',
     justifyContent: 'center',
   },
   driverWelcome: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 'bold',
     color: Colors.textPrimary,
   },
@@ -298,23 +371,17 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '700',
     color: Colors.textPrimary,
-    marginBottom: 8,
-    marginTop: 16,
-  },
-  sectionSubtitle: {
-    fontSize: 11,
-    color: Colors.textMuted,
-    marginBottom: 10,
-    marginTop: -4,
+    marginBottom: 6,
+    marginTop: 10,
   },
   inputContainer: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    height: 48,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    height: 46,
     paddingHorizontal: 12,
   },
   inputIcon: {
@@ -324,7 +391,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: Colors.textPrimary,
     fontWeight: 'bold',
-    marginRight: 8,
+    marginRight: 6,
   },
   input: {
     flex: 1,
@@ -332,35 +399,41 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontWeight: '600',
   },
-  landmarksGrid: {
+  autoCorridorCard: {
+    backgroundColor: '#EFF6FF',
+    padding: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginVertical: 14,
+  },
+  autoCorridorHeader: {
     flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
+    alignItems: 'center',
+    gap: 6,
+    marginBottom: 4,
+  },
+  autoCorridorTitle: {
+    fontSize: 12,
+    fontWeight: '800',
+    color: '#1E40AF',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
+  },
+  autoCorridorSub: {
+    fontSize: 11,
+    color: '#3B82F6',
+    fontWeight: '500',
     marginBottom: 8,
   },
-  landmarkChip: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1.5,
-    borderColor: '#E2E8F0',
-    borderRadius: 20,
-    paddingVertical: 8,
-    paddingHorizontal: 14,
-  },
-  landmarkChipActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  landmarkChipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  landmarkChipTextActive: {
-    color: '#FFF',
+  routeSummaryText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: Colors.primary,
   },
   rowInputs: {
     flexDirection: 'row',
-    gap: 16,
+    gap: 12,
   },
   createButton: {
     backgroundColor: Colors.primary,
@@ -368,18 +441,18 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 52,
-    borderRadius: 16,
-    marginTop: 36,
+    height: 50,
+    borderRadius: 14,
+    marginTop: 20,
     shadowColor: Colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
-    shadowRadius: 10,
+    shadowRadius: 8,
     elevation: 4,
   },
   createText: {
     color: '#FFF',
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 'bold',
   },
 });

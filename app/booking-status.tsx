@@ -9,7 +9,7 @@ import { useApp } from '../context/AppContext';
 
 export default function BookingStatusScreen() {
   const { rideId } = useLocalSearchParams();
-  const { bookings, rides, cancelBooking } = useApp();
+  const { bookings, rides, cancelBooking, acceptBooking } = useApp();
 
   const ride = rides.find(r => r.id === rideId);
   const currentBooking = bookings.find(b => b.rideId === rideId && (b.status === 'pending' || b.status === 'accepted'));
@@ -44,6 +44,10 @@ export default function BookingStatusScreen() {
     router.replace('/(tabs)');
   };
 
+  const handleAcceptDemo = () => {
+    acceptBooking(currentBooking.id);
+  };
+
   return (
     <View style={styles.safeArea}>
       <View style={styles.container}>
@@ -54,7 +58,7 @@ export default function BookingStatusScreen() {
               <ActivityIndicator size="large" color={Colors.accent} style={styles.spinner} />
               <Text style={styles.statusTitle}>Waiting for Driver</Text>
               <Text style={styles.statusSubtitle}>
-                Sending request to {ride.riderName}. This will take a few seconds...
+                Sending request to {ride.riderName}. We will notify you when they respond.
               </Text>
             </>
           ) : (
@@ -62,9 +66,9 @@ export default function BookingStatusScreen() {
               <View style={styles.acceptedIconContainer}>
                 <Ionicons name="checkmark-circle" size={80} color={Colors.success} />
               </View>
-              <Text style={[styles.statusTitle, { color: Colors.success }]}>Request Accepted!</Text>
+              <Text style={[styles.statusTitle, { color: Colors.success }]}>Ride Accepted!</Text>
               <Text style={styles.statusSubtitle}>
-                {ride.riderName} is preparing for the journey. Redirecting to live tracking...
+                {ride.riderName} has confirmed your ride request! Redirecting to live tracking...
               </Text>
             </>
           )}
@@ -85,9 +89,28 @@ export default function BookingStatusScreen() {
         {/* Journey Details */}
         <View style={styles.detailsBox}>
           <View style={styles.routeRow}>
-            <Ionicons name="pin" size={18} color={Colors.primary} />
-            <Text style={styles.routeText}>{ride.route.join(' → ')}</Text>
+            <Ionicons name="git-commit-outline" size={18} color={Colors.primary} />
+            <View style={{ flex: 1 }}>
+              <Text style={{ fontSize: 11, color: Colors.textMuted, fontWeight: '700' }}>DRIVER ROUTE CORRIDOR</Text>
+              <Text style={styles.routeText}>{ride.route.join(' → ')}</Text>
+            </View>
           </View>
+          
+          {(currentBooking.passengerPickup || currentBooking.passengerDropoff) && (
+            <>
+              <View style={styles.divider} />
+              <View style={styles.routeRow}>
+                <Ionicons name="navigate-circle-outline" size={20} color="#16A34A" />
+                <View style={{ flex: 1 }}>
+                  <Text style={{ fontSize: 11, color: Colors.textMuted, fontWeight: '700' }}>PASSENGER REQUESTED STOPS</Text>
+                  <Text style={[styles.routeText, { color: Colors.primary }]}>
+                    Pickup: {currentBooking.passengerPickup || ride.route[0]} ➔ Dropoff: {currentBooking.passengerDropoff || ride.route[ride.route.length - 1]}
+                  </Text>
+                </View>
+              </View>
+            </>
+          )}
+
           <View style={styles.divider} />
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Estimated Price</Text>
@@ -95,12 +118,22 @@ export default function BookingStatusScreen() {
           </View>
         </View>
 
-        {/* Action Button */}
+        {/* Action Buttons */}
         {currentBooking.status === 'pending' && (
-          <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
-            <Ionicons name="close-circle-outline" size={20} color={Colors.error} />
-            <Text style={styles.cancelButtonText}>Cancel Request</Text>
-          </TouchableOpacity>
+          <View style={{ width: '100%', gap: 10 }}>
+            <TouchableOpacity 
+              style={[styles.cancelButton, { backgroundColor: Colors.primary, borderColor: Colors.primary }]} 
+              onPress={handleAcceptDemo}
+            >
+              <Ionicons name="checkmark-circle-outline" size={20} color="#FFF" />
+              <Text style={[styles.cancelButtonText, { color: '#FFF' }]}>Simulate Driver Accept (Demo)</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
+              <Ionicons name="close-circle-outline" size={20} color={Colors.error} />
+              <Text style={styles.cancelButtonText}>Cancel Request</Text>
+            </TouchableOpacity>
+          </View>
         )}
       </View>
     </View>

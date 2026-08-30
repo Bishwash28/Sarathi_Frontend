@@ -53,7 +53,7 @@ export default function ProfileScreen() {
 
           <View style={styles.badgeRow}>
             <View style={styles.roleBadge}>
-              <Text style={styles.roleText}>{user?.role === 'driver' ? 'DRIVER MODE' : 'PASSENGER MODE'}</Text>
+              <Text style={styles.roleText}>VERIFIED MEMBER</Text>
             </View>
             <View style={styles.ratingBadge}>
               <Ionicons name="star" size={14} color="#FFF" />
@@ -65,14 +65,14 @@ export default function ProfileScreen() {
         {/* Scrollable Content Below */}
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-          {/* KYC Status & Driver details section (If in Driver role OR verification started) */}
-          {user?.kycVerified !== undefined && (
+          {/* KYC Status & Driver details section (Only in Driver role) */}
+          {user?.role === 'driver' && user?.kycVerified !== undefined && (
             <View style={styles.sectionCard}>
               <Text style={styles.sectionTitle}>KYC & Vehicle Status</Text>
               
               <View style={styles.detailRow}>
                 <Ionicons 
-                  name={user.kycVerified ? "shield-checkmark-outline" : "shield-alert-outline"} 
+                  name={user.kycVerified ? "shield-checkmark-outline" : "shield-outline"} 
                   size={20} 
                   color={user.kycVerified ? Colors.success : Colors.warning} 
                 />
@@ -197,19 +197,39 @@ export default function ProfileScreen() {
             )}
           </View>
 
-          {/* Mode Switcher Banner */}
-          <TouchableOpacity style={styles.driverBanner} onPress={handleSwitchMode}>
+          {/* Offer a Ride / Driver Mode Switcher Banner */}
+          <TouchableOpacity
+            style={styles.driverBanner}
+            onPress={() => {
+              if (user?.role === 'driver') {
+                completeProfile({ role: 'passenger' });
+              } else if (user?.kycVerified === true) {
+                completeProfile({ role: 'driver' });
+              } else {
+                Alert.alert(
+                  'KYC Verification Required',
+                  'You must complete driver KYC verification (ID & vehicle details) before offering rides on Sarathi.',
+                  [
+                    { text: 'Cancel', style: 'cancel' },
+                    { text: 'Verify KYC Now', onPress: () => router.push('/kyc') }
+                  ]
+                );
+              }
+            }}
+          >
             <View style={[styles.driverBannerIcon, user?.role === 'driver' && { backgroundColor: Colors.accent }]}>
-              <Ionicons name={user?.role === 'driver' ? "people" : "car"} size={24} color="#FFF" />
+              <Ionicons name={user?.role === 'driver' ? "swap-horizontal" : "car"} size={24} color="#FFF" />
             </View>
             <View style={styles.driverBannerTextContainer}>
               <Text style={styles.driverBannerTitle}>
-                {user?.role === 'driver' ? 'Switch to Passenger Mode' : 'Offer a Ride Instead?'}
+                {user?.role === 'driver' ? 'Switch to Passenger Mode' : 'Offer a Ride (Driver Workspace)'}
               </Text>
               <Text style={styles.driverBannerSubtitle}>
-                {user?.role === 'driver' 
-                  ? 'Switch back to search and book rides' 
-                  : 'Switch to driver mode and share your route'}
+                {user?.role === 'driver'
+                  ? 'Return to search and book rides'
+                  : user?.kycVerified
+                    ? 'Open driver workspace to post routes and manage requests'
+                    : 'Requires KYC verification to offer rides'}
               </Text>
             </View>
             <Ionicons name="chevron-forward" size={20} color={Colors.primary} />

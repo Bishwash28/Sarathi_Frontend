@@ -23,9 +23,9 @@ export default function ActivityScreen() {
     : bookings.filter(b => b.status === 'completed' || b.status === 'cancelled');
 
   const handleBookingPress = (booking: Booking) => {
-    if (booking.status === 'pending') {
-      router.push({ pathname: '/booking-status', params: { bookingId: booking.id } });
-    } else if (booking.status === 'accepted') {
+    if (booking.lifecycleState === 'request_pending') {
+      router.push({ pathname: '/booking-status', params: { rideId: booking.rideId } });
+    } else {
       router.push({ pathname: '/active-trip', params: { rideId: booking.rideId } });
     }
   };

@@ -8,11 +8,25 @@ export interface Coordinate {
   longitude: number;
 }
 
+export interface Waypoint {
+  coordinate: Coordinate;
+  title: string;
+}
+
 interface RouteMapProps {
-  startCoord: Coordinate;
-  endCoord: Coordinate;
-  liveCoord?: Coordinate;
-  vehicleType?: 'bike' | 'car';
+  startCoord: Coordinate; // Driver Point A (Start)
+  endCoord: Coordinate;   // Driver Point B (End)
+  startTitle?: string;
+  endTitle?: string;
+  driverLocation?: Coordinate; // Driver's current location (Red marker)
+  passengerLocation?: Coordinate; // Passenger's current location (Blue marker)
+  passengerPickupCoord?: Coordinate; // Passenger selected pickup
+  passengerPickupTitle?: string;
+  passengerDropoffCoord?: Coordinate; // Passenger selected dropoff
+  passengerDropoffTitle?: string;
+  waypoints?: Waypoint[]; // Intermediate corridor points
+  liveCoord?: Coordinate; // Legacy alias for driver location
+  vehicleType?: 'bike' | 'scooter';
   strokeColor?: string;
   lineDashPattern?: number[];
   showControls?: boolean;
@@ -22,20 +36,42 @@ interface RouteMapProps {
 export const RouteMap: React.FC<RouteMapProps> = ({
   startCoord,
   endCoord,
+  startTitle = 'Start Location',
+  endTitle = 'Destination',
+  driverLocation,
+  passengerLocation,
+  passengerPickupCoord,
+  passengerPickupTitle = 'Passenger Pickup',
+  passengerDropoffCoord,
+  passengerDropoffTitle = 'Passenger Dropoff',
+  waypoints = [],
   liveCoord,
   vehicleType = 'bike',
   strokeColor = '#C62026',
-  lineDashPattern = [6, 4],
+  lineDashPattern,
   showControls = true,
   style,
 }) => {
   const mapRef = useRef<MapView>(null);
   const [routeCoords, setRouteCoords] = React.useState<Coordinate[]>([]);
 
+  // Driver current position marker
+  const effectiveDriverCoord = driverLocation || liveCoord;
+
   useEffect(() => {
     const fetchRoute = async () => {
       try {
-        const url = `https://router.project-osrm.org/route/v1/driving/${startCoord.longitude},${startCoord.latitude};${endCoord.longitude},${endCoord.latitude}?overview=full&geometries=geojson`;
+        // Construct waypoints for OSRM driving route request
+        let waypointsString = `${startCoord.longitude},${startCoord.latitude}`;
+        
+        if (waypoints && waypoints.length > 0) {
+          const wpStr = waypoints.map(w => `${w.coordinate.longitude},${w.coordinate.latitude}`).join(';');
+          waypointsString += `;${wpStr}`;
+        }
+        
+        waypointsString += `;${endCoord.longitude},${endCoord.latitude}`;
+
+        const url = `https://router.project-osrm.org/route/v1/driving/${waypointsString}?overview=full&geometries=geojson`;
         const res = await fetch(url);
         const data = await res.json();
         if (data.routes && data.routes[0]) {
@@ -45,28 +81,30 @@ export const RouteMap: React.FC<RouteMapProps> = ({
           }));
           setRouteCoords(coords);
         } else {
-          setRouteCoords([startCoord, endCoord]);
+          setRouteCoords([startCoord, ...waypoints.map(w => w.coordinate), endCoord]);
         }
       } catch (err) {
         console.warn("Failed to fetch OSRM route:", err);
-        setRouteCoords([startCoord, endCoord]);
+        setRouteCoords([startCoord, ...waypoints.map(w => w.coordinate), endCoord]);
       }
     };
     fetchRoute();
-  }, [startCoord, endCoord]);
+  }, [startCoord, endCoord, waypoints]);
 
   useEffect(() => {
     if (Platform.OS !== 'web' && mapRef.current) {
       const coords = routeCoords.length > 0 ? [...routeCoords] : [startCoord, endCoord];
-      if (liveCoord) {
-        coords.push(liveCoord);
-      }
+      if (effectiveDriverCoord) coords.push(effectiveDriverCoord);
+      if (passengerLocation) coords.push(passengerLocation);
+      if (passengerPickupCoord) coords.push(passengerPickupCoord);
+      if (passengerDropoffCoord) coords.push(passengerDropoffCoord);
+
       mapRef.current.fitToCoordinates(coords, {
-        edgePadding: { top: 60, right: 60, bottom: 60, left: 60 },
+        edgePadding: { top: 70, right: 70, bottom: 70, left: 70 },
         animated: true,
       });
     }
-  }, [startCoord, endCoord, liveCoord, routeCoords]);
+  }, [startCoord, endCoord, effectiveDriverCoord, passengerLocation, passengerPickupCoord, passengerDropoffCoord, routeCoords]);
 
   const handleZoomIn = () => {
     if (mapRef.current) {
@@ -95,17 +133,38 @@ export const RouteMap: React.FC<RouteMapProps> = ({
     return (
       <View style={[styles.webFallbackContainer, style]}>
         <View style={styles.webCanvas}>
-          <Text style={styles.webNoticeText}>Interactive Map View</Text>
+          <Text style={styles.webNoticeText}>Driver Route Corridor Map</Text>
           <View style={[styles.webRouteLine, { backgroundColor: strokeColor }]} />
+          
           <View style={[styles.webPin, styles.webPinStart]}>
-            <Text style={styles.webPinText}>Pickup</Text>
+            <Text style={styles.webPinText}>{startTitle}</Text>
           </View>
+
+          {passengerPickupCoord && (
+            <View style={[styles.webPin, styles.webPinPickup]}>
+              <Text style={styles.webPinText}>Pickup</Text>
+            </View>
+          )}
+
+          {passengerDropoffCoord && (
+            <View style={[styles.webPin, styles.webPinDropoff]}>
+              <Text style={styles.webPinText}>Dropoff</Text>
+            </View>
+          )}
+
           <View style={[styles.webPin, styles.webPinEnd]}>
-            <Text style={styles.webPinText}>Drop</Text>
+            <Text style={styles.webPinText}>{endTitle}</Text>
           </View>
-          {liveCoord && (
-            <View style={styles.webLivePin}>
-              <Ionicons name={vehicleType === 'bike' ? 'bicycle' : 'car'} size={14} color="#FFF" />
+
+          {effectiveDriverCoord && (
+            <View style={styles.webDriverPin}>
+              <Ionicons name={vehicleType === 'bike' ? 'bicycle' : 'speedometer-outline'} size={14} color="#FFF" />
+            </View>
+          )}
+
+          {passengerLocation && (
+            <View style={styles.webPassengerPin}>
+              <Ionicons name="person" size={14} color="#FFF" />
             </View>
           )}
         </View>
@@ -127,39 +186,39 @@ export const RouteMap: React.FC<RouteMapProps> = ({
         provider={PROVIDER_DEFAULT}
         style={styles.map}
         initialRegion={initialRegion}
-        showsUserLocation={true}
-        showsMyLocationButton={true}
+        showsUserLocation={false}
+        showsMyLocationButton={false}
       >
-        {/* Routed Polyline */}
+        {/* Driver Published Route Polyline */}
         <Polyline
           coordinates={routeCoords.length > 0 ? routeCoords : [startCoord, endCoord]}
           strokeColor={strokeColor}
-          strokeWidth={4}
+          strokeWidth={4.5}
           lineDashPattern={lineDashPattern}
         />
 
-        {/* Start / Pickup Marker */}
-        <Marker coordinate={startCoord} title="Pickup">
-          <View style={styles.redMarkerContainer}>
-            <View style={styles.redMarkerDot} />
+        {/* Driver Start Location Marker */}
+        <Marker coordinate={startCoord} title={startTitle}>
+          <View style={styles.startMarkerContainer}>
+            <Ionicons name="location" size={28} color="#2563EB" />
           </View>
         </Marker>
 
-        {/* Destination / Drop Marker */}
-        <Marker coordinate={endCoord} title="Drop Off">
-          <View style={styles.darkMarkerContainer}>
-            <View style={styles.darkMarkerDot} />
+        {/* Driver Destination Marker */}
+        <Marker coordinate={endCoord} title={endTitle}>
+          <View style={styles.endMarkerContainer}>
+            <Ionicons name="location" size={28} color="#0F172A" />
           </View>
         </Marker>
 
-        {/* Optional Live Location Marker */}
-        {liveCoord && (
-          <Marker coordinate={liveCoord} title="Rider Location">
-            <View style={styles.liveRiderContainer}>
-              <View style={styles.livePulseRing} />
-              <View style={styles.liveRiderBadge}>
+        {/* Driver Current Location Red Marker */}
+        {effectiveDriverCoord && (
+          <Marker coordinate={effectiveDriverCoord} title="Driver Current Location">
+            <View style={styles.liveDriverContainer}>
+              <View style={styles.livePulseRingRed} />
+              <View style={styles.driverBadgeRed}>
                 <Ionicons
-                  name={vehicleType === 'bike' ? 'bicycle' : 'car'}
+                  name={vehicleType === 'bike' ? 'bicycle' : 'speedometer-outline'}
                   size={16}
                   color="#FFF"
                 />
@@ -167,20 +226,44 @@ export const RouteMap: React.FC<RouteMapProps> = ({
             </View>
           </Marker>
         )}
-      </MapView>
 
-      {/* Floating Zoom Controls Overlay */}
-      {showControls && (
-        <View style={styles.zoomControlsContainer}>
-          <TouchableOpacity style={styles.zoomButton} onPress={handleZoomIn}>
-            <Ionicons name="add" size={20} color="#334155" />
-          </TouchableOpacity>
-          <View style={styles.zoomDivider} />
-          <TouchableOpacity style={styles.zoomButton} onPress={handleZoomOut}>
-            <Ionicons name="remove" size={20} color="#334155" />
-          </TouchableOpacity>
-        </View>
-      )}
+        {/* Passenger Current Location Blue Marker */}
+        {passengerLocation && (
+          <Marker coordinate={passengerLocation} title="Passenger Current Location">
+            <View style={styles.passengerLocationContainer}>
+              <View style={styles.livePulseRingBlue} />
+              <View style={styles.passengerBadgeBlue}>
+                <Ionicons name="person" size={14} color="#FFF" />
+              </View>
+            </View>
+          </Marker>
+        )}
+
+        {/* Passenger Selected Pickup Marker */}
+        {passengerPickupCoord && (
+          <Marker coordinate={passengerPickupCoord} title={passengerPickupTitle}>
+            <View style={styles.passengerPickupPin}>
+              <Ionicons name="location" size={24} color="#16A34A" />
+            </View>
+          </Marker>
+        )}
+
+        {/* Passenger Selected Dropoff Marker */}
+        {passengerDropoffCoord && (
+          <Marker coordinate={passengerDropoffCoord} title={passengerDropoffTitle}>
+            <View style={styles.passengerDropoffPin}>
+              <Ionicons name="location" size={24} color="#DC2626" />
+            </View>
+          </Marker>
+        )}
+
+        {/* Intermediate Corridor Waypoint Dots */}
+        {waypoints.map((wp, i) => (
+          <Marker key={`wp-${i}`} coordinate={wp.coordinate} title={wp.title}>
+            <View style={styles.waypointDot} />
+          </Marker>
+        ))}
+      </MapView>
     </View>
   );
 };
@@ -218,57 +301,100 @@ const styles = StyleSheet.create({
     height: 1,
     backgroundColor: '#F1F5F9',
   },
-  redMarkerContainer: {
+  startMarkerContainer: {
     alignItems: 'center',
     justifyContent: 'center',
   },
-  redMarkerDot: {
-    width: 22,
-    height: 22,
-    borderRadius: 11,
-    backgroundColor: '#C62026',
-    borderWidth: 4,
-    borderColor: '#FFF',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.2,
-    shadowRadius: 3,
-    elevation: 3,
-  },
-  darkMarkerContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  darkMarkerDot: {
-    width: 20,
-    height: 20,
-    borderRadius: 10,
-    backgroundColor: '#1E293B',
-    borderWidth: 3,
-    borderColor: '#FFF',
-  },
-  liveRiderContainer: {
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 32,
-    height: 32,
-  },
-  livePulseRing: {
-    position: 'absolute',
+  startMarkerBadge: {
     width: 28,
     height: 28,
     borderRadius: 14,
-    backgroundColor: 'rgba(198, 32, 38, 0.25)',
+    backgroundColor: '#2563EB',
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  liveRiderBadge: {
-    width: 24,
-    height: 24,
-    borderRadius: 12,
-    backgroundColor: '#C62026',
+  endMarkerContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  endMarkerBadge: {
+    width: 28,
+    height: 28,
+    borderRadius: 14,
+    backgroundColor: '#0F172A',
+    borderWidth: 2.5,
+    borderColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  markerBadgeText: {
+    color: '#FFF',
+    fontWeight: '800',
+    fontSize: 12,
+  },
+  liveDriverContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 36,
+    height: 36,
+  },
+  livePulseRingRed: {
+    position: 'absolute',
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: 'rgba(220, 38, 38, 0.3)',
+  },
+  driverBadgeRed: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: '#DC2626',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,
     borderColor: '#FFF',
+  },
+  passengerLocationContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    width: 34,
+    height: 34,
+  },
+  livePulseRingBlue: {
+    position: 'absolute',
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    backgroundColor: 'rgba(37, 99, 235, 0.3)',
+  },
+  passengerBadgeBlue: {
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#2563EB',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  passengerPickupPin: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  passengerDropoffPin: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  waypointDot: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#64748B',
+    borderWidth: 1.5,
+    borderColor: '#FFFFFF',
   },
   webFallbackContainer: {
     width: '100%',
@@ -291,8 +417,8 @@ const styles = StyleSheet.create({
   },
   webRouteLine: {
     position: 'absolute',
-    width: '60%',
-    height: 3,
+    width: '70%',
+    height: 4,
     backgroundColor: '#C62026',
   },
   webPin: {
@@ -302,25 +428,45 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   webPinStart: {
-    left: '15%',
-    backgroundColor: '#C62026',
+    left: '10%',
+    backgroundColor: '#2563EB',
+  },
+  webPinPickup: {
+    left: '30%',
+    backgroundColor: '#16A34A',
+  },
+  webPinDropoff: {
+    right: '30%',
+    backgroundColor: '#DC2626',
   },
   webPinEnd: {
-    right: '15%',
-    backgroundColor: '#1E293B',
+    right: '10%',
+    backgroundColor: '#0F172A',
   },
   webPinText: {
     color: '#FFF',
     fontSize: 11,
     fontWeight: 'bold',
   },
-  webLivePin: {
+  webDriverPin: {
     position: 'absolute',
-    left: '45%',
+    left: '20%',
     width: 26,
     height: 26,
     borderRadius: 13,
-    backgroundColor: '#C62026',
+    backgroundColor: '#DC2626',
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 2,
+    borderColor: '#FFF',
+  },
+  webPassengerPin: {
+    position: 'absolute',
+    left: '35%',
+    width: 24,
+    height: 24,
+    borderRadius: 12,
+    backgroundColor: '#2563EB',
     alignItems: 'center',
     justifyContent: 'center',
     borderWidth: 2,

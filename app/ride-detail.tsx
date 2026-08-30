@@ -1,15 +1,18 @@
-import React from 'react';
-import { StyleSheet, Text, View, Image, TouchableOpacity, ScrollView, Alert, Linking } from 'react-native';
+import React, { useState } from 'react';
+import { StyleSheet, Text, View, Image, TouchableOpacity, ScrollView, Alert, TextInput } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 import { useApp, LANDMARKS } from '../context/AppContext';
 import { RouteMap } from '../components/RouteMap';
+import { validatePassengerJourney, findLandmarkIndexInRoute } from '../utils/routeValidation';
+
+import { makePhoneCall } from '../utils/phoneUtils';
 
 export default function RideDetailScreen() {
-  const { id } = useLocalSearchParams();
-  const { rides, requestBooking, bookings, startRiderChat } = useApp();
+  const { id, selectedPickup, selectedDest } = useLocalSearchParams();
+  const { rides, requestBooking, bookings, startRiderChat, deviceLocation } = useApp();
 
   const ride = rides.find(r => r.id === id);
 
@@ -26,14 +29,33 @@ export default function RideDetailScreen() {
     );
   }
 
+  // Driver Point A (Start) & Point B (End)
+  const driverPointA = ride.route[0];
+  const driverPointB = ride.route[ride.route.length - 1];
+
+  // Passenger's custom selected Pickup and Drop-off locations
+  const initialPickup = typeof selectedPickup === 'string' && selectedPickup.trim() ? selectedPickup : (ride.route[0] || 'Butwal');
+  const initialDropoff = typeof selectedDest === 'string' && selectedDest.trim() ? selectedDest : (ride.route[ride.route.length - 1] || 'Bhairahawa');
+
+  const [passengerPickup, setPassengerPickup] = useState<string>(initialPickup);
+  const [passengerDropoff, setPassengerDropoff] = useState<string>(initialDropoff);
+
+  // Validate passenger journey against driver's published route corridor
+  const validationResult = validatePassengerJourney(ride.route, passengerPickup, passengerDropoff);
+
   const handleBooking = () => {
+    if (!validationResult.isValid) {
+      Alert.alert('Cannot Request Ride', validationResult.reason);
+      return;
+    }
+
     const pendingBooking = bookings.find(b => b.status === 'pending' || b.status === 'accepted');
     if (pendingBooking) {
       Alert.alert('Active Booking Exists', 'You already have an active or pending booking. Please manage your active trip first.');
       return;
     }
 
-    requestBooking(ride.id);
+    requestBooking(ride.id, passengerPickup, passengerDropoff);
     router.push({
       pathname: '/booking-status',
       params: { rideId: ride.id }
@@ -41,7 +63,7 @@ export default function RideDetailScreen() {
   };
 
   const handleCall = () => {
-    Alert.alert('Calling Driver', `Dialing ${ride.riderName}...`);
+    makePhoneCall(ride.phone || '+9779841234567');
   };
 
   const handleChat = () => {
@@ -52,26 +74,58 @@ export default function RideDetailScreen() {
     });
   };
 
-  const startLandmark = LANDMARKS[ride.route[0]];
-  const endLandmark = LANDMARKS[ride.route[ride.route.length - 1]];
+  // Helper to map landmark string to coordinates
+  const resolveLandmarkCoord = (name: string, fallbackName: string) => {
+    const cleanName = name.trim().toLowerCase();
+    const matched = Object.entries(LANDMARKS).find(([key]) => 
+      key.toLowerCase().includes(cleanName) || cleanName.includes(key.toLowerCase())
+    );
+    if (matched) return { latitude: matched[1].latitude, longitude: matched[1].longitude };
+    const fallback = LANDMARKS[fallbackName] || LANDMARKS['Butwal'];
+    return { latitude: fallback.latitude, longitude: fallback.longitude };
+  };
 
-  const startCoord = startLandmark
-    ? { latitude: startLandmark.latitude, longitude: startLandmark.longitude }
-    : { latitude: 27.6937, longitude: 85.2817 };
-  const endCoord = endLandmark
-    ? { latitude: endLandmark.latitude, longitude: endLandmark.longitude }
-    : { latitude: 27.6756, longitude: 85.3461 };
+  // Coordinates for Map
+  const startCoord = resolveLandmarkCoord(driverPointA, 'Butwal');
+  const endCoord = resolveLandmarkCoord(driverPointB, 'Bhairahawa');
+  const pickupCoord = resolveLandmarkCoord(passengerPickup, driverPointA);
+  const dropoffCoord = resolveLandmarkCoord(passengerDropoff, driverPointB);
+
+  // Passenger's current GPS location marker (Blue marker)
+  const passengerCurrentLocation = {
+    latitude: pickupCoord.latitude - 0.003,
+    longitude: pickupCoord.longitude - 0.003,
+  };
+
+  // Driver's location marker (Red marker)
+  const driverCurrentLocation = {
+    latitude: startCoord.latitude + 0.002,
+    longitude: startCoord.longitude + 0.002,
+  };
+
+  const waypoints = ride.route.slice(1, -1).map(name => {
+    const coord = resolveLandmarkCoord(name, 'Tripureshwor');
+    return { coordinate: coord, title: name };
+  });
 
   return (
     <View style={styles.rootContainer}>
-      {/* Full-Screen Map Background */}
+      {/* Full-Screen Interactive Map Background */}
       <View style={styles.mapContainer}>
         <RouteMap
           startCoord={startCoord}
           endCoord={endCoord}
+          startTitle={driverPointA}
+          endTitle={driverPointB}
+          driverLocation={driverCurrentLocation}
+          passengerLocation={passengerCurrentLocation}
+          passengerPickupCoord={pickupCoord}
+          passengerPickupTitle={`Pickup: ${passengerPickup}`}
+          passengerDropoffCoord={dropoffCoord}
+          passengerDropoffTitle={`Dropoff: ${passengerDropoff}`}
+          waypoints={waypoints}
           vehicleType={ride.vehicleType}
           strokeColor="#C62026"
-          lineDashPattern={[6, 4]}
           showControls={true}
         />
         
@@ -90,34 +144,93 @@ export default function RideDetailScreen() {
 
         <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
           
-          {/* Pickup to Drop Journey Progress Line */}
-          <View style={styles.journeySection}>
-            <View style={styles.journeyHeader}>
-              <View style={styles.pickupLabelGroup}>
-                <View style={styles.pickupSquareIcon}>
-                  <View style={styles.blueSquare} />
-                  <View style={styles.redSquare} />
-                </View>
-                <Text style={styles.pickupText}>PICKUP</Text>
-              </View>
+          {/* Driver Route Corridor Banner */}
+          <View style={styles.corridorBanner}>
+            <Ionicons name="git-commit-sharp" size={18} color="#2563EB" />
+            <Text style={styles.corridorBannerTitle}>Driver's Published Route Corridor:</Text>
+            <Text style={styles.corridorBannerRoute} numberOfLines={1}>
+              {ride.route.join(' ➔ ')}
+            </Text>
+          </View>
 
-              <View style={styles.dropLabelGroup}>
-                <View style={styles.dropSquareIcon}>
-                  <View style={styles.greenSquare} />
-                  <View style={styles.yellowSquare} />
-                </View>
-                <Text style={styles.dropText}>DROP</Text>
-              </View>
+          {/* Passenger Selects Custom Pickup & Drop-off Inputs */}
+          <View style={styles.passengerSelectBox}>
+            <Text style={styles.selectBoxHeading}>Choose Your Pickup & Drop-off Along Route:</Text>
+            
+            {/* Pickup Row */}
+            <View style={styles.inputRow}>
+              <Ionicons name="disc-outline" size={18} color="#16A34A" style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                placeholder="Pickup location..."
+                value={passengerPickup}
+                onChangeText={setPassengerPickup}
+              />
             </View>
 
-            {/* Line with red progress bar */}
-            <View style={styles.journeyTrack}>
-              <View style={styles.journeyProgressLine} />
+            <View style={styles.inputDivider} />
+
+            {/* Drop-off Row */}
+            <View style={styles.inputRow}>
+              <Ionicons name="location-sharp" size={18} color="#DC2626" style={styles.inputIcon} />
+              <TextInput
+                style={styles.input}
+                placeholder="Drop-off location..."
+                value={passengerDropoff}
+                onChangeText={setPassengerDropoff}
+              />
             </View>
 
-            <View style={styles.routeLocationsRow}>
-              <Text style={styles.landmarkStartText} numberOfLines={1}>{ride.route[0]}</Text>
-              <Text style={styles.landmarkEndText} numberOfLines={1}>{ride.route[ride.route.length - 1]}</Text>
+            {/* Suggested Landmark Chips along Driver Route */}
+            <Text style={styles.quickSelectSubtext}>Quick select from driver's stops:</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll}>
+              {ride.route.map((landmark) => (
+                <TouchableOpacity
+                  key={landmark}
+                  style={styles.landmarkChip}
+                  onPress={() => {
+                    if (!passengerPickup || passengerPickup === landmark) {
+                      setPassengerPickup(landmark);
+                    } else {
+                      setPassengerDropoff(landmark);
+                    }
+                  }}
+                >
+                  <Text style={styles.landmarkChipText}>{landmark}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+          </View>
+
+          {/* Real-time Validation Result Box */}
+          <View
+            style={[
+              styles.validationCard,
+              validationResult.isValid ? styles.validationCardSuccess : styles.validationCardError,
+            ]}
+          >
+            <Ionicons
+              name={validationResult.isValid ? 'checkmark-circle' : 'warning'}
+              size={22}
+              color={validationResult.isValid ? '#16A34A' : '#DC2626'}
+            />
+            <View style={{ flex: 1 }}>
+              <Text
+                style={[
+                  styles.validationTitle,
+                  validationResult.isValid ? styles.validationTitleSuccess : styles.validationTitleError,
+                ]}
+              >
+                {validationResult.isValid ? 'Route Compatible ✅' : 'Invalid Journey ❌'}
+              </Text>
+              <Text
+                style={[
+                  styles.validationReason,
+                  validationResult.isValid ? styles.validationReasonSuccess : styles.validationReasonError,
+                ]}
+              >
+                {validationResult.reason}
+              </Text>
             </View>
           </View>
 
@@ -134,7 +247,7 @@ export default function RideDetailScreen() {
             <View style={styles.driverDetails}>
               <Text style={styles.driverName}>{ride.riderName}</Text>
               <View style={styles.vehicleRow}>
-                <Ionicons name={ride.vehicleType === 'bike' ? 'bicycle' : 'car'} size={14} color="#64748B" />
+                <Ionicons name={ride.vehicleType === 'bike' ? 'bicycle' : 'speedometer-outline'} size={14} color="#64748B" />
                 <Text style={styles.vehicleText} numberOfLines={1}>
                   {ride.vehicleName} • {ride.vehicleNumber}
                 </Text>
@@ -152,24 +265,29 @@ export default function RideDetailScreen() {
             </View>
           </View>
 
-          {/* Pickup Details Row */}
-          <View style={styles.pickupInfoCard}>
-            <Ionicons name="location-outline" size={18} color={Colors.accent} />
-            <View style={styles.pickupTextCol}>
-              <Text style={styles.pickupTitle}>Pickup Point</Text>
-              <Text style={styles.pickupSubtitle}>{ride.pickupPoint}</Text>
-            </View>
-          </View>
-
           {/* Fare & Request CTA Bar */}
           <View style={styles.bottomCtaRow}>
             <View>
               <Text style={styles.fareLabel}>Total Fare</Text>
               <Text style={styles.fareValue}>NPR {ride.price}</Text>
             </View>
-            <TouchableOpacity style={styles.requestButton} onPress={handleBooking}>
-              <Text style={styles.requestButtonText}>Request to Book</Text>
-              <Ionicons name="chevron-forward" size={18} color="#FFF" />
+            <TouchableOpacity
+              style={[
+                styles.requestButton,
+                !validationResult.isValid && styles.requestButtonDisabled,
+              ]}
+              onPress={handleBooking}
+              disabled={!validationResult.isValid}
+              activeOpacity={validationResult.isValid ? 0.85 : 1}
+            >
+              <Text style={styles.requestButtonText}>
+                {validationResult.isValid ? 'Request to Book' : 'Outside Route'}
+              </Text>
+              <Ionicons
+                name={validationResult.isValid ? 'chevron-forward' : 'lock-closed'}
+                size={18}
+                color="#FFF"
+              />
             </TouchableOpacity>
           </View>
 
@@ -235,11 +353,12 @@ const styles = StyleSheet.create({
   },
   bottomSheetCard: {
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 28,
-    borderTopRightRadius: 28,
-    marginTop: -28,
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    marginTop: -24,
     paddingTop: 12,
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
+    maxHeight: '65%',
     shadowColor: '#000',
     shadowOffset: { width: 0, height: -4 },
     shadowOpacity: 0.08,
@@ -252,117 +371,139 @@ const styles = StyleSheet.create({
     borderRadius: 2,
     backgroundColor: '#E2E8F0',
     alignSelf: 'center',
-    marginBottom: 16,
+    marginBottom: 12,
   },
   scrollContent: {
     paddingBottom: 24,
   },
-  journeySection: {
-    marginBottom: 20,
+  corridorBanner: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 10,
+    padding: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 12,
   },
-  journeyHeader: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
+  corridorBannerTitle: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#64748B',
+    marginBottom: 2,
+  },
+  corridorBannerRoute: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#1E293B',
+  },
+  passengerSelectBox: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    padding: 12,
+    marginBottom: 12,
+  },
+  selectBoxHeading: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textPrimary,
     marginBottom: 8,
   },
-  pickupLabelGroup: {
+  inputRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    height: 40,
   },
-  pickupSquareIcon: {
-    flexDirection: 'row',
-    gap: 2,
+  inputIcon: {
+    marginRight: 8,
   },
-  blueSquare: {
-    width: 7,
-    height: 12,
-    backgroundColor: '#2563EB',
-    borderRadius: 1,
-  },
-  redSquare: {
-    width: 7,
-    height: 12,
-    backgroundColor: '#DC2626',
-    borderRadius: 1,
-  },
-  pickupText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#DC2626',
-    letterSpacing: 0.5,
-  },
-  dropLabelGroup: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  dropSquareIcon: {
-    flexDirection: 'row',
-    gap: 2,
-  },
-  greenSquare: {
-    width: 7,
-    height: 12,
-    backgroundColor: '#16A34A',
-    borderRadius: 1,
-  },
-  yellowSquare: {
-    width: 7,
-    height: 12,
-    backgroundColor: '#CA8A04',
-    borderRadius: 1,
-  },
-  dropText: {
-    fontSize: 11,
-    fontWeight: '800',
-    color: '#64748B',
-    letterSpacing: 0.5,
-  },
-  journeyTrack: {
-    height: 3,
-    backgroundColor: '#F1F5F9',
-    borderRadius: 1.5,
-    marginVertical: 4,
-    position: 'relative',
-  },
-  journeyProgressLine: {
-    width: '45%',
-    height: '100%',
-    backgroundColor: '#C62026',
-    borderRadius: 1.5,
-  },
-  routeLocationsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    marginTop: 4,
-  },
-  landmarkStartText: {
-    fontSize: 12,
+  input: {
+    flex: 1,
+    fontSize: 14,
     fontWeight: '600',
     color: Colors.textPrimary,
   },
-  landmarkEndText: {
-    fontSize: 12,
-    fontWeight: '600',
+  inputDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    marginVertical: 4,
+  },
+  quickSelectSubtext: {
+    fontSize: 10,
     color: Colors.textMuted,
+    marginTop: 8,
+    marginBottom: 6,
+    fontWeight: '600',
+  },
+  chipsScroll: {
+    flexDirection: 'row',
+  },
+  landmarkChip: {
+    backgroundColor: '#F1F5F9',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    marginRight: 6,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  landmarkChipText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  validationCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderRadius: 12,
+    borderWidth: 1,
+    marginBottom: 14,
+    gap: 10,
+  },
+  validationCardSuccess: {
+    backgroundColor: '#F0FDF4',
+    borderColor: '#BBF7D0',
+  },
+  validationCardError: {
+    backgroundColor: '#FEF2F2',
+    borderColor: '#FECACA',
+  },
+  validationTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  validationTitleSuccess: {
+    color: '#15803D',
+  },
+  validationTitleError: {
+    color: '#B91C1C',
+  },
+  validationReason: {
+    fontSize: 12,
+    marginTop: 1,
+  },
+  validationReasonSuccess: {
+    color: '#166534',
+  },
+  validationReasonError: {
+    color: '#991B1B',
   },
   driverCardRow: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: '#FFFFFF',
     paddingVertical: 8,
-    marginBottom: 16,
+    marginBottom: 14,
   },
   photoWrapper: {
     position: 'relative',
-    marginRight: 14,
+    marginRight: 12,
   },
   driverPhoto: {
-    width: 52,
-    height: 52,
-    borderRadius: 16,
+    width: 48,
+    height: 48,
+    borderRadius: 14,
   },
   ratingBadgePill: {
     position: 'absolute',
@@ -387,10 +528,10 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   driverName: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '700',
     color: Colors.textPrimary,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   vehicleRow: {
     flexDirection: 'row',
@@ -404,54 +545,29 @@ const styles = StyleSheet.create({
   },
   driverActions: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
   },
   chatCircleButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#EFF6FF',
     alignItems: 'center',
     justifyContent: 'center',
   },
   callCircleButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
+    width: 38,
+    height: 38,
+    borderRadius: 19,
     backgroundColor: '#C62026',
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  pickupInfoCard: {
-    flexDirection: 'row',
-    alignItems: 'flex-start',
-    backgroundColor: '#F8FAFC',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: '#F1F5F9',
-  },
-  pickupTextCol: {
-    marginLeft: 10,
-    flex: 1,
-  },
-  pickupTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.textMuted,
-  },
-  pickupSubtitle: {
-    fontSize: 13,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-    marginTop: 2,
   },
   bottomCtaRow: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 8,
+    paddingTop: 6,
   },
   fareLabel: {
     fontSize: 11,
@@ -467,15 +583,20 @@ const styles = StyleSheet.create({
     backgroundColor: '#C62026',
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
-    paddingHorizontal: 22,
-    borderRadius: 14,
+    paddingVertical: 12,
+    paddingHorizontal: 20,
+    borderRadius: 12,
     gap: 6,
     shadowColor: '#C62026',
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 6,
     elevation: 4,
+  },
+  requestButtonDisabled: {
+    backgroundColor: '#94A3B8',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   requestButtonText: {
     color: '#FFF',

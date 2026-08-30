@@ -4,8 +4,52 @@ import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
 import { supabase } from '../lib/supabase';
 import { User } from '@supabase/supabase-js';
+import {
+  triggerMobilePushNotification,
+  registerForPushNotificationsAsync,
+} from '../services/notificationService';
 
-// Landmark coordinates on our map & GPS grid
+export interface DriverNotificationItem {
+  id: string;
+  type: 'ride_request' | 'request_status' | 'ride_event' | 'payment' | 'kyc' | 'announcement';
+  title: string;
+  description: string;
+  timestamp: Date;
+  isRead: boolean;
+  iconName: string;
+  iconColor: string;
+  targetScreen?: string;
+  targetParams?: Record<string, any>;
+}
+
+export interface RecentSearchItem {
+  id: string;
+  from: string;
+  to: string;
+  timestamp: Date;
+}
+
+export interface SavedPlaceItem {
+  id: string;
+  name: string;
+  landmark: string;
+}
+
+export type RideLifecycleState =
+  | 'searching'
+  | 'ride_selected'
+  | 'request_pending'
+  | 'waiting_for_pickup'
+  | 'pickup_otp_required'
+  | 'ride_started'
+  | 'completion_otp_required'
+  | 'payment_pending'
+  | 'payment_completed'
+  | 'rating_pending'
+  | 'completed'
+  | 'cancelled';
+
+// Landmark coordinates on our map & GPS grid (Butwal and surrounding areas)
 export interface Landmark {
   name: string;
   x: number; // percentage width on map canvas (0-100)
@@ -15,22 +59,25 @@ export interface Landmark {
 }
 
 export const LANDMARKS: Record<string, Landmark> = {
-  'Kalanki': { name: 'Kalanki', x: 15, y: 55, latitude: 27.6937, longitude: 85.2817 },
-  'Balkhu': { name: 'Balkhu', x: 25, y: 75, latitude: 27.6845, longitude: 85.2907 },
-  'Tripureshwor': { name: 'Tripureshwor', x: 45, y: 50, latitude: 27.6961, longitude: 85.3121 },
-  'Putalisadak': { name: 'Putalisadak', x: 60, y: 35, latitude: 27.7042, longitude: 85.3218 },
-  'Chabahil': { name: 'Chabahil', x: 80, y: 25, latitude: 27.7172, longitude: 85.3496 },
-  'Koteshwor': { name: 'Koteshwor', x: 85, y: 70, latitude: 27.6756, longitude: 85.3461 },
-  'Balkumari': { name: 'Balkumari', x: 75, y: 80, latitude: 27.6708, longitude: 85.3418 },
-  'Lagankhel': { name: 'Lagankhel', x: 55, y: 85, latitude: 27.6675, longitude: 85.3232 },
+  'Butwal': { name: 'Butwal', x: 20, y: 30, latitude: 27.7006, longitude: 83.4484 },
+  'Golpark': { name: 'Golpark', x: 25, y: 35, latitude: 27.7050, longitude: 83.4520 },
+  'Devinagar': { name: 'Devinagar', x: 30, y: 40, latitude: 27.6910, longitude: 83.4560 },
+  'Milanchowk': { name: 'Milanchowk', x: 35, y: 45, latitude: 27.6850, longitude: 83.4600 },
+  'Yogikuti': { name: 'Yogikuti', x: 42, y: 50, latitude: 27.6750, longitude: 83.4660 },
+  'Drivertole': { name: 'Drivertole', x: 48, y: 55, latitude: 27.6620, longitude: 83.4690 },
+  'Tilottama': { name: 'Tilottama', x: 55, y: 62, latitude: 27.6500, longitude: 83.4720 },
+  'Manigram': { name: 'Manigram', x: 65, y: 70, latitude: 27.6300, longitude: 83.4750 },
+  'Kotihawa': { name: 'Kotihawa', x: 75, y: 80, latitude: 27.5800, longitude: 83.4500 },
+  'Bhairahawa': { name: 'Bhairahawa', x: 85, y: 90, latitude: 27.5020, longitude: 83.4510 },
 };
 
 export interface Ride {
   id: string;
   riderName: string;
   riderPhoto: string;
+  phone?: string;
   rating: number;
-  vehicleType: 'bike' | 'car';
+  vehicleType: 'bike' | 'scooter';
   vehicleName: string;
   vehicleNumber: string;
   departureTime: string; // e.g. "Leaving in 5 mins" or "10:30 AM"
@@ -44,10 +91,21 @@ export interface Booking {
   id: string;
   rideId: string;
   passengerId: string;
+  passengerPhone?: string;
+  passengerPickup?: string;
+  passengerDropoff?: string;
   status: 'pending' | 'accepted' | 'ongoing' | 'arrived' | 'completed' | 'cancelled';
+  lifecycleState: RideLifecycleState;
   createdAt: Date;
   currentLat?: number;
   currentLng?: number;
+  pickupOtp: string; // 4-digit pickup OTP (default '4821')
+  completionOtp: string; // 4-digit completion OTP (default '7392')
+  otpError?: string | null;
+  paymentMethod?: 'cash' | 'khalti' | 'esewa' | null;
+  paymentStatus?: 'pending' | 'completed';
+  rating?: number;
+  reviewComment?: string;
 }
 
 export interface Message {
@@ -77,7 +135,7 @@ interface UserProfile {
   photo: string;
   kycVerified?: boolean;
   nid?: string;
-  vehicleType?: 'bike' | 'car';
+  vehicleType?: 'bike' | 'scooter';
   vehicleName?: string;
   vehicleNumber?: string;
   licenseImage?: string;
@@ -95,20 +153,36 @@ interface AppContextType {
   driverMessages: Record<string, DriverMessage[]>;
   activeChatRideIds: string[];
   notifications: string[];
+  driverNotifications: DriverNotificationItem[];
+  unreadDriverNotifCount: number;
+  recentSearches: RecentSearchItem[];
+  savedPlaces: SavedPlaceItem[];
+  addRecentSearch: (from: string, to: string) => void;
+  addSavedPlace: (name: string, landmark: string) => void;
+  removeSavedPlace: (id: string) => void;
+  activeBooking: Booking | null;
   activeTripProgress: number; // 0 to 100 representing percentage along route
   activeTripCoords: { x: number; y: number } | null;
   login: (email: string, password?: string) => Promise<{ success: boolean; error?: string }>;
   signup: (profile: Partial<UserProfile> & { password?: string }) => Promise<{ success: boolean; error?: string }>;
   completeProfile: (profile: Partial<UserProfile>) => void;
   updateEmergencyContact: (contact: string) => void;
-  requestBooking: (rideId: string) => void;
+  requestBooking: (rideId: string, passengerPickup?: string, passengerDropoff?: string) => void;
   cancelBooking: (bookingId: string) => void;
+  addDriverNotification: (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => void;
+  markNotificationAsRead: (id: string) => void;
+  markAllNotificationsAsRead: () => void;
+  clearNotification: (id: string) => void;
   sendChatMessage: (text: string) => void;
   sendDriverMessage: (rideId: string, text: string) => void;
   startRiderChat: (rideId: string) => void;
   nudgeDriverLocation: (bookingId: string) => void;
   startRideWithOTP: (bookingId: string, otp: string) => boolean;
   endRideWithOTP: (bookingId: string, otp: string) => boolean;
+  verifyPickupOtp: (bookingId: string, otp: string) => { success: boolean; error?: string };
+  verifyCompletionOtp: (bookingId: string, otp: string) => { success: boolean; error?: string };
+  processPayment: (bookingId: string, method: 'cash' | 'khalti' | 'esewa') => { success: boolean; error?: string };
+  submitRideRating: (bookingId: string, rating: number, comment?: string) => void;
   createRide: (ride: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => void;
   acceptBooking: (bookingId: string) => void;
   declineBooking: (bookingId: string) => void;
@@ -120,88 +194,164 @@ const AppContext = createContext<AppContextType | undefined>(undefined);
 const initialRides: Ride[] = [
   {
     id: 'ride-1',
-    riderName: 'Sakar Aryal',
+    riderName: 'Anish Shrestha',
     riderPhoto: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+    phone: '+9779841234567',
     rating: 4.9,
-    vehicleType: 'bike',
-    vehicleName: 'Pulsar 220F',
-    vehicleNumber: 'BA 95 PA 8821',
+    vehicleType: 'scooter',
+    vehicleName: 'Vespa VXL 150',
+    vehicleNumber: 'LU 1 PA 1234',
     departureTime: 'Leaving in 5 mins',
     seatsLeft: 1,
-    price: 120,
-    route: ['Kalanki', 'Balkhu', 'Tripureshwor', 'Koteshwor'],
-    pickupPoint: 'Kalanki Chowk (near Overhead Bridge)',
+    price: 150,
+    route: ['Butwal', 'Golpark', 'Devinagar', 'Tilottama', 'Manigram', 'Bhairahawa'],
+    pickupPoint: 'Butwal Bus Park Main Gate',
   },
   {
     id: 'ride-2',
-    riderName: 'Priya Sharma',
-    riderPhoto: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&h=200&q=80',
-    rating: 4.8,
-    vehicleType: 'car',
-    vehicleName: 'Hyundai Grand i10',
-    vehicleNumber: 'BA 3 CHA 4590',
-    departureTime: 'Leaving in 15 mins',
-    seatsLeft: 3,
-    price: 320,
-    route: ['Chabahil', 'Putalisadak', 'Tripureshwor', 'Lagankhel'],
-    pickupPoint: 'Chabahil Chowk (near KL Tower)',
+    riderName: 'Bibek Gurung',
+    riderPhoto: 'https://images.unsplash.com/photo-1599566150163-29194dcaad36?auto=format&fit=crop&w=200&h=200&q=80',
+    phone: '+9779851098765',
+    rating: 4.6,
+    vehicleType: 'scooter',
+    vehicleName: 'Honda Activa 6G',
+    vehicleNumber: 'LU 2 PA 5678',
+    departureTime: 'Leaving in 10 mins',
+    seatsLeft: 1,
+    price: 120,
+    route: ['Butwal', 'Milanchowk', 'Yogikuti', 'Drivertole', 'Tilottama'],
+    pickupPoint: 'Milanchowk Highway Stop',
   },
   {
     id: 'ride-3',
-    riderName: 'Ram Bahadur',
-    riderPhoto: 'https://images.unsplash.com/photo-1599566150163-29194dcaad36?auto=format&fit=crop&w=200&h=200&q=80',
-    rating: 4.6,
+    riderName: 'Sita Sharma',
+    riderPhoto: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&h=200&q=80',
+    phone: '+9779860112233',
+    rating: 4.8,
     vehicleType: 'bike',
-    vehicleName: 'Honda Hornet 160R',
-    vehicleNumber: 'BA 82 PA 1244',
-    departureTime: 'Leaving in 10 mins',
+    vehicleName: 'Yamaha FZS V3',
+    vehicleNumber: 'LU 3 PA 9012',
+    departureTime: 'Leaving in 15 mins',
     seatsLeft: 1,
-    price: 150,
-    route: ['Kalanki', 'Balkhu', 'Lagankhel', 'Balkumari'],
-    pickupPoint: 'Balkhu Bhatbhateni Gate',
+    price: 200,
+    route: ['Golpark', 'Devinagar', 'Yogikuti', 'Manigram', 'Bhairahawa'],
+    pickupPoint: 'Golpark Traffic Chowk',
   },
   {
     id: 'ride-4',
-    riderName: 'Sneha Shrestha',
-    riderPhoto: 'https://images.unsplash.com/photo-1580489944761-15a19d654956?auto=format&fit=crop&w=200&h=200&q=80',
-    rating: 4.7,
-    vehicleType: 'car',
-    vehicleName: 'Suzuki Swift',
-    vehicleNumber: 'BA 2 CHA 8891',
-    departureTime: 'Leaving in 30 mins',
-    seatsLeft: 4,
-    price: 280,
-    route: ['Balkhu', 'Tripureshwor', 'Putalisadak', 'Chabahil'],
-    pickupPoint: 'Tripureshwor (near Dasharath Rangasala)',
+    riderName: 'Rajesh Thapa',
+    riderPhoto: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&h=200&q=80',
+    phone: '+9779812345678',
+    rating: 4.9,
+    vehicleType: 'bike',
+    vehicleName: 'Royal Enfield Classic 350',
+    vehicleNumber: 'LU 1 PA 7788',
+    departureTime: 'Leaving in 20 mins',
+    seatsLeft: 2,
+    price: 180,
+    route: ['Devinagar', 'Tilottama', 'Manigram', 'Kotihawa', 'Bhairahawa'],
+    pickupPoint: 'Devinagar Highway Gate',
   },
 ];
 
 const initialDriverMessages: Record<string, DriverMessage[]> = {
   'ride-1': [
-    { id: 'dm-1-1', rideId: 'ride-1', sender: 'driver', text: 'Hello! I am Sakar. Are you waiting near Kalanki Overhead Bridge?', timestamp: new Date(Date.now() - 300000) },
-    { id: 'dm-1-2', rideId: 'ride-1', sender: 'user', text: 'Yes, I am near the entrance wearing a navy jacket.', timestamp: new Date(Date.now() - 180000) },
-    { id: 'dm-1-3', rideId: 'ride-1', sender: 'driver', text: 'Great! Reaching in 3 minutes on my Pulsar 220F.', timestamp: new Date(Date.now() - 60000) },
+    { id: 'dm-1-1', rideId: 'ride-1', sender: 'driver', text: 'Namaste! I am Anish. Are you waiting near Butwal Bus Park Gate?', timestamp: new Date(Date.now() - 300000) },
+    { id: 'dm-1-2', rideId: 'ride-1', sender: 'user', text: 'Yes, standing right near the main gate wearing a black jacket.', timestamp: new Date(Date.now() - 180000) },
+    { id: 'dm-1-3', rideId: 'ride-1', sender: 'driver', text: 'Great! Arriving in 2 minutes on Vespa VXL 150.', timestamp: new Date(Date.now() - 60000) },
   ],
   'ride-2': [
-    { id: 'dm-2-1', rideId: 'ride-2', sender: 'driver', text: 'Hi! Priya here. Starting from Chabahil in 15 mins.', timestamp: new Date(Date.now() - 600000) },
+    { id: 'dm-2-1', rideId: 'ride-2', sender: 'driver', text: 'Hi! Bibek here. Starting from Milanchowk in 10 mins.', timestamp: new Date(Date.now() - 600000) },
   ],
   'ride-3': [
-    { id: 'dm-3-1', rideId: 'ride-3', sender: 'driver', text: 'Namaste! Ram Bahadur here, leaving Balkhu soon.', timestamp: new Date(Date.now() - 900000) },
+    { id: 'dm-3-1', rideId: 'ride-3', sender: 'driver', text: 'Namaste! Sita here, leaving Golpark Chowk shortly.', timestamp: new Date(Date.now() - 900000) },
   ],
   'ride-4': [
-    { id: 'dm-4-1', rideId: 'ride-4', sender: 'driver', text: 'Hi! Sneha here. Let me know when you reach Tripureshwor.', timestamp: new Date(Date.now() - 1200000) },
+    { id: 'dm-4-1', rideId: 'ride-4', sender: 'driver', text: 'Hi! Rajesh here on Royal Enfield. Let me know when you arrive.', timestamp: new Date(Date.now() - 1200000) },
   ],
 };
+
+const initialDriverNotifications: DriverNotificationItem[] = [
+  {
+    id: 'notif-1',
+    type: 'ride_request',
+    title: 'New Ride Request',
+    description: 'Ram requested a ride from Butwal → Bhairahawa',
+    timestamp: new Date(Date.now() - 120000),
+    isRead: false,
+    iconName: 'car-sport',
+    iconColor: '#2563EB',
+    targetScreen: '/activity',
+  },
+  {
+    id: 'notif-2',
+    type: 'kyc',
+    title: 'KYC Verification Approved',
+    description: 'Your driver identity and vehicle documents (LU 1 PA 7788) have been verified successfully.',
+    timestamp: new Date(Date.now() - 3600000),
+    isRead: false,
+    iconName: 'shield-checkmark',
+    iconColor: '#16A34A',
+    targetScreen: '/profile',
+  },
+  {
+    id: 'notif-3',
+    type: 'announcement',
+    title: 'System Announcement',
+    description: 'Welcome to Sarathi Driver Workspace! Publish your route and split travel costs with passengers.',
+    timestamp: new Date(Date.now() - 86400000),
+    isRead: true,
+    iconName: 'notifications',
+    iconColor: '#F59E0B',
+    targetScreen: '/index',
+  },
+];
+
+const initialSavedPlaces: SavedPlaceItem[] = [
+  { id: 'sp-1', name: 'Butwal Hub', landmark: 'Butwal' },
+  { id: 'sp-2', name: 'Bhairahawa Station', landmark: 'Bhairahawa' },
+  { id: 'sp-3', name: 'Kalanki Junction', landmark: 'Kalanki' },
+  { id: 'sp-4', name: 'Koteshwor Stop', landmark: 'Koteshwor' },
+];
 
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
   const [deviceLocation, setDeviceLocation] = useState<string>('Kalanki');
   const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [recentSearches, setRecentSearches] = useState<RecentSearchItem[]>([]);
+  const [savedPlaces, setSavedPlaces] = useState<SavedPlaceItem[]>(initialSavedPlaces);
+
+  const addRecentSearch = (from: string, to: string) => {
+    if (!from || !to || from.trim().toLowerCase() === to.trim().toLowerCase()) return;
+    const newItem: RecentSearchItem = {
+      id: `rs-${Date.now()}`,
+      from: from.trim(),
+      to: to.trim(),
+      timestamp: new Date(),
+    };
+    setRecentSearches(prev => [newItem, ...prev.filter(s => !(s.from === from.trim() && s.to === to.trim()))].slice(0, 10));
+  };
+
+  const addSavedPlace = (name: string, landmark: string) => {
+    if (!name || !landmark) return;
+    const newItem: SavedPlaceItem = {
+      id: `sp-${Date.now()}`,
+      name: name.trim(),
+      landmark: landmark.trim(),
+    };
+    setSavedPlaces(prev => [...prev.filter(p => p.name.toLowerCase() !== name.trim().toLowerCase()), newItem]);
+  };
+
+  const removeSavedPlace = (id: string) => {
+    setSavedPlaces(prev => prev.filter(p => p.id !== id));
+  };
+
   const [rides, setRides] = useState<Ride[]>(initialRides);
   const [bookings, setBookings] = useState<Booking[]>([]);
+  const [driverNotifications, setDriverNotifications] = useState<DriverNotificationItem[]>(initialDriverNotifications);
   const [driverMessages, setDriverMessages] = useState<Record<string, DriverMessage[]>>(initialDriverMessages);
-  const [activeChatRideIds, setActiveChatRideIds] = useState<string[]>(['ride-1']); // Sakar Aryal active by default
+  const [activeChatRideIds, setActiveChatRideIds] = useState<string[]>(['ride-1']);
   const [notifications, setNotifications] = useState<string[]>([
     'Your ride request with Sakar Aryal has been ACCEPTED!',
     'Welcome to Sarathi! Set up your profile to start booking rides.',
@@ -313,6 +463,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
               return {
                 ...b,
                 status: 'accepted',
+                lifecycleState: 'waiting_for_pickup',
                 currentLat: startLandmark ? startLandmark.latitude : 27.6937,
                 currentLng: startLandmark ? startLandmark.longitude : 85.2817,
               };
@@ -532,10 +683,84 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUser(prev => prev ? { ...prev, emergencyContact: contact } : null);
   };
 
-  const requestBooking = (rideId: string) => {
-    const activeBooking = bookings.find(b => b.status === 'pending' || b.status === 'accepted');
-    if (activeBooking) {
-      Alert.alert('Ongoing Booking', 'You already have an active booking or trip. Please complete or cancel it first.');
+  const addDriverNotification = (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => {
+    const newItem: DriverNotificationItem = {
+      ...item,
+      id: `driver-notif-${Date.now()}`,
+      timestamp: new Date(),
+      isRead: false,
+    };
+
+    setDriverNotifications(prev => [newItem, ...prev]);
+
+    // Fire real native mobile push notification (Lock screen, Status bar, Notification panel)
+    triggerMobilePushNotification({
+      title: item.title,
+      body: item.description,
+      data: {
+        targetScreen: item.targetScreen,
+        targetParams: item.targetParams,
+      },
+    });
+  };
+
+  const markNotificationAsRead = (id: string) => {
+    setDriverNotifications(prev =>
+      prev.map(n => (n.id === id ? { ...n, isRead: true } : n))
+    );
+  };
+
+  const markAllNotificationsAsRead = () => {
+    setDriverNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+  };
+
+  const clearNotification = (id: string) => {
+    setDriverNotifications(prev => prev.filter(n => n.id !== id));
+  };
+
+  const ACTIVE_BOOKING_STORAGE_KEY = '@SARATHI_ACTIVE_BOOKING_V2';
+
+  const saveActiveBookingToStorage = async (booking: Booking | null) => {
+    try {
+      if (booking) {
+        await AsyncStorage.setItem(ACTIVE_BOOKING_STORAGE_KEY, JSON.stringify(booking));
+      } else {
+        await AsyncStorage.removeItem(ACTIVE_BOOKING_STORAGE_KEY);
+      }
+    } catch (err) {
+      console.warn('Failed to save active booking to storage:', err);
+    }
+  };
+
+  // Restore active booking from AsyncStorage on app startup
+  useEffect(() => {
+    (async () => {
+      try {
+        const stored = await AsyncStorage.getItem(ACTIVE_BOOKING_STORAGE_KEY);
+        if (stored) {
+          const parsed = JSON.parse(stored) as Booking;
+          parsed.createdAt = new Date(parsed.createdAt);
+          setBookings(prev => {
+            const exists = prev.some(b => b.id === parsed.id);
+            return exists ? prev.map(b => (b.id === parsed.id ? parsed : b)) : [parsed, ...prev];
+          });
+        }
+      } catch (err) {
+        console.warn('Failed to load active booking from storage:', err);
+      }
+    })();
+  }, []);
+
+  const activeBooking = bookings.find(
+    b => b.lifecycleState !== 'completed' && b.lifecycleState !== 'cancelled'
+  ) || null;
+
+  const requestBooking = (rideId: string, passengerPickup?: string, passengerDropoff?: string) => {
+    const existing = bookings.find(
+      b => b.lifecycleState !== 'completed' && b.lifecycleState !== 'cancelled'
+    );
+    if (existing) {
+      Alert.alert('Ongoing Booking Active', 'You already have an ongoing ride or request. Please complete or cancel it first.');
       return;
     }
 
@@ -545,34 +770,174 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newBooking: Booking = {
       id: `booking-${Date.now()}`,
       rideId,
-      passengerId: user?.email || 'guest',
+      passengerId: user?.email || 'passenger@sarathi.com',
+      passengerPhone: user?.phone || '+9779841234567',
+      passengerPickup: passengerPickup || ride?.route[0] || 'Butwal',
+      passengerDropoff: passengerDropoff || ride?.route[(ride?.route.length || 1) - 1] || 'Bhairahawa',
       status: 'pending',
+      lifecycleState: 'request_pending',
       createdAt: new Date(),
-      currentLat: startLandmark ? startLandmark.latitude : 27.6937,
-      currentLng: startLandmark ? startLandmark.longitude : 85.2817,
+      currentLat: startLandmark ? startLandmark.latitude : 27.7006,
+      currentLng: startLandmark ? startLandmark.longitude : 83.4484,
+      pickupOtp: '4821',
+      completionOtp: '7392',
     };
-    setBookings(prev => [newBooking, ...prev]);
-    setNotifications(prev => ['Your ride request has been submitted!', ...prev]);
-  };
 
-  const cancelBooking = (bookingId: string) => {
-    setBookings(prev => 
-      prev.map(b => b.id === bookingId ? { ...b, status: 'cancelled' } : b)
-    );
-    setNotifications(prev => ['You cancelled your ride request.', ...prev]);
+    setBookings(prev => [newBooking, ...prev]);
+    saveActiveBookingToStorage(newBooking);
+    setNotifications(prev => ['Your ride request has been submitted to the driver!', ...prev]);
+
+    // Send Push Notification to Driver
+    addDriverNotification({
+      type: 'ride_request',
+      title: '🚗 New Ride Request',
+      description: `Passenger requested a ride from ${newBooking.passengerPickup} → ${newBooking.passengerDropoff}`,
+      iconName: 'car-sport',
+      iconColor: '#2563EB',
+      targetScreen: '/activity',
+      targetParams: { rideId },
+    });
   };
 
   const acceptBooking = (bookingId: string) => {
-    setBookings(prev => 
-      prev.map(b => b.id === bookingId ? { ...b, status: 'accepted' } : b)
+    let updatedBooking: Booking | null = null;
+    setBookings(prev =>
+      prev.map(b => {
+        if (b.id === bookingId) {
+          updatedBooking = {
+            ...b,
+            status: 'accepted',
+            lifecycleState: 'waiting_for_pickup',
+          };
+          return updatedBooking;
+        }
+        return b;
+      })
     );
-    setNotifications(prev => ['You have accepted the passenger request!', ...prev]);
+
+    if (updatedBooking) {
+      saveActiveBookingToStorage(updatedBooking);
+    }
+    setNotifications(prev => ['Your ride request has been ACCEPTED by the driver!', ...prev]);
+  };
+
+  const verifyPickupOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
+    const targetBooking = bookings.find(b => b.id === bookingId);
+    if (!targetBooking) return { success: false, error: 'Booking not found.' };
+
+    if (otp.trim() === targetBooking.pickupOtp || otp.trim() === '4821') {
+      let updatedBooking: Booking | null = null;
+      setBookings(prev =>
+        prev.map(b => {
+          if (b.id === bookingId) {
+            updatedBooking = {
+              ...b,
+              status: 'ongoing',
+              lifecycleState: 'ride_started',
+              otpError: null,
+            };
+            return updatedBooking;
+          }
+          return b;
+        })
+      );
+      if (updatedBooking) saveActiveBookingToStorage(updatedBooking);
+      setNotifications(prev => ['Pickup verified! Your ride has officially started.', ...prev]);
+      return { success: true };
+    }
+
+    setBookings(prev =>
+      prev.map(b => (b.id === bookingId ? { ...b, otpError: 'Incorrect Pickup OTP (Default: 4821)' } : b))
+    );
+    return { success: false, error: 'Incorrect Pickup OTP. Please enter 4821.' };
+  };
+
+  const verifyCompletionOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
+    const targetBooking = bookings.find(b => b.id === bookingId);
+    if (!targetBooking) return { success: false, error: 'Booking not found.' };
+
+    if (otp.trim() === targetBooking.completionOtp || otp.trim() === '7392') {
+      let updatedBooking: Booking | null = null;
+      setBookings(prev =>
+        prev.map(b => {
+          if (b.id === bookingId) {
+            updatedBooking = {
+              ...b,
+              status: 'arrived',
+              lifecycleState: 'payment_pending',
+              otpError: null,
+            };
+            return updatedBooking;
+          }
+          return b;
+        })
+      );
+      if (updatedBooking) saveActiveBookingToStorage(updatedBooking);
+      setNotifications(prev => ['Destination reached! Please select payment method.', ...prev]);
+      return { success: true };
+    }
+
+    setBookings(prev =>
+      prev.map(b => (b.id === bookingId ? { ...b, otpError: 'Incorrect Completion OTP (Default: 7392)' } : b))
+    );
+    return { success: false, error: 'Incorrect Completion OTP. Please enter 7392.' };
+  };
+
+  const processPayment = (bookingId: string, method: 'cash' | 'khalti' | 'esewa'): { success: boolean; error?: string } => {
+    let updatedBooking: Booking | null = null;
+    setBookings(prev =>
+      prev.map(b => {
+        if (b.id === bookingId) {
+          updatedBooking = {
+            ...b,
+            paymentMethod: method,
+            paymentStatus: 'completed',
+            lifecycleState: 'rating_pending',
+          };
+          return updatedBooking;
+        }
+        return b;
+      })
+    );
+
+    if (updatedBooking) saveActiveBookingToStorage(updatedBooking);
+    setNotifications(prev => [`Payment of NPR 180 completed via ${method.toUpperCase()}!`, ...prev]);
+    return { success: true };
+  };
+
+  const submitRideRating = (bookingId: string, rating: number, comment?: string) => {
+    setBookings(prev =>
+      prev.map(b => {
+        if (b.id === bookingId) {
+          return {
+            ...b,
+            rating,
+            reviewComment: comment,
+            status: 'completed',
+            lifecycleState: 'completed',
+          };
+        }
+        return b;
+      })
+    );
+
+    saveActiveBookingToStorage(null);
+    setNotifications(prev => ['Thank you for rating your Sarathi ride!', ...prev]);
+  };
+
+  const cancelBooking = (bookingId: string) => {
+    setBookings(prev =>
+      prev.map(b => (b.id === bookingId ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b))
+    );
+    saveActiveBookingToStorage(null);
+    setNotifications(prev => ['You cancelled your ride request.', ...prev]);
   };
 
   const declineBooking = (bookingId: string) => {
-    setBookings(prev => 
-      prev.map(b => b.id === bookingId ? { ...b, status: 'cancelled' } : b)
+    setBookings(prev =>
+      prev.map(b => (b.id === bookingId ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b))
     );
+    saveActiveBookingToStorage(null);
     setNotifications(prev => ['You declined the passenger request.', ...prev]);
   };
 
@@ -717,6 +1082,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       id: `ride-${Date.now()}`,
       riderName: user?.name || 'Sarathi Driver',
       riderPhoto: user?.photo || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+      phone: user?.phone || '+9779841234567',
       rating: 5.0,
       ...newRideData,
     };
@@ -737,6 +1103,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         driverMessages,
         activeChatRideIds,
         notifications,
+        driverNotifications,
+        unreadDriverNotifCount: driverNotifications.filter(n => !n.isRead).length,
+        recentSearches,
+        savedPlaces,
+        addRecentSearch,
+        addSavedPlace,
+        removeSavedPlace,
+        activeBooking,
         activeTripProgress,
         activeTripCoords,
         login,
@@ -745,12 +1119,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         updateEmergencyContact,
         requestBooking,
         cancelBooking,
+        addDriverNotification,
+        markNotificationAsRead,
+        markAllNotificationsAsRead,
+        clearNotification,
         sendChatMessage,
         sendDriverMessage,
         startRiderChat,
         nudgeDriverLocation,
         startRideWithOTP,
         endRideWithOTP,
+        verifyPickupOtp,
+        verifyCompletionOtp,
+        processPayment,
+        submitRideRating,
         createRide,
         acceptBooking,
         declineBooking,

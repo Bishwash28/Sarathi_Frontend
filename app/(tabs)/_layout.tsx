@@ -7,17 +7,16 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
 
-// Individual Animated Tab Button with Top Red Active Line
 interface TabButtonProps {
   route: any;
   isFocused: boolean;
   onPress: () => void;
   onLongPress: () => void;
   label: string;
-  role?: string;
+  isDriver: boolean;
 }
 
-const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLongPress, label, role }) => {
+const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLongPress, label, isDriver }) => {
   const lineAnim = useRef(new Animated.Value(isFocused ? 1.0 : 0.0)).current;
 
   useEffect(() => {
@@ -31,14 +30,14 @@ const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLong
   const getIconName = (routeName: string, focused: boolean) => {
     switch (routeName) {
       case 'index':
-        if (role === 'driver') {
+        if (isDriver) {
           return focused ? 'add-circle' : 'add-circle-outline';
         }
         return focused ? 'home' : 'home-outline';
       case 'activity':
         return focused ? 'receipt' : 'receipt-outline';
       case 'inbox':
-        return focused ? 'mail' : 'mail-outline';
+        return focused ? 'chatbubbles' : 'chatbubbles-outline';
       case 'profile':
         return focused ? 'person' : 'person-outline';
       default:
@@ -53,28 +52,33 @@ const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLong
       style={styles.tabItem}
       activeOpacity={0.7}
     >
-      {/* Top Red Active Line */}
-      <Animated.View style={[
-        styles.topIndicatorLine,
-        {
-          opacity: lineAnim,
-        }
-      ]} />
+      {/* Top Active Indicator Line */}
+      <Animated.View
+        style={[
+          styles.topIndicatorLine,
+          {
+            opacity: lineAnim,
+            backgroundColor: isDriver ? Colors.primary : Colors.accent,
+          },
+        ]}
+      />
 
       <Ionicons
         name={getIconName(route.name, isFocused) as any}
         size={22}
-        color={isFocused ? Colors.accent : Colors.textMuted}
+        color={isFocused ? (isDriver ? Colors.primary : Colors.accent) : Colors.textMuted}
         style={styles.icon}
       />
 
-      <Text style={[
-        styles.tabLabel,
-        {
-          color: isFocused ? Colors.accent : Colors.textMuted,
-          fontWeight: isFocused ? '600' : '400',
-        }
-      ]}>
+      <Text
+        style={[
+          styles.tabLabel,
+          {
+            color: isFocused ? (isDriver ? Colors.primary : Colors.accent) : Colors.textMuted,
+            fontWeight: isFocused ? '700' : '500',
+          },
+        ]}
+      >
         {label}
       </Text>
     </TouchableOpacity>
@@ -82,17 +86,24 @@ const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLong
 };
 
 // Custom Tab Bar Container
-const CustomTabBar: React.FC<BottomTabBarProps & { role?: string }> = ({ state, descriptors, navigation, role }) => {
+const CustomTabBar: React.FC<BottomTabBarProps & { isDriver: boolean }> = ({ state, descriptors, navigation, isDriver }) => {
   return (
     <View style={styles.tabBarContainer}>
       {state.routes.map((route, index) => {
         const { options } = descriptors[route.key];
-        const label =
+        let label =
           options.tabBarLabel !== undefined
             ? (options.tabBarLabel as string)
             : options.title !== undefined
               ? options.title
               : route.name;
+
+        // Customize labels for Driver Workspace vs Passenger Mode
+        if (route.name === 'index') {
+          label = isDriver ? 'Post' : 'Home';
+        } else if (route.name === 'inbox') {
+          label = isDriver ? 'Chats' : 'Inbox';
+        }
 
         const isFocused = state.index === index;
 
@@ -123,7 +134,7 @@ const CustomTabBar: React.FC<BottomTabBarProps & { role?: string }> = ({ state, 
             onPress={onPress}
             onLongPress={onLongPress}
             label={label}
-            role={role}
+            isDriver={isDriver}
           />
         );
       })}
@@ -133,12 +144,12 @@ const CustomTabBar: React.FC<BottomTabBarProps & { role?: string }> = ({ state, 
 
 export default function TabLayout() {
   const { user } = useApp();
-  const isDriver = user?.role === 'driver';
+  const isDriverMode = user?.role === 'driver' && user?.kycVerified === true;
 
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top']}>
       <Tabs
-        tabBar={(props) => <CustomTabBar {...props} role={user?.role} />}
+        tabBar={(props) => <CustomTabBar {...props} isDriver={isDriverMode} />}
         screenOptions={{
           headerShown: false,
         }}
@@ -146,7 +157,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="index"
           options={{
-            title: isDriver ? 'Post' : 'Home',
+            title: isDriverMode ? 'Post' : 'Home',
           }}
         />
         <Tabs.Screen
@@ -158,7 +169,7 @@ export default function TabLayout() {
         <Tabs.Screen
           name="inbox"
           options={{
-            title: 'Inbox',
+            title: isDriverMode ? 'Chats' : 'Inbox',
           }}
         />
         <Tabs.Screen
@@ -197,7 +208,6 @@ const styles = StyleSheet.create({
     left: 0,
     right: 0,
     height: 2.5,
-    backgroundColor: Colors.accent,
   },
   icon: {
     marginBottom: 2,

@@ -23,7 +23,7 @@ export default function KYCScreen() {
   // Form States
   const [phone, setPhone] = useState(user?.phone || '');
   const [nid, setNid] = useState(user?.nid || '');
-  const [vehicleType, setVehicleType] = useState<'bike' | 'car'>('bike');
+  const [vehicleType, setVehicleType] = useState<'bike' | 'scooter'>('bike');
   const [vehicleName, setVehicleName] = useState(user?.vehicleName || '');
   const [vehicleNumber, setVehicleNumber] = useState(user?.vehicleNumber || '');
   
@@ -173,11 +173,11 @@ export default function KYCScreen() {
               <Text style={[styles.typeButtonText, vehicleType === 'bike' && styles.typeButtonTextActive]}>Bike</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.typeButton, vehicleType === 'car' && styles.typeButtonActive]}
-              onPress={() => setVehicleType('car')}
+              style={[styles.typeButton, vehicleType === 'scooter' && styles.typeButtonActive]}
+              onPress={() => setVehicleType('scooter')}
             >
-              <Ionicons name="car" size={20} color={vehicleType === 'car' ? '#FFF' : Colors.primary} />
-              <Text style={[styles.typeButtonText, vehicleType === 'car' && styles.typeButtonTextActive]}>Car</Text>
+              <Ionicons name="speedometer-outline" size={20} color={vehicleType === 'scooter' ? '#FFF' : Colors.primary} />
+              <Text style={[styles.typeButtonText, vehicleType === 'scooter' && styles.typeButtonTextActive]}>Scooter</Text>
             </TouchableOpacity>
           </View>
 

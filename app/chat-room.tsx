@@ -6,6 +6,8 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 import { useApp, DriverMessage } from '../context/AppContext';
 
+import { makePhoneCall } from '../utils/phoneUtils';
+
 export default function ChatRoomScreen() {
   const { rideId } = useLocalSearchParams<{ rideId?: string }>();
   const { rides, driverMessages, sendDriverMessage, startRiderChat } = useApp();
@@ -36,7 +38,7 @@ export default function ChatRoomScreen() {
   };
 
   const handleCall = () => {
-    Alert.alert('Calling Driver', `Dialing ${ride.riderName} (${ride.vehicleNumber})...`);
+    makePhoneCall(ride.phone || '+9779841234567');
   };
 
   const renderMessageItem = (item: DriverMessage) => {
