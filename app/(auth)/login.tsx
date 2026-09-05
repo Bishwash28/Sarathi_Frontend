@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground, StatusBar } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground, StatusBar, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/Colors';
@@ -12,8 +12,10 @@ export default function LoginScreen() {
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleLogin = async () => {
+    if (isLoading) return;
     const cleanEmail = sanitizeInput(email);
     
     if (hasScriptTags(email) || hasScriptTags(password)) {
@@ -32,7 +34,9 @@ export default function LoginScreen() {
       return;
     }
 
+    setIsLoading(true);
     const result = await login(cleanEmail, password);
+    setIsLoading(false);
     if (!result.success) {
       alert(result.error || 'Login failed');
       return;
@@ -41,6 +45,7 @@ export default function LoginScreen() {
   };
 
   const handleGoogleLogin = async () => {
+    if (isLoading) return;
     await login('google_user@sarathi.com');
     router.replace('/(tabs)');
   };
@@ -109,9 +114,20 @@ export default function LoginScreen() {
                 <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
               </TouchableOpacity>
 
-              <TouchableOpacity style={styles.loginButton} onPress={handleLogin} activeOpacity={0.85}>
-                <Text style={styles.loginButtonText}>Log In</Text>
-                <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
+              <TouchableOpacity
+                style={[styles.loginButton, isLoading && styles.loginButtonDisabled]}
+                onPress={handleLogin}
+                activeOpacity={0.85}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Text style={styles.loginButtonText}>Log In</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                  </>
+                )}
               </TouchableOpacity>
 
               {/* Divider */}
@@ -122,7 +138,7 @@ export default function LoginScreen() {
               </View>
 
               {/* Social Auth */}
-              <TouchableOpacity style={styles.googleButton} onPress={handleGoogleLogin} activeOpacity={0.85}>
+              <TouchableOpacity style={[styles.googleButton, isLoading && { opacity: 0.5 }]} onPress={handleGoogleLogin} activeOpacity={0.85} disabled={isLoading}>
                 <Ionicons name="logo-google" size={20} color="#EA4335" style={{ marginRight: 8 }} />
                 <Text style={styles.googleButtonText}>Continue with Google</Text>
               </TouchableOpacity>
@@ -254,6 +270,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 10,
     elevation: 4,
+  },
+  loginButtonDisabled: {
+    opacity: 0.65,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   loginButtonText: {
     color: '#FFFFFF',

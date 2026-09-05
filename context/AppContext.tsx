@@ -1,13 +1,13 @@
-import React, { createContext, useState, useContext, useEffect, useRef } from 'react';
-import { Alert } from 'react-native';
-import AsyncStorage from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
-import { supabase } from '../lib/supabase';
+import { default as AsyncStorage, default as AsyncStorageLib } from '@react-native-async-storage/async-storage';
 import { User } from '@supabase/supabase-js';
+import * as Location from 'expo-location';
+import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import { Alert } from 'react-native';
+import { supabase } from '../lib/supabase';
 import {
-  triggerMobilePushNotification,
-  registerForPushNotificationsAsync,
+  triggerMobilePushNotification
 } from '../services/notificationService';
+import { deleteUser, getUser, loginUser, signupUser, updateUser, switchRole, uploadKycDocument, verifyKycStatus } from '../services/userService';
 
 export interface DriverNotificationItem {
   id: string;
@@ -125,6 +125,7 @@ export interface DriverMessage {
 }
 
 interface UserProfile {
+  id?: string;
   name: string;
   phone: string;
   email: string;
@@ -167,6 +168,11 @@ interface AppContextType {
   signup: (profile: Partial<UserProfile> & { password?: string }) => Promise<{ success: boolean; error?: string }>;
   completeProfile: (profile: Partial<UserProfile>) => void;
   updateEmergencyContact: (contact: string) => void;
+  updateUserProfile: (payload: { name?: string; email?: string; phone?: string; avatarUrl?: string }) => Promise<{ success: boolean; error?: string }>;
+  deleteAccount: () => Promise<{ success: boolean; error?: string }>;
+  switchUserRole: (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => Promise<{ success: boolean; error?: string }>;
+  uploadUserKycDocument: (documentType: string, document: string, file: string) => Promise<{ success: boolean; error?: string }>;
+  submitKycVerify: () => Promise<{ success: boolean; error?: string }>;
   requestBooking: (rideId: string, passengerPickup?: string, passengerDropoff?: string) => void;
   cancelBooking: (bookingId: string) => void;
   addDriverNotification: (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => void;
@@ -314,8 +320,29 @@ const initialSavedPlaces: SavedPlaceItem[] = [
   { id: 'sp-4', name: 'Koteshwor Stop', landmark: 'Koteshwor' },
 ];
 
+// ─── JWT decoder (no signature verification — client-side only) ──────────────
+/**
+ * Decodes a JWT payload without verifying the signature.
+ * Used to extract userId (sub / id / userId) from the access token.
+ */
+function decodeJwtPayload(token: string): Record<string, any> | null {
+  try {
+    const parts = token.split('.');
+    if (parts.length !== 3) return null;
+    // base64url → base64 → JSON
+    const base64 = parts[1].replace(/-/g, '+').replace(/_/g, '/');
+    const padded = base64.padEnd(base64.length + (4 - (base64.length % 4)) % 4, '=');
+    const decoded = atob(padded);
+    return JSON.parse(decoded);
+  } catch {
+    return null;
+  }
+}
+
 export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const [user, setUser] = useState<UserProfile | null>(null);
+  const [userId, setUserId] = useState<string | null>(null);
+  const [authToken, setAuthToken] = useState<string | null>(null);
   const [deviceLocation, setDeviceLocation] = useState<string>('Kalanki');
   const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
@@ -391,16 +418,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           longitude: location.coords.longitude,
         });
 
-        if (geocode.length > 0) {
-          const address = geocode[0];
-          const name = address.name || address.street || "My Location";
-          const city = address.city || "";
-          const friendlyAddress = `${name}${city ? ', ' + city : ''}`;
-          setDeviceLocation(friendlyAddress);
-          await AsyncStorage.setItem('@device_location', friendlyAddress);
+        const storedToken = await AsyncStorage.getItem('@sarathi_auth_token');
+        const storedUserId = await AsyncStorage.getItem('@sarathi_user_id');
+        if (storedToken) setAuthToken(storedToken);
+        if (storedUserId) setUserId(storedUserId);
+
+        const savedUser = await AsyncStorage.getItem('@sarathi_user');
+        if (savedUser) setUser(JSON.parse(savedUser));
+
+        // If we have a user ID and token, refresh user details from backend
+        if (storedUserId && storedToken) {
+          try {
+            const fetched = await getUser(storedUserId, storedToken);
+            if (fetched.success && fetched.data) {
+              const userData = fetched.data;
+              setUser(prev => ({
+                name: userData.name || prev?.name || 'User',
+                email: userData.email || prev?.email || '',
+                phone: userData.phone || prev?.phone || '',
+                role: (userData.activeRole || userData.role || '').toUpperCase() === 'DRIVER' || (userData.activeRole || userData.role || '').toUpperCase() === 'RIDER' ? 'driver' : 'passenger',
+                collegeOrCompany: prev?.collegeOrCompany || 'N/A',
+                emergencyContact: prev?.emergencyContact || '',
+                rating: prev?.rating ?? 5.0,
+                photo: userData.avatarUrl || prev?.photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+                kycVerified: userData.kycVerified ?? prev?.kycVerified,
+              }));
+            }
+          } catch (err) {
+            console.log('[AppContext] Failed to refresh user on startup:', err);
+          }
         }
-      } catch (err) {
-        console.warn('Error checking device location on startup:', err);
+      } catch (error) {
+        console.error('Error loading stored state:', error);
       }
     })();
   }, []);
@@ -455,7 +504,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const pendingBooking = bookings.find(b => b.status === 'pending');
     if (pendingBooking) {
       const timer = setTimeout(() => {
-        setBookings(prev => 
+        setBookings(prev =>
           prev.map(b => {
             if (b.id === pendingBooking.id) {
               const ride = rides.find(r => r.id === b.rideId);
@@ -493,14 +542,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           setActiveTripProgress(prev => {
             if (prev >= 100) {
               clearInterval(tripIntervalRef.current!);
-              setBookings(currBookings => 
+              setBookings(currBookings =>
                 currBookings.map(b => b.id === acceptedBooking.id ? { ...b, status: 'arrived' } : b)
               );
               setNotifications(prevNotifs => ['Your ride has reached the destination! Verify OTP to complete.', ...prevNotifs]);
               return 100;
             }
             const nextProgress = prev + 5;
-            
+
             const routeLandmarks = ride.route.map(name => LANDMARKS[name]).filter(Boolean);
             if (routeLandmarks.length >= 2) {
               const totalSegments = routeLandmarks.length - 1;
@@ -521,7 +570,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
               setBookings(curr => curr.map(b => b.id === acceptedBooking.id ? { ...b, currentLat, currentLng } : b));
             }
-            
+
             return nextProgress;
           });
         }, 2500);
@@ -540,64 +589,167 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, [bookings, rides]);
 
   const login = async (email: string, password?: string) => {
-    if (password) {
-      try {
-        const { data, error } = await supabase.auth.signInWithPassword({ email, password });
-        if (error) {
-          return { success: false, error: error.message };
-        }
-        if (data.user) {
-          setSupabaseUser(data.user);
-          setIsAuthenticated(true);
-          setUser({
-            name: data.user.user_metadata?.full_name || email.split('@')[0],
-            phone: data.user.user_metadata?.phone || '',
-            email: data.user.email || email,
-            role: data.user.user_metadata?.role || 'passenger',
-            collegeOrCompany: data.user.user_metadata?.college_or_company || 'N/A',
-            emergencyContact: '',
-            rating: 4.8,
-            photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
-          });
-          return { success: true };
-        }
-      } catch (networkErr: any) {
-        console.warn('Network error during login, creating local session:', networkErr?.message || networkErr);
-        // Fallback for development / offline network issues
-        setUser({
-          name: email.split('@')[0] || 'User',
-          phone: '9841234567',
-          email: email,
-          role: 'passenger',
-          collegeOrCompany: 'Tribhuvan University',
-          emergencyContact: '9801234567',
-          rating: 4.8,
-          photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
-        });
-        setIsAuthenticated(true);
-        return { success: true };
-      }
+    if (!password) {
+      // No password — mock/guest session
+      setUser({
+        name: 'Sakar Aryal',
+        phone: '9841234567',
+        email: email || 'sakar@sarathi.com',
+        role: 'passenger',
+        collegeOrCompany: 'Tribhuvan University',
+        emergencyContact: '9801234567',
+        rating: 4.8,
+        photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+      });
+      setIsAuthenticated(true);
+      return { success: true };
     }
-    
-    // Fallback/Mock login if no password specified
-    setUser({
-      name: 'Sakar Aryal',
-      phone: '9841234567',
-      email: email || 'sakar@sarathi.com',
-      role: 'passenger',
-      collegeOrCompany: 'Tribhuvan University',
-      emergencyContact: '9801234567',
-      rating: 4.8,
-      photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
-    });
-    setIsAuthenticated(true);
-    return { success: true };
+
+    // ── 1. Call Sarathi backend (/api/user/login) ──────────────────────────
+    try {
+      const apiResult = await loginUser({ email, password });
+
+      if (!apiResult.success) {
+        return { success: false, error: apiResult.error || 'Login failed. Check your credentials.' };
+      }
+
+      // Login response only contains { accessToken, refreshToken }
+      const rawData = apiResult.data as any;
+      const accessToken = rawData?.accessToken || rawData?.data?.accessToken || rawData?.token;
+      const refreshToken = rawData?.refreshToken || rawData?.data?.refreshToken;
+
+      if (!accessToken) {
+        return { success: false, error: 'Login failed: no token received.' };
+      }
+
+      // Decode JWT to extract userId (stored as sub, id, or userId in payload)
+      const jwtPayload = decodeJwtPayload(accessToken);
+      const uid = jwtPayload?.sub || jwtPayload?.id || jwtPayload?.userId || jwtPayload?.user_id;
+
+      console.log('[login] JWT payload:', JSON.stringify(jwtPayload));
+      console.log('[login] resolved uid:', uid);
+
+      // Persist token + userId
+      await AsyncStorageLib.setItem('@sarathi_token', accessToken);
+      setAuthToken(accessToken);
+      if (refreshToken) await AsyncStorageLib.setItem('@sarathi_refresh_token', refreshToken);
+
+      // ── 2. Fetch full user profile using userId from JWT ──────────────────
+      let fetchedUser: any = null;
+      if (uid) {
+        await AsyncStorageLib.setItem('@sarathi_user_id', uid);
+        setUserId(uid);
+        const profileResult = await getUser(uid, accessToken);
+        if (profileResult.success && profileResult.data) {
+          fetchedUser = profileResult.data;
+          console.log('[login] fetched profile:', JSON.stringify(fetchedUser));
+        }
+      }
+
+      // Derive role
+      const activeRole = (fetchedUser?.activeRole || fetchedUser?.role || '').toString();
+      const role: UserProfile['role'] =
+        activeRole.toUpperCase() === 'DRIVER' ? 'driver' : 'passenger';
+
+      setUser({
+        name: fetchedUser?.name || email.split('@')[0],
+        phone: fetchedUser?.phone || '',
+        email: fetchedUser?.email || email,
+        role,
+        kycVerified: fetchedUser?.kycVerified,
+        collegeOrCompany: 'N/A',
+        emergencyContact: '',
+        rating: 4.8,
+        photo: fetchedUser?.avatarUrl || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+      });
+      setIsAuthenticated(true);
+
+      // ── 3. Best-effort Supabase session (for realtime features)
+      try {
+        await supabase.auth.signInWithPassword({ email, password });
+      } catch {
+        // Non-critical; backend auth is the source of truth
+      }
+
+      return { success: true };
+    } catch (networkErr: any) {
+      // ── 3. Network fallback ────────────────────────────────────────────────
+      console.warn('[login] Backend unreachable, falling back to local session:', networkErr?.message ?? networkErr);
+      setUser({
+        name: email.split('@')[0] || 'User',
+        phone: '',
+        email,
+        role: 'passenger',
+        collegeOrCompany: 'N/A',
+        emergencyContact: '',
+        rating: 4.8,
+        photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+      });
+      setIsAuthenticated(true);
+      return { success: true };
+    }
   };
 
   const signup = async (profile: Partial<UserProfile> & { password?: string }) => {
-    if (profile.email && profile.password) {
+    if (!profile.email || !profile.password) {
+      // No credentials provided — create a local guest session
+      setUser({
+        name: profile.name || 'New Passenger',
+        phone: profile.phone || '98XXXXXXXX',
+        email: profile.email || 'passenger@sarathi.com',
+        role: profile.role || 'passenger',
+        collegeOrCompany: profile.collegeOrCompany || 'N/A',
+        emergencyContact: '',
+        rating: 5.0,
+        photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+      });
+      return { success: true };
+    }
+
+    // ── 1. Call Sarathi backend (/api/user/signup) ─────────────────────────
+    try {
+      const apiResult = await signupUser({
+        name: profile.name || '',
+        email: profile.email,
+        phone: profile.phone || '',
+        password: profile.password,
+        role: profile.role ?? 'passenger',
+      });
+
+      if (!apiResult.success) {
+        // Backend returned a proper error (e.g. duplicate email)
+        return { success: false, error: apiResult.error || 'Signup failed. Please try again.' };
+      }
+
+      // Backend signup succeeded — set user state from returned data
+      const signupBackendUser = apiResult.data;
+      const signupToken = signupBackendUser?.token;
+      const signupUid = signupBackendUser?.id || signupBackendUser?.userId;
+      if (signupToken) {
+        await AsyncStorageLib.setItem('@sarathi_token', signupToken);
+        setAuthToken(signupToken);
+      }
+      if (signupUid) {
+        await AsyncStorageLib.setItem('@sarathi_user_id', signupUid);
+        setUserId(signupUid);
+      }
+      const signupActiveRole = signupBackendUser?.activeRole ?? '';
+      const signupRole: UserProfile['role'] =
+        signupActiveRole.toUpperCase() === 'DRIVER' ? 'driver' : 'passenger';
+      setUser({
+        name: signupBackendUser?.name || profile.name || 'New Passenger',
+        phone: signupBackendUser?.phone || profile.phone || '98XXXXXXXX',
+        email: signupBackendUser?.email || profile.email,
+        role: signupRole || profile.role || 'passenger',
+        collegeOrCompany: profile.collegeOrCompany || 'N/A',
+        emergencyContact: '',
+        rating: 5.0,
+        photo: signupBackendUser?.avatarUrl || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+      });
+
+      // ── 2. Optionally also sign up in Supabase (for realtime / auth session)
       try {
-        const { data, error } = await supabase.auth.signUp({
+        const { data: sbData } = await supabase.auth.signUp({
           email: profile.email,
           password: profile.password,
           options: {
@@ -609,53 +761,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             },
           },
         });
-
-        if (error) {
-          return { success: false, error: error.message };
+        if (sbData?.user) {
+          setSupabaseUser(sbData.user);
         }
-        if (data.user) {
-          setSupabaseUser(data.user);
-          setUser({
-            name: profile.name || 'New Passenger',
-            phone: profile.phone || '98XXXXXXXX',
-            email: profile.email,
-            role: profile.role || 'passenger',
-            collegeOrCompany: profile.collegeOrCompany || 'N/A',
-            emergencyContact: '',
-            rating: 5.0,
-            photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
-          });
-          return { success: true };
-        }
-      } catch (networkErr: any) {
-        console.warn('Network error during signup, creating local session:', networkErr?.message || networkErr);
-        // Fallback for development / offline network issues
-        setUser({
-          name: profile.name || 'New Passenger',
-          phone: profile.phone || '98XXXXXXXX',
-          email: profile.email,
-          role: profile.role || 'passenger',
-          collegeOrCompany: profile.collegeOrCompany || 'N/A',
-          emergencyContact: '',
-          rating: 5.0,
-          photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
-        });
-        setIsAuthenticated(true);
-        return { success: true };
+      } catch (sbErr: any) {
+        // Supabase signup is best-effort; don't fail the overall flow
+        console.warn('[signup] Supabase signUp skipped:', sbErr?.message ?? sbErr);
       }
-    }
 
-    setUser({
-      name: profile.name || 'New Passenger',
-      phone: profile.phone || '98XXXXXXXX',
-      email: profile.email || 'passenger@sarathi.com',
-      role: profile.role || 'passenger',
-      collegeOrCompany: profile.collegeOrCompany || 'N/A',
-      emergencyContact: '',
-      rating: 5.0,
-      photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
-    });
-    return { success: true };
+      return { success: true };
+    } catch (networkErr: any) {
+      // ── 3. Network fallback — backend unreachable ──────────────────────────
+      console.warn('[signup] Backend unreachable, falling back to local session:', networkErr?.message ?? networkErr);
+      setUser({
+        name: profile.name || 'New Passenger',
+        phone: profile.phone || '98XXXXXXXX',
+        email: profile.email,
+        role: profile.role || 'passenger',
+        collegeOrCompany: profile.collegeOrCompany || 'N/A',
+        emergencyContact: '',
+        rating: 5.0,
+        photo: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+      });
+      setIsAuthenticated(true);
+      return { success: true };
+    }
   };
 
   const completeProfile = (profile: Partial<UserProfile>) => {
@@ -1017,7 +1147,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         suggestedRides = ['ride-1'];
         responseText = `The ride leaving soonest is with Sakar Aryal (leaving in 5 mins) on a ${rides[0].vehicleName} for NPR ${rides[0].price}. Route: ${rides[0].route.join(' → ')}.`;
       } else {
-        const matches = rides.filter(r => 
+        const matches = rides.filter(r =>
           r.route.some(landmark => lowerText.includes(landmark.toLowerCase()))
         );
         if (matches.length > 0) {
@@ -1049,7 +1179,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const startRideWithOTP = (bookingId: string, otp: string): boolean => {
     if (otp === '1234') {
-      setBookings(prev => 
+      setBookings(prev =>
         prev.map(b => b.id === bookingId ? { ...b, status: 'ongoing' } : b)
       );
       setNotifications(prevNotifs => ['Ride started successfully!', ...prevNotifs]);
@@ -1060,7 +1190,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const endRideWithOTP = (bookingId: string, otp: string): boolean => {
     if (otp === '5678') {
-      setBookings(prev => 
+      setBookings(prev =>
         prev.map(b => b.id === bookingId ? { ...b, status: 'completed' } : b)
       );
       setNotifications(prevNotifs => ['Ride completed successfully!', ...prevNotifs]);
@@ -1071,10 +1201,115 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const logout = async () => {
     await supabase.auth.signOut();
+    await AsyncStorageLib.removeItem('@sarathi_token');
+    await AsyncStorageLib.removeItem('@sarathi_user_id');
     setUser(null);
+    setUserId(null);
+    setAuthToken(null);
     setSupabaseUser(null);
     setIsAuthenticated(false);
     setBookings([]);
+  };
+
+  const updateUserProfile = async (payload: { name?: string; email?: string; phone?: string; avatarUrl?: string }) => {
+    if (!userId) return { success: false, error: 'Not logged in' };
+    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_token')) || undefined;
+    const result = await updateUser(userId, payload, token ?? undefined);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+    // Sync local state with updated values
+    const updated = (result.data as any)?.data ?? result.data;
+    setUser(prev => prev ? {
+      ...prev,
+      name: updated?.name ?? prev.name,
+      email: updated?.email ?? prev.email,
+      phone: updated?.phone ?? prev.phone,
+      photo: updated?.avatarUrl ?? prev.photo,
+      kycVerified: updated?.kycVerified ?? prev.kycVerified,
+    } : null);
+    return { success: true };
+  };
+
+  const deleteAccount = async () => {
+    if (!userId) return { success: false, error: 'Not logged in' };
+    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_auth_token')) || undefined;
+    const result = await deleteUser(userId, token ?? undefined);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+    await logout();
+    return { success: true };
+  };
+
+  const switchUserRole = async (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => {
+    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_auth_token')) || undefined;
+    const currentRole = user?.role === 'driver' ? 'RIDER' : 'PASSENGER';
+    const reqTargetRole = (targetRole === 'DRIVER' || targetRole === 'RIDER') ? 'RIDER' : 'PASSENGER';
+
+    const result = await switchRole({ role: currentRole, targetRole: reqTargetRole }, token);
+
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+
+    const resUser = result.data?.user;
+    const resToken = result.data?.token;
+
+    if (resToken) {
+      await AsyncStorageLib.setItem('@sarathi_auth_token', resToken);
+      setAuthToken(resToken);
+    }
+
+    const updatedRole = resUser?.activeRole || reqTargetRole;
+    const isDriverOrRider = updatedRole.toUpperCase() === 'RIDER' || updatedRole.toUpperCase() === 'DRIVER';
+    const newRoleVal: UserProfile['role'] = isDriverOrRider ? 'driver' : 'passenger';
+
+    await AsyncStorageLib.setItem('@sarathi_active_role', newRoleVal);
+
+    setUser(prev => prev ? {
+      ...prev,
+      name: resUser?.name || prev.name,
+      email: resUser?.email || prev.email,
+      phone: resUser?.phone || prev.phone,
+      role: newRoleVal,
+      kycVerified: resUser?.kycVerified ?? prev.kycVerified,
+    } : {
+      name: resUser?.name || 'User',
+      email: resUser?.email || '',
+      phone: resUser?.phone || '',
+      role: newRoleVal,
+      collegeOrCompany: 'N/A',
+      emergencyContact: '',
+      rating: 5.0,
+      photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+      kycVerified: resUser?.kycVerified ?? false,
+    });
+
+    return { success: true, activeRole: updatedRole };
+  };
+
+  const uploadUserKycDocument = async (documentType: string, document: string, file: string) => {
+    if (!userId) return { success: false, error: 'Not logged in' };
+    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_auth_token')) || undefined;
+    const result = await uploadKycDocument(userId, { documentType, document, file }, token);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+    return { success: true };
+  };
+
+  const submitKycVerify = async () => {
+    if (!userId) return { success: false, error: 'Not logged in' };
+    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_auth_token')) || undefined;
+    const result = await verifyKycStatus(userId, token);
+    if (!result.success) {
+      return { success: false, error: result.error };
+    }
+    if (result.data?.kycVerified) {
+      setUser(prev => prev ? { ...prev, kycVerified: true } : null);
+    }
+    return { success: true };
   };
 
   const createRide = (newRideData: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => {
@@ -1117,6 +1352,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         signup,
         completeProfile,
         updateEmergencyContact,
+        updateUserProfile,
+        deleteAccount,
+        switchUserRole,
+        uploadUserKycDocument,
+        submitKycVerify,
         requestBooking,
         cancelBooking,
         addDriverNotification,

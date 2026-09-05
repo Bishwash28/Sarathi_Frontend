@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground, StatusBar } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground, StatusBar, ActivityIndicator } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/Colors';
@@ -11,10 +11,13 @@ export default function SignupScreen() {
   const { signup } = useApp();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
+  const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
 
   const handleSignup = async () => {
+    if (isLoading) return;
     // 1. Script Tag Security Check
     if (hasScriptTags(name) || hasScriptTags(email) || hasScriptTags(password)) {
       alert('Security Error: Script tags and HTML tags are strictly prohibited.');
@@ -38,30 +41,37 @@ export default function SignupScreen() {
       return;
     }
 
-    // 4. Password validation (min 8 chars, upper, lower, symbol)
+    // 4. Phone validation
+    const cleanPhone = sanitizeInput(phone).replace(/\s+/g, '');
+    if (!cleanPhone || cleanPhone.length < 7) {
+      alert('Please enter a valid phone number.');
+      return;
+    }
+
+    // 5. Password validation (min 8 chars, upper, lower, symbol)
     const passwordCheck = validatePassword(password);
     if (!passwordCheck.isValid) {
       alert(passwordCheck.message);
       return;
     }
     
+    setIsLoading(true);
     const result = await signup({
       name: cleanName,
       email: cleanEmail,
+      phone: cleanPhone,
       password,
       role: 'passenger',
     });
+    setIsLoading(false);
     
     if (!result.success) {
       alert(result.error || 'Signup failed');
       return;
     }
 
-    // Proceed to OTP / Next screen
-    router.push({
-      pathname: '/(auth)/otp',
-      params: { email: cleanEmail, name: cleanName }
-    });
+    // Skip OTP — go directly to the app
+    router.replace('/(tabs)');
   };
 
   return (
@@ -112,6 +122,19 @@ export default function SignupScreen() {
                 />
               </View>
 
+              <Text style={styles.label}>Phone Number</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons name="call-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. 9841234567"
+                  placeholderTextColor="#94A3B8"
+                  value={phone}
+                  onChangeText={setPhone}
+                  keyboardType="phone-pad"
+                />
+              </View>
+
               <Text style={styles.label}>Password</Text>
               <View style={styles.inputContainer}>
                 <Ionicons name="lock-closed-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
@@ -136,9 +159,20 @@ export default function SignupScreen() {
                 </TouchableOpacity>
               </View>
 
-              <TouchableOpacity style={styles.signupButton} onPress={handleSignup} activeOpacity={0.85}>
-                <Text style={styles.signupButtonText}>Create Account</Text>
-                <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
+              <TouchableOpacity
+                style={[styles.signupButton, isLoading && styles.signupButtonDisabled]}
+                onPress={handleSignup}
+                activeOpacity={0.85}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Text style={styles.signupButtonText}>Create Account</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                  </>
+                )}
               </TouchableOpacity>
             </View>
 
@@ -260,6 +294,11 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 10,
     elevation: 4,
+  },
+  signupButtonDisabled: {
+    opacity: 0.65,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   signupButtonText: {
     color: '#FFFFFF',

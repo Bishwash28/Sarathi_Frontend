@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   Image,
   KeyboardAvoidingView,
@@ -17,8 +18,11 @@ import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
+import * as ImagePicker from 'expo-image-picker';
+
 export default function KYCScreen() {
-  const { user, completeProfile } = useApp();
+  const { user, completeProfile, uploadUserKycDocument, submitKycVerify } = useApp();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Form States
   const [phone, setPhone] = useState(user?.phone || '');
@@ -27,7 +31,7 @@ export default function KYCScreen() {
   const [vehicleName, setVehicleName] = useState(user?.vehicleName || '');
   const [vehicleNumber, setVehicleNumber] = useState(user?.vehicleNumber || '');
   
-  // Simulated upload state
+  // Real uploaded document URIs
   const [licenseImage, setLicenseImage] = useState<string>('');
   const [plateImage, setPlateImage] = useState<string>('');
 
@@ -43,17 +47,47 @@ export default function KYCScreen() {
     router.replace('/(tabs)');
   };
 
-  const simulateLicenseUpload = () => {
-    setLicenseImage('https://images.unsplash.com/photo-1554774853-aae0a22c8aa4?auto=format&fit=crop&w=300&q=80');
-    Alert.alert('Simulated Upload', 'Driver License Card uploaded successfully.');
+  const pickLicenseImage = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        Alert.alert('Permission Denied', 'Permission to access photo library is required to select license photo.');
+        return;
+      }
+      const pickerResult = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      if (!pickerResult.canceled && pickerResult.assets && pickerResult.assets.length > 0) {
+        setLicenseImage(pickerResult.assets[0].uri);
+      }
+    } catch (err) {
+      console.error('[pickLicenseImage] Error picking license image:', err);
+    }
   };
 
-  const simulatePlateUpload = () => {
-    setPlateImage('https://images.unsplash.com/photo-1593941707882-a5bba1491017?auto=format&fit=crop&w=300&q=80');
-    Alert.alert('Simulated Upload', 'Vehicle Plate Image uploaded successfully.');
+  const pickPlateImage = async () => {
+    try {
+      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (!permissionResult.granted) {
+        Alert.alert('Permission Denied', 'Permission to access photo library is required to select plate photo.');
+        return;
+      }
+      const pickerResult = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ['images'],
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      if (!pickerResult.canceled && pickerResult.assets && pickerResult.assets.length > 0) {
+        setPlateImage(pickerResult.assets[0].uri);
+      }
+    } catch (err) {
+      console.error('[pickPlateImage] Error picking plate image:', err);
+    }
   };
 
-  const handleSubmit = () => {
+  const handleSubmit = async () => {
     if (!phone) {
       Alert.alert('Missing Field', 'Please enter your mobile number.');
       return;
@@ -79,7 +113,23 @@ export default function KYCScreen() {
       return;
     }
 
-    // Update user profile inside AppContext
+    setIsSubmitting(true);
+
+    // 1. Upload KYC documents to backend
+    const licenseDoc = await uploadUserKycDocument('DRIVING_LICENSE', licenseImage, 'license.jpg');
+    if (!licenseDoc.success) {
+      console.warn('KYC Document Upload Warning:', licenseDoc.error);
+    }
+
+    // 2. Trigger KYC verification request to backend
+    const verifyRes = await submitKycVerify();
+    setIsSubmitting(false);
+
+    if (!verifyRes.success) {
+      Alert.alert('Verification Warning', verifyRes.error || 'Backend KYC verify returned an issue, updating profile locally.');
+    }
+
+    // 3. Update user profile state
     completeProfile({
       phone,
       nid,
@@ -213,7 +263,7 @@ export default function KYCScreen() {
           
           <View style={styles.uploadCardsContainer}>
             {/* License Upload Card */}
-            <TouchableOpacity style={styles.uploadCard} onPress={simulateLicenseUpload}>
+            <TouchableOpacity style={styles.uploadCard} onPress={pickLicenseImage}>
               {licenseImage ? (
                 <View style={styles.previewContainer}>
                   <Image source={{ uri: licenseImage }} style={styles.uploadPreviewImage} />
@@ -226,13 +276,13 @@ export default function KYCScreen() {
                 <View style={styles.uploadPlaceholder}>
                   <Ionicons name="document-text" size={32} color={Colors.primary} />
                   <Text style={styles.uploadTitle}>Driver License</Text>
-                  <Text style={styles.uploadSubtitle}>Tap to upload Front Card</Text>
+                  <Text style={styles.uploadSubtitle}>Tap to select License Photo</Text>
                 </View>
               )}
             </TouchableOpacity>
 
             {/* Plate Number Upload Card */}
-            <TouchableOpacity style={styles.uploadCard} onPress={simulatePlateUpload}>
+            <TouchableOpacity style={styles.uploadCard} onPress={pickPlateImage}>
               {plateImage ? (
                 <View style={styles.previewContainer}>
                   <Image source={{ uri: plateImage }} style={styles.uploadPreviewImage} />
@@ -252,9 +302,20 @@ export default function KYCScreen() {
           </View>
 
           {/* Submit Button */}
-          <TouchableOpacity style={styles.submitButton} onPress={handleSubmit} activeOpacity={0.9}>
-            <Text style={styles.submitText}>Submit KYC for Approval</Text>
-            <Ionicons name="arrow-forward" size={18} color="#FFF" />
+          <TouchableOpacity
+            style={[styles.submitButton, isSubmitting && { opacity: 0.65 }]}
+            onPress={handleSubmit}
+            disabled={isSubmitting}
+            activeOpacity={0.9}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator size="small" color="#FFF" />
+            ) : (
+              <>
+                <Text style={styles.submitText}>Submit KYC for Approval</Text>
+                <Ionicons name="arrow-forward" size={18} color="#FFF" />
+              </>
+            )}
           </TouchableOpacity>
 
           {/* Skip Button */}
