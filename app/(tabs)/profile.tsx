@@ -7,7 +7,6 @@ import {
   ActivityIndicator,
   Alert,
   Image,
-  ImageBackground,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -64,6 +63,7 @@ export default function ProfileScreen() {
 
   // ── Edit Profile modal ───────────────────────────────────────────────────────
   const [editModalVisible, setEditModalVisible] = useState(false);
+  const [manageAccountExpanded, setManageAccountExpanded] = useState(true);
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editPhone, setEditPhone] = useState('');
@@ -124,7 +124,7 @@ export default function ProfileScreen() {
     }
     // Refresh backend data
     const uid = await AsyncStorage.getItem('@sarathi_user_id');
-    const token = await AsyncStorage.getItem('@sarathi_auth_token');
+    const token = (await AsyncStorage.getItem('@sarathi_token')) || (await AsyncStorage.getItem('@sarathi_auth_token'));
     if (uid) {
       const res = await getUser(uid, token ?? undefined);
       if (res.success && res.data) setBackendUser(res.data);
@@ -182,7 +182,7 @@ export default function ProfileScreen() {
 
     // Refresh local backendUser state from storage / API
     const uid = await AsyncStorage.getItem('@sarathi_user_id');
-    const token = await AsyncStorage.getItem('@sarathi_auth_token');
+    const token = (await AsyncStorage.getItem('@sarathi_token')) || (await AsyncStorage.getItem('@sarathi_auth_token'));
     if (uid) {
       const refreshed = await getUser(uid, token ?? undefined);
       if (refreshed.success && refreshed.data) {
@@ -202,53 +202,70 @@ export default function ProfileScreen() {
     <View style={styles.safeArea}>
       <KeyboardAvoidingView style={styles.keyboardContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
 
-        {/* ── Profile Header ─────────────────────────────────────────────── */}
-        <ImageBackground
-          source={require('../../assets/images/home_top1.png')}
-          style={styles.profileHeaderCard}
-          imageStyle={styles.profileHeaderImageStyle}
-        >
-          {isFetchingProfile ? (
-            <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: 28 }} />
-          ) : (
-            <>
-              <View style={styles.avatarContainer}>
-                <Image source={{ uri: displayAvatar }} style={styles.avatar} />
-                <TouchableOpacity style={styles.avatarEditButton} onPress={handlePickAvatar} activeOpacity={0.8}>
-                  <Ionicons name="camera" size={16} color="#FFF" />
-                </TouchableOpacity>
-              </View>
-              <Text style={styles.userName}>{displayName}</Text>
-
-              {memberSince && (
-                <Text style={styles.memberSince}>Member since {memberSince}</Text>
-              )}
-
-              <View style={styles.badgeRow}>
-                <View style={styles.roleBadge}>
-                  <Text style={styles.roleText}>
-                    {displayKyc ? 'VERIFIED MEMBER' : 'MEMBER'}
-                  </Text>
-                </View>
-                <View style={styles.ratingBadge}>
-                  <Ionicons name="star" size={14} color="#FFF" />
-                  <Text style={styles.ratingText}>{user?.rating?.toFixed(1) ?? '5.0'}</Text>
-                </View>
-              </View>
-
-              {/* Edit Profile button */}
-              <TouchableOpacity style={styles.editProfileBtn} onPress={openEditModal}>
-                <Ionicons name="pencil-outline" size={14} color={Colors.primary} />
-                <Text style={styles.editProfileBtnText}>Edit Profile</Text>
-              </TouchableOpacity>
-            </>
-          )}
-        </ImageBackground>
-
         {/* ── Scrollable content ─────────────────────────────────────────── */}
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
 
-          {/* Account Details */}
+          {/* ── Profile Header Card ─────────────────────────────────────────── */}
+          <View style={styles.profileHeaderCard}>
+            {isFetchingProfile ? (
+              <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: 28 }} />
+            ) : (
+              <>
+                {/* Horizontal Facebook-style Profile Info */}
+                <View style={styles.horizontalProfileRow}>
+                  <View style={styles.avatarContainer}>
+                    <Image source={{ uri: displayAvatar }} style={styles.avatar} />
+                    <TouchableOpacity style={styles.avatarEditButton} onPress={handlePickAvatar} activeOpacity={0.8}>
+                      <Ionicons name="camera" size={14} color="#FFF" />
+                    </TouchableOpacity>
+                  </View>
+
+                  <View style={styles.profileInfoTextContainer}>
+                    <Text style={styles.userName}>{displayName}</Text>
+
+                    {memberSince && (
+                      <Text style={styles.memberSince}>Member since {memberSince}</Text>
+                    )}
+
+                    <View style={styles.badgeRow}>
+                      <View style={styles.roleBadge}>
+                        <Ionicons
+                          name={displayRole === 'driver' ? 'car-sport' : 'person'}
+                          size={13}
+                          color="#FFF"
+                        />
+                        <Text style={styles.roleText}>
+                          {displayRole === 'driver' ? 'Driver' : 'Rider'}
+                        </Text>
+                      </View>
+                      <View style={styles.ratingBadge}>
+                        <Ionicons name="star" size={13} color="#FFF" />
+                        <Text style={styles.ratingText}>{user?.rating?.toFixed(1) ?? '5.0'}</Text>
+                      </View>
+                    </View>
+                  </View>
+                </View>
+
+                {/* Role Switch Button at Bottom of Profile Card */}
+                <TouchableOpacity
+                  style={styles.cardBottomRoleSwitchBtn}
+                  onPress={handleSwitchMode}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons
+                    name="swap-horizontal"
+                    size={16}
+                    color={Colors.primary}
+                  />
+                  <Text style={styles.cardBottomRoleSwitchText}>
+                    Switch to {displayRole === 'driver' ? 'Rider' : 'Driver'}
+                  </Text>
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+
+          {/* Account Details Card */}
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Account Details</Text>
 
@@ -272,32 +289,6 @@ export default function ProfileScreen() {
 
             <View style={styles.divider} />
 
-            {/* Role */}
-            <View style={styles.detailRow}>
-              <Ionicons name="person-circle-outline" size={20} color={Colors.textMuted} />
-              <View style={styles.detailTextContainer}>
-                <Text style={styles.detailLabel}>Active Role</Text>
-                <View style={styles.roleChipRow}>
-                  <View style={[
-                    styles.roleChip,
-                    displayRole === 'driver' ? styles.roleChipDriver : styles.roleChipRider,
-                  ]}>
-                    <Ionicons
-                      name={displayRole === 'driver' ? 'car-sport' : 'person'}
-                      size={12}
-                      color="#FFF"
-                      style={{ marginRight: 4 }}
-                    />
-                    <Text style={styles.roleChipText}>
-                      {displayRole === 'driver' ? 'DRIVER' : 'RIDER'}
-                    </Text>
-                  </View>
-                </View>
-              </View>
-            </View>
-
-            <View style={styles.divider} />
-
             <View style={styles.detailRow}>
               <Ionicons name="shield-checkmark-outline" size={20} color={Colors.textMuted} />
               <View style={styles.detailTextContainer}>
@@ -307,55 +298,69 @@ export default function ProfileScreen() {
                 </Text>
               </View>
             </View>
+          </View>
 
-            {backendUser?.createdAt && (
-              <>
-                <View style={styles.divider} />
-                <View style={styles.detailRow}>
-                  <Ionicons name="calendar-outline" size={20} color={Colors.textMuted} />
-                  <View style={styles.detailTextContainer}>
-                    <Text style={styles.detailLabel}>Account Created</Text>
-                    <Text style={styles.detailValue}>
-                      {new Date(backendUser.createdAt).toLocaleDateString('en-US', { day: 'numeric', month: 'long', year: 'numeric' })}
-                    </Text>
-                  </View>
-                </View>
-              </>
+          {/* ── Settings Card ──────────────────────────────────────────────── */}
+          <View style={styles.sectionCard}>
+            <Text style={styles.sectionTitle}>Settings</Text>
+
+            {/* My Vehicles Button */}
+            <TouchableOpacity style={styles.settingRow} onPress={() => router.push('/vehicles')} activeOpacity={0.7}>
+              <Ionicons name="car-sport-outline" size={20} color={Colors.primary} />
+              <Text style={styles.settingRowText}>My Vehicles</Text>
+              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            <TouchableOpacity style={styles.settingRow} onPress={() => Alert.alert('Notifications', 'Notification preferences updated.')} activeOpacity={0.7}>
+              <Ionicons name="notifications-outline" size={20} color={Colors.primary} />
+              <Text style={styles.settingRowText}>Notifications</Text>
+              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+
+            <View style={styles.divider} />
+
+            {/* Manage Account Accordion / Group */}
+            <TouchableOpacity
+              style={styles.settingRow}
+              onPress={() => setManageAccountExpanded(!manageAccountExpanded)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="person-circle-outline" size={20} color={Colors.primary} />
+              <Text style={styles.settingRowText}>Manage Account</Text>
+              <Ionicons
+                name={manageAccountExpanded ? 'chevron-down' : 'chevron-forward'}
+                size={18}
+                color={Colors.textMuted}
+              />
+            </TouchableOpacity>
+
+            {manageAccountExpanded && (
+              <View style={styles.subSettingContainer}>
+                {/* 1. Edit Profile */}
+                <TouchableOpacity style={styles.subSettingRow} onPress={openEditModal} activeOpacity={0.7}>
+                  <Ionicons name="pencil-outline" size={18} color={Colors.primary} />
+                  <Text style={styles.subSettingRowText}>Edit Profile</Text>
+                  <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                </TouchableOpacity>
+
+                <View style={styles.subDivider} />
+
+                {/* 2. Delete Account */}
+                <TouchableOpacity style={styles.subSettingRow} onPress={handleDeleteAccount} activeOpacity={0.7}>
+                  <Ionicons name="trash-outline" size={18} color="#DC2626" />
+                  <Text style={[styles.subSettingRowText, { color: '#DC2626' }]}>Delete Account</Text>
+                  <Ionicons name="chevron-forward" size={16} color="#DC2626" />
+                </TouchableOpacity>
+              </View>
             )}
           </View>
 
-
-
-          {/* Driver / Passenger mode switcher */}
-          <TouchableOpacity style={styles.driverBanner} onPress={handleSwitchMode}>
-            <View style={[styles.driverBannerIcon, displayRole === 'driver' && { backgroundColor: Colors.accent }]}>
-              <Ionicons name={displayRole === 'driver' ? 'swap-horizontal' : 'car'} size={24} color="#FFF" />
-            </View>
-            <View style={styles.driverBannerTextContainer}>
-              <Text style={styles.driverBannerTitle}>
-                {displayRole === 'driver' ? 'Switch to Passenger Mode' : 'Offer a Ride (Driver Workspace)'}
-              </Text>
-              <Text style={styles.driverBannerSubtitle}>
-                {displayRole === 'driver'
-                  ? 'Return to search and book rides'
-                  : displayKyc
-                    ? 'Open driver workspace to post routes'
-                    : 'Requires KYC verification to offer rides'}
-              </Text>
-            </View>
-            <Ionicons name="chevron-forward" size={20} color={Colors.primary} />
-          </TouchableOpacity>
-
-          {/* Logout */}
-          <TouchableOpacity style={styles.logoutButton} onPress={handleLogout}>
+          {/* Logout Button Card */}
+          <TouchableOpacity style={styles.logoutCard} onPress={handleLogout} activeOpacity={0.85}>
             <Ionicons name="log-out-outline" size={20} color={Colors.error} />
-            <Text style={styles.logoutButtonText}>Log Out</Text>
-          </TouchableOpacity>
-
-          {/* Delete Account */}
-          <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteAccount}>
-            <Ionicons name="trash-outline" size={18} color="#DC2626" />
-            <Text style={styles.deleteButtonText}>Delete Account</Text>
+            <Text style={styles.logoutCardText}>Log Out</Text>
           </TouchableOpacity>
 
           <View style={styles.versionFooter}>
@@ -420,37 +425,51 @@ const styles = StyleSheet.create({
   keyboardContainer: {
     flex: 1,
   },
-  profileHeaderCard: {
-    paddingVertical: 24,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-    zIndex: 10,
+  scrollContent: {
+    paddingHorizontal: 16,
+    paddingTop: 16,
+    paddingBottom: 120,
   },
-  profileHeaderImageStyle: {
-    resizeMode: 'cover',
-    opacity: 0.9,
+  profileHeaderCard: {
+    paddingTop: 16,
+    paddingBottom: 20,
+    paddingHorizontal: 18,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 16,
+    overflow: 'hidden',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
+  },
+  horizontalProfileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 16,
+    width: '100%',
   },
   avatarContainer: {
     position: 'relative',
-    marginBottom: 10,
   },
   avatar: {
-    width: 84,
-    height: 84,
-    borderRadius: 42,
-    borderWidth: 3,
-    borderColor: '#FFF',
+    width: 76,
+    height: 76,
+    borderRadius: 38,
+    borderWidth: 2,
+    borderColor: Colors.primary,
   },
   avatarEditButton: {
     position: 'absolute',
     bottom: 0,
     right: 0,
     backgroundColor: Colors.primary,
-    width: 28,
-    height: 28,
-    borderRadius: 14,
+    width: 26,
+    height: 26,
+    borderRadius: 13,
     borderWidth: 2,
     borderColor: '#FFF',
     alignItems: 'center',
@@ -461,27 +480,34 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.25,
     shadowRadius: 3,
   },
+  profileInfoTextContainer: {
+    flex: 1,
+    justifyContent: 'center',
+  },
   userName: {
-    fontSize: 22,
+    fontSize: 20,
     fontWeight: 'bold',
     color: Colors.textPrimary,
-    marginBottom: 4,
+    marginBottom: 2,
   },
   memberSince: {
     fontSize: 12,
     color: Colors.textMuted,
-    marginBottom: 8,
+    marginBottom: 6,
   },
   badgeRow: {
     flexDirection: 'row',
+    alignItems: 'center',
     gap: 8,
-    marginBottom: 12,
   },
   roleBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: Colors.primary,
     paddingVertical: 4,
     paddingHorizontal: 12,
     borderRadius: 6,
+    gap: 5,
   },
   roleText: {
     color: '#FFF',
@@ -518,16 +544,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.primary,
   },
-  scrollContent: {
-    paddingBottom: 120,
-  },
   sectionCard: {
-    backgroundColor: Colors.background,
-    paddingHorizontal: 20,
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    marginBottom: 12,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 18,
+    paddingVertical: 18,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 16,
+    overflow: 'hidden',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.08,
+    shadowRadius: 8,
   },
   sectionHeaderRow: {
     flexDirection: 'row',
@@ -676,41 +706,81 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     marginTop: 2,
   },
-  logoutButton: {
+  cardBottomRoleSwitchBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 14,
-    marginHorizontal: 20,
-    marginBottom: 12,
+    marginTop: 14,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: Colors.primary + '30',
+    backgroundColor: Colors.primary + '0D',
+    gap: 8,
+  },
+  cardBottomRoleSwitchText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  subSettingContainer: {
+    paddingLeft: 12,
+    paddingTop: 4,
+    paddingBottom: 4,
+  },
+  subSettingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+    paddingRight: 4,
+  },
+  subSettingRowText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    flex: 1,
+    marginLeft: 10,
+  },
+  subDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    marginVertical: 4,
+  },
+  settingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 10,
+  },
+  settingRowText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    flex: 1,
+    marginLeft: 12,
+  },
+  logoutCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 16,
+    backgroundColor: '#FEF2F2',
+    borderRadius: 16,
     borderWidth: 1,
     borderColor: '#FEE2E2',
-    borderRadius: 12,
-    backgroundColor: '#FEF2F2',
+    marginBottom: 16,
+    overflow: 'hidden',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 6,
     gap: 8,
   },
-  logoutButtonText: {
+  logoutCardText: {
     color: Colors.error,
     fontWeight: 'bold',
-    fontSize: 14,
-  },
-  deleteButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 13,
-    marginHorizontal: 20,
-    marginBottom: 8,
-    borderWidth: 1,
-    borderColor: '#FECACA',
-    borderRadius: 12,
-    backgroundColor: '#FFF5F5',
-    gap: 8,
-  },
-  deleteButtonText: {
-    color: '#DC2626',
-    fontWeight: '600',
-    fontSize: 13,
+    fontSize: 15,
   },
   versionFooter: {
     alignItems: 'center',

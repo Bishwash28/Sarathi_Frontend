@@ -631,6 +631,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       // Persist token + userId
       await AsyncStorageLib.setItem('@sarathi_token', accessToken);
+      await AsyncStorageLib.setItem('@sarathi_auth_token', accessToken);
       setAuthToken(accessToken);
       if (refreshToken) await AsyncStorageLib.setItem('@sarathi_refresh_token', refreshToken);
 
@@ -1231,10 +1232,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
+  const getStoredToken = async () => {
+    if (authToken) return authToken;
+    const token1 = await AsyncStorageLib.getItem('@sarathi_token');
+    if (token1) return token1;
+    const token2 = await AsyncStorageLib.getItem('@sarathi_auth_token');
+    return token2 || undefined;
+  };
+
   const deleteAccount = async () => {
-    if (!userId) return { success: false, error: 'Not logged in' };
-    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_auth_token')) || undefined;
-    const result = await deleteUser(userId, token ?? undefined);
+    let targetUserId = userId || (await AsyncStorageLib.getItem('@sarathi_user_id'));
+    const token = await getStoredToken();
+
+    // If targetUserId is missing or empty, extract from JWT payload
+    if (!targetUserId && token) {
+      const jwtPayload = decodeJwtPayload(token);
+      targetUserId = jwtPayload?.sub || jwtPayload?.id || jwtPayload?.userId || jwtPayload?.user_id;
+    }
+
+    if (!targetUserId) return { success: false, error: 'Not logged in' };
+
+    console.log(`[deleteAccount] Requesting DELETE /api/users/${targetUserId}`);
+    const result = await deleteUser(targetUserId, token);
     if (!result.success) {
       return { success: false, error: result.error };
     }
@@ -1243,7 +1262,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const switchUserRole = async (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => {
-    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_auth_token')) || undefined;
+    const token = await getStoredToken();
     const currentRole = user?.role === 'driver' ? 'RIDER' : 'PASSENGER';
     const reqTargetRole = (targetRole === 'DRIVER' || targetRole === 'RIDER') ? 'RIDER' : 'PASSENGER';
 
@@ -1257,6 +1276,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const resToken = result.data?.token;
 
     if (resToken) {
+      await AsyncStorageLib.setItem('@sarathi_token', resToken);
       await AsyncStorageLib.setItem('@sarathi_auth_token', resToken);
       setAuthToken(resToken);
     }
@@ -1291,7 +1311,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const uploadUserKycDocument = async (documentType: string, document: string, file: string) => {
     if (!userId) return { success: false, error: 'Not logged in' };
-    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_auth_token')) || undefined;
+    const token = await getStoredToken();
     const result = await uploadKycDocument(userId, { documentType, document, file }, token);
     if (!result.success) {
       return { success: false, error: result.error };
@@ -1301,7 +1321,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const submitKycVerify = async () => {
     if (!userId) return { success: false, error: 'Not logged in' };
-    const token = authToken || (await AsyncStorageLib.getItem('@sarathi_auth_token')) || undefined;
+    const token = await getStoredToken();
     const result = await verifyKycStatus(userId, token);
     if (!result.success) {
       return { success: false, error: result.error };

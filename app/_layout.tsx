@@ -37,6 +37,7 @@ export default function RootLayout() {
               <Stack.Screen name="chat-room" options={{ headerShown: false }} />
               <Stack.Screen name="driver-placeholder" options={{ headerShown: false }} />
               <Stack.Screen name="notifications" options={{ headerShown: false }} />
+              <Stack.Screen name="vehicles" options={{ headerShown: false }} />
             </Stack>
           )}
           <StatusBar style="dark" />

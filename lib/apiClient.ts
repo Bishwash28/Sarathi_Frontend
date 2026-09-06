@@ -59,7 +59,10 @@ async function request<T>(
   };
 
   if (token) {
-    headers['Authorization'] = `Bearer ${token}`;
+    const cleanToken = token.trim().replace(/^"|"$/g, '');
+    (headers as Record<string, string>)['Authorization'] = cleanToken.startsWith('Bearer ')
+      ? cleanToken
+      : `Bearer ${cleanToken}`;
   }
 
   console.log(`[apiClient] ${method} ${BASE_URL}${path}`, {

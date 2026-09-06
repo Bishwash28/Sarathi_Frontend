@@ -1,153 +1,152 @@
-import React, { useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import * as ImagePicker from 'expo-image-picker';
+import { router } from 'expo-router';
+import { useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
-import { router } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
-import { SafeAreaView } from 'react-native-safe-area-context';
 
-import * as ImagePicker from 'expo-image-picker';
+type DocumentType = 'DRIVING_LICENSE' | 'CITIZENSHIP' | 'PASSPORT' | 'VOTER_ID';
+
+interface DocTypeOption {
+  type: DocumentType;
+  label: string;
+  icon: keyof typeof Ionicons.glyphMap;
+  description: string;
+}
+
+const DOCUMENT_TYPES: DocTypeOption[] = [
+  {
+    type: 'DRIVING_LICENSE',
+    label: 'Driving License',
+    icon: 'car-outline',
+    description: 'Driver identification document',
+  },
+  {
+    type: 'CITIZENSHIP',
+    label: 'Citizenship Certificate',
+    icon: 'card-outline',
+    description: 'National identity document',
+  },
+  {
+    type: 'PASSPORT',
+    label: 'Passport',
+    icon: 'document-text-outline',
+    description: 'International passport document',
+  },
+  {
+    type: 'VOTER_ID',
+    label: 'Voter ID Card',
+    icon: 'person-circle-outline',
+    description: 'Government-issued voter ID card',
+  },
+];
 
 export default function KYCScreen() {
-  const { user, completeProfile, uploadUserKycDocument, submitKycVerify } = useApp();
+  const { uploadUserKycDocument, submitKycVerify } = useApp();
+  const [selectedDocType, setSelectedDocType] = useState<DocumentType>('DRIVING_LICENSE');
+  const [isDropdownOpen, setIsDropdownOpen] = useState(false);
+  const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
+  const [documentUri, setDocumentUri] = useState<string>('');
+  const [fileName, setFileName] = useState<string>('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Form States
-  const [phone, setPhone] = useState(user?.phone || '');
-  const [nid, setNid] = useState(user?.nid || '');
-  const [vehicleType, setVehicleType] = useState<'bike' | 'scooter'>('bike');
-  const [vehicleName, setVehicleName] = useState(user?.vehicleName || '');
-  const [vehicleNumber, setVehicleNumber] = useState(user?.vehicleNumber || '');
-  
-  // Real uploaded document URIs
-  const [licenseImage, setLicenseImage] = useState<string>('');
-  const [plateImage, setPlateImage] = useState<string>('');
+  const selectedDocObj = DOCUMENT_TYPES.find(d => d.type === selectedDocType) || DOCUMENT_TYPES[0];
 
   const handleBack = () => {
     router.back();
   };
 
-  const handleSkip = () => {
-    completeProfile({
-      kycVerified: false,
-      role: 'driver',
-    });
-    router.replace('/(tabs)');
-  };
-
-  const pickLicenseImage = async () => {
+  // Gallery Picker
+  const pickFromGallery = async () => {
+    setIsSourceModalOpen(false);
     try {
       const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permissionResult.granted) {
-        Alert.alert('Permission Denied', 'Permission to access photo library is required to select license photo.');
+        Alert.alert('Permission Denied', 'Permission to access photo library is required to select document photo.');
         return;
       }
+
       const pickerResult = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ['images'],
         allowsEditing: true,
         quality: 0.8,
       });
+
       if (!pickerResult.canceled && pickerResult.assets && pickerResult.assets.length > 0) {
-        setLicenseImage(pickerResult.assets[0].uri);
+        const asset = pickerResult.assets[0];
+        setDocumentUri(asset.uri);
+        const name = asset.fileName || `${selectedDocType.toLowerCase()}_${Date.now()}.jpg`;
+        setFileName(name);
       }
     } catch (err) {
-      console.error('[pickLicenseImage] Error picking license image:', err);
+      console.error('[pickFromGallery] Error:', err);
+      Alert.alert('Error', 'Failed to pick image from gallery.');
     }
   };
 
-  const pickPlateImage = async () => {
+  // Camera Capture
+  const captureFromCamera = async () => {
+    setIsSourceModalOpen(false);
     try {
-      const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
       if (!permissionResult.granted) {
-        Alert.alert('Permission Denied', 'Permission to access photo library is required to select plate photo.');
+        Alert.alert('Permission Denied', 'Camera permission is required to capture document photo.');
         return;
       }
-      const pickerResult = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ['images'],
+
+      const cameraResult = await ImagePicker.launchCameraAsync({
         allowsEditing: true,
         quality: 0.8,
       });
-      if (!pickerResult.canceled && pickerResult.assets && pickerResult.assets.length > 0) {
-        setPlateImage(pickerResult.assets[0].uri);
+
+      if (!cameraResult.canceled && cameraResult.assets && cameraResult.assets.length > 0) {
+        const asset = cameraResult.assets[0];
+        setDocumentUri(asset.uri);
+        const name = asset.fileName || `${selectedDocType.toLowerCase()}_camera_${Date.now()}.jpg`;
+        setFileName(name);
       }
     } catch (err) {
-      console.error('[pickPlateImage] Error picking plate image:', err);
+      console.error('[captureFromCamera] Error:', err);
+      Alert.alert('Error', 'Failed to capture photo with camera.');
     }
   };
 
   const handleSubmit = async () => {
-    if (!phone) {
-      Alert.alert('Missing Field', 'Please enter your mobile number.');
-      return;
-    }
-    if (!nid) {
-      Alert.alert('Missing Field', 'Please enter your National ID (NID) number.');
-      return;
-    }
-    if (!vehicleName) {
-      Alert.alert('Missing Field', 'Please enter your vehicle model name.');
-      return;
-    }
-    if (!vehicleNumber) {
-      Alert.alert('Missing Field', 'Please enter your vehicle plate number.');
-      return;
-    }
-    if (!licenseImage) {
-      Alert.alert('Missing Document', 'Please upload a photo of your Driver License.');
-      return;
-    }
-    if (!plateImage) {
-      Alert.alert('Missing Document', 'Please upload a photo of your Vehicle Plate.');
+    if (!documentUri) {
+      Alert.alert('Missing Document', 'Please select or capture your KYC document photo.');
       return;
     }
 
     setIsSubmitting(true);
 
-    // 1. Upload KYC documents to backend
-    const licenseDoc = await uploadUserKycDocument('DRIVING_LICENSE', licenseImage, 'license.jpg');
-    if (!licenseDoc.success) {
-      console.warn('KYC Document Upload Warning:', licenseDoc.error);
-    }
-
-    // 2. Trigger KYC verification request to backend
-    const verifyRes = await submitKycVerify();
+    // POST /api/users/{userId}/kyc/document
+    const uploadRes = await uploadUserKycDocument(selectedDocType, documentUri, fileName || 'document.jpg');
     setIsSubmitting(false);
 
-    if (!verifyRes.success) {
-      Alert.alert('Verification Warning', verifyRes.error || 'Backend KYC verify returned an issue, updating profile locally.');
+    if (!uploadRes.success) {
+      Alert.alert('Upload Failed', uploadRes.error || 'Failed to upload KYC document.');
+      return;
     }
 
-    // 3. Update user profile state
-    completeProfile({
-      phone,
-      nid,
-      vehicleType,
-      vehicleName,
-      vehicleNumber,
-      licenseImage,
-      plateImage,
-      kycVerified: true,
-      role: 'driver',
-    });
-
     Alert.alert(
-      'KYC Approved',
-      'Congratulations! Your driver KYC documents have been verified successfully.',
+      'KYC Document Submitted',
+      'Your KYC document has been uploaded successfully and is currently pending verification by the admin.',
       [
         {
-          text: 'Proceed to Offer Ride',
+          text: 'Done',
           onPress: () => router.replace('/(tabs)'),
         },
       ]
@@ -161,145 +160,109 @@ export default function KYCScreen() {
         <TouchableOpacity style={styles.backButton} onPress={handleBack}>
           <Ionicons name="arrow-back" size={24} color={Colors.primary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Verification Portal</Text>
+        <Text style={styles.headerTitle}>KYC Verification</Text>
         <View style={{ width: 40 }} />
       </View>
 
-      <KeyboardAvoidingView
-        style={{ flex: 1 }}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
+      <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
+        <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {/* Banner */}
           <View style={styles.introCard}>
             <Ionicons name="shield-checkmark" size={32} color={Colors.primary} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.introTitle}>Driver KYC Verification</Text>
+              <Text style={styles.introTitle}>Verify Your Identity</Text>
               <Text style={styles.introText}>
-                Complete these details to verify your identity and start offering rides on the Sarathi platform.
+                Select a document type and upload or capture a clear photo of your official ID document to submit for verification.
               </Text>
             </View>
           </View>
 
-          {/* Phone Field */}
-          <Text style={styles.inputLabel}>Mobile Number</Text>
-          <View style={styles.inputContainer}>
-            <Ionicons name="call-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. 9841234567"
-              placeholderTextColor={Colors.textMuted}
-              value={phone}
-              onChangeText={setPhone}
-              keyboardType="phone-pad"
-            />
-          </View>
+          {/* 1. Document Type Dropdown */}
+          <Text style={styles.inputLabel}>1. Select Document Type</Text>
+          <TouchableOpacity
+            style={styles.dropdownButton}
+            onPress={() => setIsDropdownOpen(!isDropdownOpen)}
+            activeOpacity={0.85}
+          >
+            <View style={styles.dropdownLeft}>
+              <Ionicons name={selectedDocObj.icon} size={22} color={Colors.primary} />
+              <View>
+                <Text style={styles.dropdownSelectedLabel}>{selectedDocObj.label}</Text>
+                <Text style={styles.dropdownSelectedDesc}>{selectedDocObj.description}</Text>
+              </View>
+            </View>
+            <Ionicons name={isDropdownOpen ? 'chevron-up' : 'chevron-down'} size={20} color={Colors.textMuted} />
+          </TouchableOpacity>
 
-          {/* NID Field */}
-          <Text style={styles.inputLabel}>National ID (NID) Number</Text>
-          <View style={styles.inputContainer}>
-            <Ionicons name="card-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Enter your NID number"
-              placeholderTextColor={Colors.textMuted}
-              value={nid}
-              onChangeText={setNid}
-              keyboardType="numeric"
-            />
-          </View>
+          {/* Dropdown Menu Options */}
+          {isDropdownOpen && (
+            <View style={styles.dropdownMenu}>
+              {DOCUMENT_TYPES.map(item => {
+                const isSelected = selectedDocType === item.type;
+                return (
+                  <TouchableOpacity
+                    key={item.type}
+                    style={[styles.dropdownMenuItem, isSelected && styles.dropdownMenuItemSelected]}
+                    onPress={() => {
+                      setSelectedDocType(item.type);
+                      setIsDropdownOpen(false);
+                      setDocumentUri('');
+                      setFileName('');
+                    }}
+                    activeOpacity={0.7}
+                  >
+                    <Ionicons name={item.icon} size={20} color={isSelected ? Colors.primary : Colors.textMuted} />
+                    <Text style={[styles.dropdownItemText, isSelected && styles.dropdownItemTextSelected]}>
+                      {item.label}
+                    </Text>
+                    {isSelected && <Ionicons name="checkmark" size={18} color={Colors.primary} />}
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          )}
 
-          {/* Vehicle Type Selector */}
-          <Text style={styles.inputLabel}>Vehicle Type</Text>
-          <View style={styles.typeSelectorRow}>
-            <TouchableOpacity
-              style={[styles.typeButton, vehicleType === 'bike' && styles.typeButtonActive]}
-              onPress={() => setVehicleType('bike')}
-            >
-              <Ionicons name="bicycle" size={20} color={vehicleType === 'bike' ? '#FFF' : Colors.primary} />
-              <Text style={[styles.typeButtonText, vehicleType === 'bike' && styles.typeButtonTextActive]}>Bike</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.typeButton, vehicleType === 'scooter' && styles.typeButtonActive]}
-              onPress={() => setVehicleType('scooter')}
-            >
-              <Ionicons name="speedometer-outline" size={20} color={vehicleType === 'scooter' ? '#FFF' : Colors.primary} />
-              <Text style={[styles.typeButtonText, vehicleType === 'scooter' && styles.typeButtonTextActive]}>Scooter</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Vehicle Name Field */}
-          <Text style={styles.inputLabel}>Vehicle Model Name</Text>
-          <View style={styles.inputContainer}>
-            <Ionicons name="options-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. Pulsar 220F, Suzuki Swift"
-              placeholderTextColor={Colors.textMuted}
-              value={vehicleName}
-              onChangeText={setVehicleName}
-            />
-          </View>
-
-          {/* Plate Number Field */}
-          <Text style={styles.inputLabel}>License Plate Number</Text>
-          <View style={styles.inputContainer}>
-            <Ionicons name="barcode-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="e.g. BA 95 PA 8821"
-              placeholderTextColor={Colors.textMuted}
-              value={vehicleNumber}
-              onChangeText={setVehicleNumber}
-              autoCapitalize="characters"
-            />
-          </View>
-
-          {/* Document Upload Slots */}
-          <Text style={styles.inputLabel}>Upload Supporting Documents</Text>
-          
-          <View style={styles.uploadCardsContainer}>
-            {/* License Upload Card */}
-            <TouchableOpacity style={styles.uploadCard} onPress={pickLicenseImage}>
-              {licenseImage ? (
-                <View style={styles.previewContainer}>
-                  <Image source={{ uri: licenseImage }} style={styles.uploadPreviewImage} />
-                  <View style={styles.successBadge}>
-                    <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
-                    <Text style={styles.successBadgeText}>Uploaded</Text>
+          {/* 2. Document Upload / Capture Area */}
+          <Text style={styles.inputLabel}>2. Document File / Photo</Text>
+          <TouchableOpacity
+            style={styles.uploadCard}
+            onPress={() => setIsSourceModalOpen(true)}
+            activeOpacity={0.85}
+          >
+            {documentUri ? (
+              <View style={styles.fileSelectedContainer}>
+                <View style={styles.fileIconBadge}>
+                  <Ionicons name="document-attach" size={28} color={Colors.primary} />
+                </View>
+                <View style={styles.fileTextContainer}>
+                  <Text style={styles.fileStatusTitle}>Document Attached</Text>
+                  <Text style={styles.fileNameText} numberOfLines={1} ellipsizeMode="middle">
+                    {fileName.length > 25 ? `${fileName.substring(0, 12)}...${fileName.substring(fileName.length - 10)}` : fileName}
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.changeFileButton}
+                  onPress={() => setIsSourceModalOpen(true)}
+                >
+                  <Text style={styles.changeFileText}>Change</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.uploadPlaceholder}>
+                <View style={styles.iconCircleRow}>
+                  <View style={styles.iconCircle}>
+                    <Ionicons name="camera" size={24} color={Colors.primary} />
+                  </View>
+                  <Text style={styles.orText}>OR</Text>
+                  <View style={styles.iconCircle}>
+                    <Ionicons name="cloud-upload" size={24} color={Colors.primary} />
                   </View>
                 </View>
-              ) : (
-                <View style={styles.uploadPlaceholder}>
-                  <Ionicons name="document-text" size={32} color={Colors.primary} />
-                  <Text style={styles.uploadTitle}>Driver License</Text>
-                  <Text style={styles.uploadSubtitle}>Tap to select License Photo</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-
-            {/* Plate Number Upload Card */}
-            <TouchableOpacity style={styles.uploadCard} onPress={pickPlateImage}>
-              {plateImage ? (
-                <View style={styles.previewContainer}>
-                  <Image source={{ uri: plateImage }} style={styles.uploadPreviewImage} />
-                  <View style={styles.successBadge}>
-                    <Ionicons name="checkmark-circle" size={16} color={Colors.success} />
-                    <Text style={styles.successBadgeText}>Uploaded</Text>
-                  </View>
-                </View>
-              ) : (
-                <View style={styles.uploadPlaceholder}>
-                  <Ionicons name="images" size={32} color={Colors.primary} />
-                  <Text style={styles.uploadTitle}>Number Plate Photo</Text>
-                  <Text style={styles.uploadSubtitle}>Tap to upload rear plate photo</Text>
-                </View>
-              )}
-            </TouchableOpacity>
-          </View>
+                <Text style={styles.uploadTitle}>Tap to Upload or Capture Document</Text>
+                <Text style={styles.uploadSubtitle}>Take photo with camera or choose from gallery</Text>
+              </View>
+            )}
+          </TouchableOpacity>
 
           {/* Submit Button */}
           <TouchableOpacity
@@ -312,19 +275,58 @@ export default function KYCScreen() {
               <ActivityIndicator size="small" color="#FFF" />
             ) : (
               <>
-                <Text style={styles.submitText}>Submit KYC for Approval</Text>
-                <Ionicons name="arrow-forward" size={18} color="#FFF" />
+                <Text style={styles.submitText}>Submit for Verification</Text>
               </>
             )}
           </TouchableOpacity>
-
-          {/* Skip Button */}
-          <TouchableOpacity style={styles.skipButton} onPress={handleSkip} activeOpacity={0.9}>
-            <Text style={styles.skipText}>Skip for Now</Text>
-            <Ionicons name="arrow-forward-outline" size={18} color={Colors.primary} />
-          </TouchableOpacity>
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* Upload/Capture Action Modal */}
+      <Modal
+        visible={isSourceModalOpen}
+        transparent
+        animationType="fade"
+        onRequestClose={() => setIsSourceModalOpen(false)}
+      >
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => setIsSourceModalOpen(false)}
+        >
+          <View style={styles.modalContent}>
+            <Text style={styles.modalTitle}>Choose Photo Option</Text>
+
+            <TouchableOpacity style={styles.modalOptionBtn} onPress={captureFromCamera} activeOpacity={0.8}>
+              <View style={[styles.modalOptionIcon, { backgroundColor: '#EFF6FF' }]}>
+                <Ionicons name="camera" size={22} color={Colors.primary} />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalOptionTitle}>Capture Image</Text>
+                <Text style={styles.modalOptionSubtitle}>Take photo directly using camera</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+
+            <View style={styles.modalDivider} />
+
+            <TouchableOpacity style={styles.modalOptionBtn} onPress={pickFromGallery} activeOpacity={0.8}>
+              <View style={[styles.modalOptionIcon, { backgroundColor: '#F0FDF4' }]}>
+                <Ionicons name="images" size={22} color="#16A34A" />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.modalOptionTitle}>Upload from Gallery</Text>
+                <Text style={styles.modalOptionSubtitle}>Choose existing image from photos</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+            </TouchableOpacity>
+
+            <TouchableOpacity style={styles.modalCancelBtn} onPress={() => setIsSourceModalOpen(false)}>
+              <Text style={styles.modalCancelText}>Cancel</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -368,7 +370,7 @@ const styles = StyleSheet.create({
     padding: 16,
     borderWidth: 1,
     borderColor: Colors.accent + '25',
-    marginBottom: 24,
+    marginBottom: 20,
   },
   introTitle: {
     fontSize: 15,
@@ -382,121 +384,164 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   inputLabel: {
-    fontSize: 13,
+    fontSize: 14,
     fontWeight: '700',
     color: Colors.textPrimary,
-    marginBottom: 8,
-    marginTop: 16,
+    marginBottom: 10,
+    marginTop: 12,
   },
-  inputContainer: {
+  dropdownButton: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    height: 48,
-    paddingHorizontal: 12,
-  },
-  inputIcon: {
-    marginRight: 10,
-  },
-  input: {
-    flex: 1,
-    fontSize: 14,
-    color: Colors.textPrimary,
-    fontWeight: '600',
-  },
-  typeSelectorRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  typeButton: {
-    flex: 1,
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
+    justifyContent: 'space-between',
     backgroundColor: '#FFFFFF',
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
-    borderRadius: 12,
-    height: 48,
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    marginBottom: 8,
   },
-  typeButtonActive: {
-    backgroundColor: Colors.primary,
-    borderColor: Colors.primary,
-  },
-  typeButtonText: {
-    fontSize: 14,
-    fontWeight: 'bold',
-    color: Colors.primary,
-  },
-  typeButtonTextActive: {
-    color: '#FFF',
-  },
-  uploadCardsContainer: {
+  dropdownLeft: {
     flexDirection: 'row',
-    gap: 16,
-    marginTop: 4,
+    alignItems: 'center',
+    gap: 12,
+    flex: 1,
+  },
+  dropdownSelectedLabel: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  dropdownSelectedDesc: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  dropdownMenu: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 16,
+    overflow: 'hidden',
+    elevation: 3,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+  },
+  dropdownMenuItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  dropdownMenuItemSelected: {
+    backgroundColor: Colors.primary + '0D',
+  },
+  dropdownItemText: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+    flex: 1,
+  },
+  dropdownItemTextSelected: {
+    color: Colors.primary,
+    fontWeight: '700',
   },
   uploadCard: {
-    flex: 1,
-    height: 120,
+    minHeight: 120,
     backgroundColor: '#FFFFFF',
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
     borderStyle: 'dashed',
     borderRadius: 16,
     overflow: 'hidden',
+    marginBottom: 24,
+    justifyContent: 'center',
   },
   uploadPlaceholder: {
-    flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
-    padding: 8,
+    padding: 20,
   },
-  uploadTitle: {
-    fontSize: 12,
-    fontWeight: 'bold',
-    color: Colors.textPrimary,
-    marginTop: 8,
-  },
-  uploadSubtitle: {
-    fontSize: 10,
-    color: Colors.textMuted,
-    marginTop: 2,
-    textAlign: 'center',
-  },
-  previewContainer: {
-    flex: 1,
-    position: 'relative',
-  },
-  uploadPreviewImage: {
-    width: '100%',
-    height: '100%',
-    resizeMode: 'cover',
-  },
-  successBadge: {
-    position: 'absolute',
-    bottom: 8,
-    left: 8,
-    right: 8,
-    backgroundColor: 'rgba(255, 255, 255, 0.95)',
-    borderRadius: 8,
-    paddingVertical: 4,
-    paddingHorizontal: 8,
+  iconCircleRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    gap: 4,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
+    gap: 12,
+    marginBottom: 10,
   },
-  successBadgeText: {
-    fontSize: 9,
+  iconCircle: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: Colors.primary + '12',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  orText: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: Colors.textMuted,
+  },
+  uploadTitle: {
+    fontSize: 13,
     fontWeight: 'bold',
+    color: Colors.textPrimary,
+    marginTop: 4,
+  },
+  uploadSubtitle: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  fileSelectedContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 16,
+    gap: 14,
+    backgroundColor: Colors.primary + '08',
+  },
+  fileIconBadge: {
+    width: 46,
+    height: 46,
+    borderRadius: 12,
+    backgroundColor: Colors.primary + '1A',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  fileTextContainer: {
+    flex: 1,
+  },
+  fileStatusTitle: {
+    fontSize: 12,
+    fontWeight: '800',
     color: Colors.success,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  fileNameText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginTop: 2,
+  },
+  changeFileButton: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: Colors.primary,
+    backgroundColor: '#FFFFFF',
+  },
+  changeFileText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
   },
   submitButton: {
     backgroundColor: Colors.primary,
@@ -506,7 +551,7 @@ const styles = StyleSheet.create({
     gap: 8,
     height: 52,
     borderRadius: 16,
-    marginTop: 36,
+    marginTop: 8,
     shadowColor: Colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.25,
@@ -518,21 +563,65 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: 'bold',
   },
-  skipButton: {
-    backgroundColor: '#FFFFFF',
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    height: 52,
-    borderRadius: 16,
-    marginTop: 12,
-    borderWidth: 1.5,
-    borderColor: Colors.primary,
+  // Modal styles
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(0,0,0,0.45)',
+    justifyContent: 'flex-end',
   },
-  skipText: {
-    color: Colors.primary,
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+    paddingBottom: Platform.OS === 'ios' ? 36 : 24,
+  },
+  modalTitle: {
     fontSize: 16,
     fontWeight: 'bold',
+    color: Colors.textPrimary,
+    textAlign: 'center',
+    marginBottom: 16,
+  },
+  modalOptionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+    paddingVertical: 12,
+  },
+  modalOptionIcon: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  modalOptionTitle: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  modalOptionSubtitle: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  modalDivider: {
+    height: 1,
+    backgroundColor: '#F1F5F9',
+    marginVertical: 4,
+  },
+  modalCancelBtn: {
+    marginTop: 16,
+    paddingVertical: 12,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+  },
+  modalCancelText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textMuted,
   },
 });
+
