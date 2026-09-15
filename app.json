@@ -28,12 +28,7 @@
         "android.permission.ACCESS_FINE_LOCATION"
       ],
       "predictiveBackGestureEnabled": false,
-      "package": "com.anonymous.Sarathi_Frontend",
-      "config": {
-        "googleMaps": {
-          "apiKey": "AIzaSyDummyKeyForGoogleMapsSDKToNotCrash"
-        }
-      }
+      "package": "com.anonymous.Sarathi_Frontend"
     },
     "web": {
       "output": "static",

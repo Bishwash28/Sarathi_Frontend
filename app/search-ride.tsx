@@ -3,6 +3,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import React, { useState } from 'react';
 import {
   KeyboardAvoidingView,
+  Modal,
   Platform,
   ScrollView,
   StyleSheet,
@@ -14,42 +15,90 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
-import { validatePassengerJourney } from '../utils/routeValidation';
+
+import { useLocationSearch } from '../hooks/useLocationSearch';
+import { LocationPinPickerMap } from '../components/LocationPinPickerMap';
+import { LocationSearchInput } from '../components/LocationSearchInput';
 
 export default function SearchRideScreen() {
-  const { rides, deviceLocation, addRecentSearch, savedPlaces } = useApp();
+  const { rides, deviceLocation, addRecentSearch, recentSearches, savedPlaces } = useApp();
   const params = useLocalSearchParams();
 
-  // Route States
-  const [pickup, setPickup] = useState((params.prefillFrom as string) || deviceLocation || 'Butwal');
-  const [destination, setDestination] = useState((params.prefillTo as string) || '');
+  const {
+    origin,
+    originSuggestions,
+    isSearchingOrigin,
+    showOriginNotFound,
+    isFetchingOriginGPS,
+    handleOriginChange,
+    selectOriginSuggestion,
+    useCurrentLocationForOrigin,
+    setOriginDirect,
+
+    destination,
+    destSuggestions,
+    isSearchingDest,
+    showDestNotFound,
+    handleDestChange,
+    selectDestSuggestion,
+    setDestDirect,
+
+    pinPickerModalOpen,
+    pinPickerTargetType,
+    openPinPicker,
+    closePinPicker,
+    confirmPinLocation,
+  } = useLocationSearch();
+
   const [activeTab, setActiveTab] = useState<'recent' | 'saved'>('recent');
+
+  // Dragged pin coords for modal
+  const [draggedPinCoords, setDraggedPinCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  React.useEffect(() => {
+    if (pinPickerModalOpen) {
+      if (pinPickerTargetType === 'origin' && origin.coords) {
+        setDraggedPinCoords(origin.coords);
+      } else if (pinPickerTargetType === 'destination' && destination.coords) {
+        setDraggedPinCoords(destination.coords);
+      } else {
+        setDraggedPinCoords({ lat: 27.7172, lng: 85.3240 });
+      }
+    }
+  }, [pinPickerModalOpen, pinPickerTargetType]);
+
+  // Initialize prefilled locations on mount
+  React.useEffect(() => {
+    if (params.prefillFrom) {
+      handleOriginChange(params.prefillFrom as string);
+    } else if (deviceLocation) {
+      handleOriginChange(deviceLocation);
+    }
+    if (params.prefillTo) {
+      handleDestChange(params.prefillTo as string);
+    }
+  }, [params.prefillFrom, params.prefillTo, deviceLocation]);
 
   const handleBack = () => {
     router.back();
   };
 
   const handleSelectRecent = (placeName: string) => {
-    setDestination(placeName);
+    handleDestChange(placeName);
+    addRecentSearch(origin.text || 'Current Location', placeName);
   };
 
   // Click on a saved location to fill the inputs
   const handleSelectSaved = (name: string) => {
-    if (!pickup || pickup === deviceLocation) {
-      setPickup(name);
+    if (!origin.text) {
+      handleOriginChange(name);
     } else {
-      setDestination(name);
+      handleDestChange(name);
     }
   };
 
-  // Filter rides based on sequence-based route overlap
-  const filteredRides = destination
-    ? rides.filter(ride => {
-        const startPoint = pickup && pickup.trim() ? pickup : ride.route[0];
-        const validation = validatePassengerJourney(ride.route, startPoint, destination);
-        return validation.isValid;
-      })
-    : [];
+  // candidateRides — ride matching disabled, will be rebuilt with real backend data
+  const candidateRides: typeof rides = [];
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
@@ -65,43 +114,42 @@ export default function SearchRideScreen() {
         style={styles.keyboardView}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* ── Input Fields Card ── */}
+        {/* ── Input Fields Card with Autocomplete ── */}
         <View style={styles.inputCard}>
-          {/* Pickup Row */}
-          <View style={styles.inputRow}>
-            <Ionicons name="disc-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Start location..."
-              placeholderTextColor={Colors.textMuted}
-              value={pickup}
-              onChangeText={setPickup}
-            />
-            {pickup ? (
-              <TouchableOpacity onPress={() => setPickup('')} style={styles.clearBtn}>
-                <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
-              </TouchableOpacity>
-            ) : null}
-          </View>
+          {/* Pickup Input */}
+          <LocationSearchInput
+            label="Pickup Location"
+            placeholder="Start location..."
+            value={origin.text}
+            onChangeText={handleOriginChange}
+            suggestions={originSuggestions}
+            onSelectSuggestion={selectOriginSuggestion}
+            isSearching={isSearchingOrigin}
+            showNotFound={showOriginNotFound}
+            onOpenPinPicker={() => openPinPicker('origin')}
+            iconName="disc-outline"
+            iconColor={Colors.textMuted}
+            useGpsButton={true}
+            isFetchingGPS={isFetchingOriginGPS}
+            onUseGpsLocation={useCurrentLocationForOrigin}
+          />
 
           <View style={styles.inputDivider} />
 
-          {/* Destination Row */}
-          <View style={styles.inputRow}>
-            <Ionicons name="location-sharp" size={20} color={Colors.accent} style={styles.inputIcon} />
-            <TextInput
-              style={styles.input}
-              placeholder="Where to? (e.g. Koteshwor, Balkhu)"
-              placeholderTextColor={Colors.textMuted}
-              value={destination}
-              onChangeText={setDestination}
-            />
-            {destination ? (
-              <TouchableOpacity onPress={() => setDestination('')} style={styles.clearBtn}>
-                <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
-              </TouchableOpacity>
-            ) : null}
-          </View>
+          {/* Destination Input */}
+          <LocationSearchInput
+            label="Destination"
+            placeholder="Where to? Enter landmark or location"
+            value={destination.text}
+            onChangeText={handleDestChange}
+            suggestions={destSuggestions}
+            onSelectSuggestion={selectDestSuggestion}
+            isSearching={isSearchingDest}
+            showNotFound={showDestNotFound}
+            onOpenPinPicker={() => openPinPicker('destination')}
+            iconName="location-sharp"
+            iconColor={Colors.accent}
+          />
         </View>
 
         <ScrollView
@@ -109,28 +157,31 @@ export default function SearchRideScreen() {
           contentContainerStyle={styles.scrollContent}
           showsVerticalScrollIndicator={false}
         >
-          {destination ? (
+          {destination.text ? (
             <View style={styles.resultsContainer}>
-              <Text style={styles.resultsHeading}>Matched Rides going to "{destination}"</Text>
-              {filteredRides.length === 0 ? (
+              <Text style={styles.resultsHeading}>Matched Rides going to "{destination.text}"</Text>
+              {candidateRides.length === 0 ? (
                 <View style={styles.noResultsCard}>
                   <Ionicons name="search-outline" size={48} color={Colors.textMuted} />
-                  <Text style={styles.noResultsText}>No matched rides found on this route.</Text>
-                  <Text style={styles.noResultsSubtext}>Try searching landmarks like 'Koteshwor', 'Balkhu', or 'Chabahil'.</Text>
+                  <Text style={styles.noResultsText}>No rides found on this route</Text>
+                  <Text style={styles.noResultsSubtext}>No drivers are currently heading along this route corridor.</Text>
                 </View>
               ) : (
-                filteredRides.map(ride => (
+                candidateRides.map(ride => (
                   <TouchableOpacity
                     key={ride.id}
                     style={styles.rideCard}
-                    onPress={() => router.push({ 
-                      pathname: '/ride-detail', 
-                      params: { 
-                        id: ride.id,
-                        selectedPickup: pickup,
-                        selectedDest: destination
-                      } 
-                    })}
+                    onPress={() => {
+                      addRecentSearch(origin.text || ride.route[0], destination.text);
+                      router.push({ 
+                        pathname: '/ride-detail', 
+                        params: { 
+                          id: ride.id,
+                          selectedPickup: origin.text,
+                          selectedDest: destination.text
+                        } 
+                      });
+                    }}
                     activeOpacity={0.9}
                   >
                     <View style={styles.rideCardHeader}>
@@ -191,65 +242,148 @@ export default function SearchRideScreen() {
               {/* ── Conditional Tab Content ── */}
               {activeTab === 'recent' ? (
                 <View style={styles.listSection}>
-                  <TouchableOpacity 
-                    style={styles.listItemRow} 
-                    onPress={() => handleSelectRecent('Koteshwor')}
-                  >
-                    <View style={styles.listIconCircle}>
-                      <Ionicons name="time-outline" size={20} color={Colors.textMuted} />
+                  {recentSearches.length === 0 ? (
+                    <View style={{ padding: 20, alignItems: 'center' }}>
+                      <Text style={{ fontSize: 13, color: Colors.textMuted }}>No recent search history.</Text>
                     </View>
-                    <View style={styles.listItemTextContainer}>
-                      <Text style={styles.listItemTitle} numberOfLines={1}>
-                        Koteshwor (Recent search)
-                      </Text>
-                    </View>
-                    <TouchableOpacity style={styles.moreButton}>
-                      <Ionicons name="ellipsis-vertical" size={20} color={Colors.textMuted} />
-                    </TouchableOpacity>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity 
-                    style={styles.listItemRow} 
-                    onPress={() => handleSelectRecent('Balkhu')}
-                  >
-                    <View style={styles.listIconCircle}>
-                      <Ionicons name="time-outline" size={20} color={Colors.textMuted} />
-                    </View>
-                    <View style={styles.listItemTextContainer}>
-                      <Text style={styles.listItemTitle} numberOfLines={1}>
-                        Balkhu (Recent search)
-                      </Text>
-                    </View>
-                    <TouchableOpacity style={styles.moreButton}>
-                      <Ionicons name="ellipsis-vertical" size={20} color={Colors.textMuted} />
-                    </TouchableOpacity>
-                  </TouchableOpacity>
+                  ) : (
+                    recentSearches.map(item => (
+                      <TouchableOpacity 
+                        key={item.id}
+                        style={styles.listItemRow} 
+                        onPress={() => handleSelectRecent(item.to)}
+                      >
+                        <View style={styles.listIconCircle}>
+                          <Ionicons name="time-outline" size={20} color={Colors.textMuted} />
+                        </View>
+                        <View style={styles.listItemTextContainer}>
+                          <Text style={styles.listItemTitle} numberOfLines={1}>
+                            {item.from} → {item.to}
+                          </Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                      </TouchableOpacity>
+                    ))
+                  )}
                 </View>
               ) : (
                 <View style={styles.listSection}>
-                  {savedPlaces.map((place) => (
-                    <TouchableOpacity 
-                      key={place.id} 
-                      style={styles.listItemRow}
-                      onPress={() => handleSelectSaved(place.landmark)}
-                      activeOpacity={0.7}
-                    >
-                      <View style={[styles.listIconCircle, styles.savedIconBackground]}>
-                        <Ionicons name="location" size={18} color={Colors.primary} />
-                      </View>
-                      <View style={styles.listItemTextContainer}>
-                        <Text style={styles.savedItemText}>{place.name}</Text>
-                        <Text style={{ fontSize: 11, color: Colors.textMuted }}>{place.landmark}</Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-                    </TouchableOpacity>
-                  ))}
+                  {savedPlaces.length === 0 ? (
+                    <View style={{ padding: 20, alignItems: 'center' }}>
+                      <Text style={{ fontSize: 13, color: Colors.textMuted }}>No saved places yet.</Text>
+                    </View>
+                  ) : (
+                    savedPlaces.map((place) => (
+                      <TouchableOpacity 
+                        key={place.id} 
+                        style={styles.listItemRow}
+                        onPress={() => handleSelectSaved(place.landmark)}
+                        activeOpacity={0.7}
+                      >
+                        <View style={[styles.listIconCircle, styles.savedIconBackground]}>
+                          <Ionicons name="location" size={18} color={Colors.primary} />
+                        </View>
+                        <View style={styles.listItemTextContainer}>
+                          <Text style={styles.savedItemText}>{place.name}</Text>
+                          <Text style={{ fontSize: 11, color: Colors.textMuted }}>{place.landmark}</Text>
+                        </View>
+                        <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                      </TouchableOpacity>
+                    ))
+                  )}
                 </View>
               )}
             </>
           )}
         </ScrollView>
       </KeyboardAvoidingView>
+
+      {/* ── 📍 FULL SCREEN PIN PICKER FALLBACK MAP MODAL ── */}
+      <Modal
+        visible={pinPickerModalOpen}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={closePinPicker}
+      >
+        <View style={styles.pinPickerContainer}>
+          <View style={styles.pinPickerHeader}>
+            <TouchableOpacity onPress={closePinPicker} style={styles.pinPickerBackBtn}>
+              <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.pinPickerTitle}>
+                Set {pinPickerTargetType === 'origin' ? 'Pickup' : 'Destination'} Pin
+              </Text>
+              <Text style={styles.pinPickerSub}>Drag or tap on map to confirm exact location</Text>
+            </View>
+          </View>
+
+          {/* Pin Picker Content Body */}
+          <View style={{ flex: 1, position: 'relative' }}>
+            {/* Quick Location Chips */}
+            <View style={styles.pinQuickChipsRow}>
+              <Text style={styles.quickChipHeading}>Quick Locations in Nepal:</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {[
+                  { name: 'Kathmandu Center', lat: 27.7172, lng: 85.3240 },
+                  { name: 'Kalanki Chok', lat: 27.6938, lng: 85.2817 },
+                  { name: 'Butwal Highway', lat: 27.7006, lng: 83.4484 },
+                  { name: 'Bhairahawa Station', lat: 27.5065, lng: 83.4485 },
+                  { name: 'Harkatta Chok', lat: 27.6500, lng: 83.5000 },
+                ].map(item => (
+                  <TouchableOpacity
+                    key={item.name}
+                    style={styles.pinQuickChip}
+                    onPress={() => setDraggedPinCoords({ lat: item.lat, lng: item.lng })}
+                  >
+                    <Ionicons name="location" size={14} color={Colors.primary} />
+                    <Text style={styles.pinQuickChipText}>{item.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* Interactive Map View */}
+            <LocationPinPickerMap
+              initialLocation={draggedPinCoords}
+              targetType={pinPickerTargetType}
+              onConfirmPin={(coords, placeName) => {
+                setDraggedPinCoords(prev => {
+                  const next = { ...coords };
+                  if (placeName) {
+                    (next as any).placeName = placeName;
+                  } else if (prev && (prev as any).placeName) {
+                    (next as any).placeName = (prev as any).placeName;
+                  }
+                  return next;
+                });
+              }}
+              quickLocations={[
+                { name: 'Kathmandu Center', lat: 27.7172, lng: 85.3240 },
+                { name: 'Kalanki Chok', lat: 27.6938, lng: 85.2817 },
+                { name: 'Butwal Highway', lat: 27.7006, lng: 83.4484 },
+                { name: 'Bhairahawa Station', lat: 27.5065, lng: 83.4485 },
+                { name: 'Harkatta Chok', lat: 27.6500, lng: 83.5000 },
+              ]}
+            />
+          </View>
+
+          <View style={styles.pinPickerFooter}>
+            <TouchableOpacity
+              style={styles.confirmPinBtn}
+              onPress={() => {
+                if (draggedPinCoords) {
+                  const placeName = (draggedPinCoords as any).placeName || `Pin (${draggedPinCoords.lat.toFixed(4)}, ${draggedPinCoords.lng.toFixed(4)})`;
+                  confirmPinLocation(draggedPinCoords, placeName);
+                }
+              }}
+            >
+              <Text style={styles.confirmPinBtnText}>Confirm Location Pin</Text>
+              <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </SafeAreaView>
   );
 }
@@ -527,6 +661,222 @@ const styles = StyleSheet.create({
     fontSize: 11,
     fontWeight: '600',
     color: '#475569',
+  },
+  autocompleteDropdown: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 12,
+    marginTop: 4,
+    marginBottom: 8,
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    zIndex: 99,
+  },
+  autocompleteItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+    gap: 10,
+  },
+  autocompleteMainText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  autocompleteSubText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  inputHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingTop: 6,
+    paddingBottom: 2,
+  },
+  inputLabelSmall: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    textTransform: 'uppercase',
+    letterSpacing: 0.5,
+  },
+  gpsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#EFF6FF',
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+  },
+  gpsBtnText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  searchingText: {
+    fontSize: 11,
+    color: Colors.primary,
+    fontWeight: '700',
+    fontStyle: 'italic',
+    marginRight: 6,
+  },
+  cantFindBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginHorizontal: 8,
+    marginTop: 4,
+    marginBottom: 8,
+  },
+  cantFindText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  pinPickerContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  pinPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    paddingBottom: 16,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  pinPickerBackBtn: {
+    padding: 6,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9',
+  },
+  pinPickerTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  pinPickerSub: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  pinPickerMapArea: {
+    flex: 1,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E2E8F0',
+  },
+  mapMockBackground: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapMockTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#475569',
+    marginTop: 8,
+  },
+  mapMockCoords: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.primary,
+    marginTop: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  pinQuickChipsRow: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    right: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  quickChipHeading: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    marginBottom: 8,
+  },
+  pinQuickChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  pinQuickChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  floatingCenterPin: {
+    position: 'absolute',
+    top: '44%',
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  pinPickerFooter: {
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  confirmPinBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: 14,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  confirmPinBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: 'bold',
   },
 });
 

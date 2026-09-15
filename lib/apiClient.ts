@@ -12,7 +12,7 @@ const BASE_URL =
   (process.env.EXPO_PUBLIC_API_BASE_URL ?? '').replace(/\/$/, '');
 
 // ─── Rate limiter ─────────────────────────────────────────────────────────────
-const MAX_CALLS  = 5;      // max requests per path per window
+const MAX_CALLS  = 30;     // max requests per path per window
 const WINDOW_MS  = 10_000; // 10 seconds
 
 const callLog: Record<string, number[]> = {};

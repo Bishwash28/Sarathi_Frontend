@@ -8,13 +8,26 @@ import { validateName, validateEmail, validatePassword, hasScriptTags, sanitizeI
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function SignupScreen() {
-  const { signup } = useApp();
+  const { signup, loginWithGoogle } = useApp();
   const [name, setName] = useState('');
   const [email, setEmail] = useState('');
   const [phone, setPhone] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+
+  const handleGoogleLogin = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
+    const result = await loginWithGoogle();
+    setIsLoading(false);
+
+    if (!result.success) {
+      alert(result.error || 'Google login failed');
+      return;
+    }
+    router.replace('/(tabs)');
+  };
 
   const handleSignup = async () => {
     if (isLoading) return;
@@ -101,7 +114,7 @@ export default function SignupScreen() {
                 <Ionicons name="person-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
-                  placeholder="e.g. Sakar Aryal"
+                  placeholder="e.g. John Doe"
                   placeholderTextColor="#94A3B8"
                   value={name}
                   onChangeText={setName}
@@ -113,7 +126,7 @@ export default function SignupScreen() {
                 <Ionicons name="mail-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
                 <TextInput
                   style={styles.input}
-                  placeholder="e.g. sakar@email.com"
+                  placeholder="e.g. user@email.com"
                   placeholderTextColor="#94A3B8"
                   value={email}
                   onChangeText={setEmail}
@@ -173,6 +186,19 @@ export default function SignupScreen() {
                     <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
                   </>
                 )}
+              </TouchableOpacity>
+
+              {/* Divider */}
+              <View style={styles.dividerContainer}>
+                <View style={styles.divider} />
+                <Text style={styles.dividerText}>OR</Text>
+                <View style={styles.divider} />
+              </View>
+
+              {/* Social Auth */}
+              <TouchableOpacity style={[styles.googleButton, isLoading && { opacity: 0.5 }]} onPress={handleGoogleLogin} activeOpacity={0.85} disabled={isLoading}>
+                <Ionicons name="logo-google" size={20} color="#EA4335" style={{ marginRight: 8 }} />
+                <Text style={styles.googleButtonText}>Continue with Google</Text>
               </TouchableOpacity>
             </View>
 
@@ -304,6 +330,37 @@ const styles = StyleSheet.create({
     color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',
+  },
+  dividerContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginVertical: 22,
+  },
+  divider: {
+    flex: 1,
+    height: 1,
+    backgroundColor: '#E2E8F0',
+  },
+  dividerText: {
+    marginHorizontal: 14,
+    color: '#94A3B8',
+    fontSize: 13,
+    fontWeight: '600',
+  },
+  googleButton: {
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    paddingVertical: 14,
+    borderRadius: 14,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  googleButtonText: {
+    color: '#334155',
+    fontSize: 15,
+    fontWeight: '600',
   },
   footerContainer: {
     flexDirection: 'row',

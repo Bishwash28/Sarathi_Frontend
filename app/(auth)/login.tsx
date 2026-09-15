@@ -8,7 +8,7 @@ import { validateEmail, hasScriptTags, sanitizeInput } from '../../utils/validat
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function LoginScreen() {
-  const { login } = useApp();
+  const { login, loginWithGoogle } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
@@ -46,7 +46,14 @@ export default function LoginScreen() {
 
   const handleGoogleLogin = async () => {
     if (isLoading) return;
-    await login('google_user@sarathi.com');
+    setIsLoading(true);
+    const result = await loginWithGoogle();
+    setIsLoading(false);
+
+    if (!result.success) {
+      alert(result.error || 'Google login failed');
+      return;
+    }
     router.replace('/(tabs)');
   };
 

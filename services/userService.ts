@@ -60,6 +60,7 @@ export interface BackendUser {
   activeRole: 'RIDER' | 'DRIVER';
   role: 'RIDER' | 'DRIVER';
   kycVerified: boolean;
+  kycStatus?: 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED';
   createdAt: string;
   updatedAt: string;
   avatarUrl?: string;

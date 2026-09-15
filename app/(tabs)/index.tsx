@@ -1,4 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as Location from 'expo-location';
 import { router } from 'expo-router';
 import React, { useState } from 'react';
 import {
@@ -16,9 +18,11 @@ import {
   View,
 } from 'react-native';
 import { Colors } from '../../constants/Colors';
-import { useApp, LANDMARKS } from '../../context/AppContext';
-import { RouteMap } from '../../components/RouteMap';
-import { getAutoRouteCorridor } from '../../utils/routeValidation';
+import { useApp } from '../../context/AppContext';
+import { getUserVehicles, VehicleData } from '../../services/vehicleService';
+import { useLocationSearch } from '../../hooks/useLocationSearch';
+import { LocationPinPickerMap } from '../../components/LocationPinPickerMap';
+import { LocationSearchInput } from '../../components/LocationSearchInput';
 
 
 
@@ -30,6 +34,9 @@ export default function HomeScreen() {
     user,
     completeProfile,
     createRide,
+    updateRide,
+    deleteRide,
+    rides,
     recentSearches,
     savedPlaces,
     removeSavedPlace,
@@ -39,12 +46,94 @@ export default function HomeScreen() {
   const [passengerTab, setPassengerTab] = useState<'recent' | 'saved'>('recent');
 
   // Driver Route Creation Form States
-  const [pointA, setPointA] = useState('Butwal');
-  const [pointB, setPointB] = useState('Bhairahawa');
-  const [price, setPrice] = useState('180');
-  const [seatsLeft, setSeatsLeft] = useState('2');
-  const [departureTime, setDepartureTime] = useState('Leaving in 15 mins');
+  const [userVehicles, setUserVehicles] = useState<VehicleData[]>([]);
+  const [selectedVehicle, setSelectedVehicle] = useState<VehicleData | null>(null);
+  const [isVehicleDropdownOpen, setIsVehicleDropdownOpen] = useState(false);
+  const [originName, setOriginName] = useState('');
+  const [destName, setDestName] = useState('');
+  const [originLat, setOriginLat] = useState('');
+  const [originLng, setOriginLng] = useState('');
+  const [destLat, setDestLat] = useState('');
+  const [destLng, setDestLng] = useState('');
+  const [isDetectingLocation, setIsDetectingLocation] = useState(false);
+  const [encodedPolyLine, setEncodedPolyLine] = useState('');
+  const [price, setPrice] = useState('');
+  const [seatsLeft, setSeatsLeft] = useState('1');
+  const [departureTime, setDepartureTime] = useState('');
   const [isMapExpanded, setIsMapExpanded] = useState(false);
+
+    const {
+    origin,
+    originSuggestions,
+    isSearchingOrigin,
+    showOriginNotFound,
+    isFetchingOriginGPS,
+    handleOriginChange,
+    selectOriginSuggestion,
+    useCurrentLocationForOrigin,
+
+    destination,
+    destSuggestions,
+    isSearchingDest,
+    showDestNotFound,
+    handleDestChange,
+    selectDestSuggestion,
+
+    pinPickerModalOpen,
+    pinPickerTargetType,
+    openPinPicker,
+    closePinPicker,
+    confirmPinLocation,
+
+    isCalculatingRoute,
+    calculateRoute,
+    isBothResolved,
+    errorMsg: locationErrorMsg,
+  } = useLocationSearch();
+
+  // Temporary pin drag position for Modal map picker
+  const [draggedPinCoords, setDraggedPinCoords] = useState<{ lat: number; lng: number } | null>(null);
+
+  React.useEffect(() => {
+    if (pinPickerModalOpen) {
+      if (pinPickerTargetType === 'origin' && origin.coords) {
+        setDraggedPinCoords(origin.coords);
+      } else if (pinPickerTargetType === 'destination' && destination.coords) {
+        setDraggedPinCoords(destination.coords);
+      } else {
+        // Default center for Nepal (Kathmandu / Central Nepal)
+        setDraggedPinCoords({ lat: 27.7172, lng: 85.3240 });
+      }
+    }
+  }, [pinPickerModalOpen, pinPickerTargetType]);
+
+  // Fetch driver vehicles on mount
+  React.useEffect(() => {
+    (async () => {
+      try {
+        const storedToken =
+          (await AsyncStorage.getItem('@sarathi_token')) ||
+          (await AsyncStorage.getItem('@sarathi_auth_token'));
+        const res = await getUserVehicles(storedToken ?? undefined);
+        if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+          setUserVehicles(res.data);
+          setSelectedVehicle(res.data[0]);
+        } else if (res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) {
+          const vObj = res.data as unknown as VehicleData;
+          setUserVehicles([vObj]);
+          setSelectedVehicle(vObj);
+        }
+      } catch (err) {
+        console.warn('Failed to load driver vehicles:', err);
+      }
+    })();
+  }, []);
+
+  // Edit Ride Modal State
+  const [editingRide, setEditingRide] = useState<any | null>(null);
+  const [editPrice, setEditPrice] = useState('');
+  const [editSeats, setEditSeats] = useState('');
+  const [editDepartureTime, setEditDepartureTime] = useState('');
 
   const isDriverMode = user?.role === 'driver' && user?.kycVerified === true;
 
@@ -83,20 +172,17 @@ export default function HomeScreen() {
     completeProfile({ role: 'passenger' });
   };
 
-  // Auto-calculated Route Corridor for Driver Post
-  const fullRouteCorridor = getAutoRouteCorridor(pointA, pointB, LANDMARKS);
-
-  const handleCreateOffer = () => {
-    if (!pointA || !pointA.trim()) {
-      Alert.alert('Missing Start', 'Please enter your Starting Location.');
+  const handleCreateOffer = async () => {
+    if (!selectedVehicle) {
+      Alert.alert('Missing Vehicle', 'Please select or register a vehicle first.');
       return;
     }
-    if (!pointB || !pointB.trim()) {
-      Alert.alert('Missing Destination', 'Please enter your Destination Location.');
+    if (!origin.coords || !origin.text.trim()) {
+      Alert.alert('Missing Origin', 'Please select a starting location from the dropdown suggestions.');
       return;
     }
-    if (pointA.trim().toLowerCase() === pointB.trim().toLowerCase()) {
-      Alert.alert('Invalid Route', 'Starting Location and Destination cannot be the same.');
+    if (!destination.coords || !destination.text.trim()) {
+      Alert.alert('Missing Destination', 'Please select a destination location from the dropdown suggestions.');
       return;
     }
 
@@ -105,59 +191,68 @@ export default function HomeScreen() {
       Alert.alert('Invalid Price', 'Please enter a valid price in NPR per seat.');
       return;
     }
-    const parsedSeats = parseInt(seatsLeft, 10);
-    if (isNaN(parsedSeats) || parsedSeats <= 0) {
-      Alert.alert('Invalid Seats', 'Please offer at least 1 seat.');
+
+    if (!departureTime || !departureTime.trim()) {
+      Alert.alert('Missing Departure Time', 'Please enter a departure time.');
       return;
     }
 
-    createRide({
-      vehicleType: user?.vehicleType || 'bike',
-      vehicleName: user?.vehicleName || 'Royal Enfield Classic 350',
-      vehicleNumber: user?.vehicleNumber || 'LU 1 PA 7788',
-      departureTime: departureTime || 'Leaving soon',
-      seatsLeft: parsedSeats,
+    // Ride publishing is coming soon — API integration being rebuilt
+    Alert.alert(
+      'Coming Soon 🚧',
+      'Ride publishing will be available soon. Your route details have been saved locally.',
+      [{ text: 'OK' }]
+    );
+
+  };
+
+  const handleOpenEditRide = (ride: any) => {
+    setEditingRide(ride);
+    setEditPrice(String(ride.price));
+    setEditSeats(String(ride.seatsLeft));
+    setEditDepartureTime(ride.departureTime || '');
+  };
+
+  const handleSaveEditRide = () => {
+    if (!editingRide) return;
+    const parsedPrice = parseFloat(editPrice);
+    if (isNaN(parsedPrice) || parsedPrice <= 0) {
+      Alert.alert('Invalid Price', 'Please enter a valid price.');
+      return;
+    }
+    const parsedSeats = parseInt(editSeats, 10);
+    if (isNaN(parsedSeats) || parsedSeats < 0) {
+      Alert.alert('Invalid Seats', 'Please enter valid available seats.');
+      return;
+    }
+
+    updateRide(editingRide.id, {
       price: parsedPrice,
-      route: fullRouteCorridor,
-      pickupPoint: `${pointA} Main Stop`,
+      seatsLeft: parsedSeats,
+      departureTime: editDepartureTime || 'Leaving soon',
     });
 
+    setEditingRide(null);
+    Alert.alert('Ride Updated', 'Your ride offer details have been updated.');
+  };
+
+  const handleDeleteRide = (rideId: string) => {
     Alert.alert(
-      'Route Offer Live! 🎉',
-      `Your route offer from ${pointA} to ${pointB} (${fullRouteCorridor.join(' → ')}) is now live for passenger matching!`,
+      'Delete Ride Offer?',
+      'Are you sure you want to cancel and delete this active ride offer?',
       [
+        { text: 'Cancel', style: 'cancel' },
         {
-          text: 'View Driver Activity',
-          onPress: () => router.push('/activity'),
+          text: 'Delete',
+          style: 'destructive',
+          onPress: () => {
+            deleteRide(rideId);
+            Alert.alert('Ride Deleted', 'The ride offer has been removed.');
+          },
         },
       ]
     );
   };
-
-  // Map Coordinates Helper
-  const resolveLandmarkCoord = (name: string, fallbackName: string) => {
-    const cleanName = name.trim().toLowerCase();
-    const matched = Object.entries(LANDMARKS).find(([key]) =>
-      key.toLowerCase().includes(cleanName) || cleanName.includes(key.toLowerCase())
-    );
-    if (matched) return { latitude: matched[1].latitude, longitude: matched[1].longitude };
-    const fallback = LANDMARKS[fallbackName] || LANDMARKS['Butwal'] || LANDMARKS['Kalanki'];
-    return { latitude: fallback.latitude, longitude: fallback.longitude };
-  };
-
-  const startCoord = resolveLandmarkCoord(pointA, 'Butwal');
-  const endCoord = resolveLandmarkCoord(pointB, 'Bhairahawa');
-  const driverCurrentLocation = {
-    latitude: startCoord.latitude + 0.002,
-    longitude: startCoord.longitude + 0.002,
-  };
-  const waypointCoords = fullRouteCorridor
-    .slice(1, -1)
-    .map((name) => ({
-      coordinate: resolveLandmarkCoord(name, 'Tilottama'),
-      title: name,
-    }));
-
   return (
     <View style={styles.safeArea}>
       {/* ── DRIVER MODE WORKSPACE: POST ROUTE SCREEN ── */}
@@ -166,59 +261,20 @@ export default function HomeScreen() {
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          {/* Driver Mode Header Bar */}
+          {/* Header with Notification Icon on Right (White background) */}
           <View style={styles.driverHeaderBar}>
-            <View style={styles.driverBadgePill}>
-              <Ionicons name="car-sport" size={16} color="#FFF" />
-              <Text style={styles.driverBadgeTitle}>Driver Workspace</Text>
-            </View>
-
-            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 10 }}>
-              <TouchableOpacity
-                style={styles.driverNotifBell}
-                onPress={() => router.push('/notifications')}
-              >
-                <Ionicons name="notifications-outline" size={20} color="#FFF" />
-                {unreadDriverNotifCount > 0 && (
-                  <View style={styles.driverNotifBadge}>
-                    <Text style={styles.driverNotifBadgeText}>{unreadDriverNotifCount}</Text>
-                  </View>
-                )}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.switchModePill}
-                onPress={handleSwitchToPassenger}
-              >
-                <Ionicons name="swap-horizontal" size={16} color={Colors.primary} />
-                <Text style={styles.switchModeText}>Passenger Mode</Text>
-              </TouchableOpacity>
-            </View>
-          </View>
-
-          {/* Interactive Map View */}
-          <View style={[styles.mapContainer, isMapExpanded && { height: 380 }]}>
-            <RouteMap
-              startCoord={startCoord}
-              endCoord={endCoord}
-              startTitle={pointA}
-              endTitle={pointB}
-              driverLocation={driverCurrentLocation}
-              waypoints={waypointCoords}
-              vehicleType={user?.vehicleType || 'bike'}
-              strokeColor="#C62026"
-              showControls={true}
-            />
-
-            <View style={styles.mapBadgeOverlay}>
-              <View style={styles.driverDotRed} />
-              <Text style={styles.mapBadgeText} numberOfLines={1}>
-                Driver Route Corridor: {fullRouteCorridor.join(' → ')}
-              </Text>
-              <TouchableOpacity onPress={() => setIsMapExpanded(!isMapExpanded)}>
-                <Ionicons name={isMapExpanded ? 'contract' : 'expand'} size={18} color="#FFF" />
-              </TouchableOpacity>
-            </View>
+            <View style={{ flex: 1 }} />
+            <TouchableOpacity
+              style={styles.driverNotifBell}
+              onPress={() => router.push('/notifications')}
+            >
+              <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
+              {unreadDriverNotifCount > 0 && (
+                <View style={styles.driverNotifBadge}>
+                  <Text style={styles.driverNotifBadgeText}>{unreadDriverNotifCount}</Text>
+                </View>
+              )}
+            </TouchableOpacity>
           </View>
 
           {/* Post Route Form */}
@@ -227,72 +283,125 @@ export default function HomeScreen() {
             contentContainerStyle={styles.driverScrollContent}
             showsVerticalScrollIndicator={false}
           >
-            <View style={styles.driverInfoCard}>
-              <View style={styles.avatarCircle}>
-                <Ionicons name="shield-checkmark" size={22} color={Colors.success} />
+            {/* ── Vehicle Selection Dropdown Menu ── */}
+            <Text style={styles.inputLabel}>Select Your Vehicle *</Text>
+            {userVehicles.length > 0 ? (
+              <View style={{ marginBottom: 16 }}>
+                {/* Dropdown Header Trigger */}
+                <TouchableOpacity
+                  style={[styles.locationInputBoxRow, { justifyContent: 'space-between', paddingRight: 12 }]}
+                  onPress={() => setIsVehicleDropdownOpen(!isVehicleDropdownOpen)}
+                  activeOpacity={0.8}
+                >
+                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
+                    <Ionicons name="car-sport-outline" size={20} color={Colors.primary} />
+                    <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.textPrimary }} numberOfLines={1}>
+                      {selectedVehicle
+                        ? `${selectedVehicle.vehicleModelName} (${selectedVehicle.vehicleNumber})`
+                        : 'Select a vehicle...'}
+                    </Text>
+                  </View>
+                  <Ionicons
+                    name={isVehicleDropdownOpen ? 'chevron-up' : 'chevron-down'}
+                    size={20}
+                    color={Colors.textMuted}
+                  />
+                </TouchableOpacity>
+
+                {/* Dropdown Options List */}
+                {isVehicleDropdownOpen && (
+                  <View style={[styles.autocompleteDropdown, { marginTop: 4 }]}>
+                    {userVehicles.map(v => {
+                      const isSelected = selectedVehicle?.id === v.id || selectedVehicle?.vehicleNumber === v.vehicleNumber;
+                      return (
+                        <TouchableOpacity
+                          key={v.id || v.vehicleNumber}
+                          style={[styles.autocompleteItem, isSelected && { backgroundColor: Colors.surface }]}
+                          onPress={() => {
+                            setSelectedVehicle(v);
+                            setIsVehicleDropdownOpen(false);
+                          }}
+                          activeOpacity={0.8}
+                        >
+                          <Ionicons
+                            name="car-sport"
+                            size={18}
+                            color={isSelected ? Colors.primary : Colors.textMuted}
+                          />
+                          <View style={{ flex: 1 }}>
+                            <Text style={[styles.autocompleteMainText, isSelected && { color: Colors.primary, fontWeight: '800' }]}>
+                              {v.vehicleModelName}
+                            </Text>
+                            <Text style={styles.autocompleteSubText}>
+                              License Plate: {v.vehicleNumber}
+                            </Text>
+                          </View>
+                          {isSelected && (
+                            <Ionicons name="checkmark-circle" size={18} color={Colors.primary} />
+                          )}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
               </View>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.driverWelcome}>Verified Driver: {user?.name || 'Driver'}</Text>
-                <Text style={styles.vehicleMeta}>
-                  {user?.vehicleName || 'Vehicle'} • {user?.vehicleNumber || 'Plate Number'}
-                </Text>
+            ) : (
+              <View style={[styles.noVehicleCard, { marginBottom: 16 }]}>
+                <Ionicons name="alert-circle-outline" size={22} color={Colors.warning} />
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.noVehicleTitle}>No Vehicles Available</Text>
+                  <Text style={styles.noVehicleSub}>Add a vehicle from Profile → Settings → My Vehicles</Text>
+                </View>
               </View>
-            </View>
+            )}
 
-            {/* Starting Location */}
-            <Text style={styles.inputLabel}>Starting Location</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons name="location-outline" size={20} color="#2563EB" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Butwal, Kalanki"
-                placeholderTextColor={Colors.textMuted}
-                value={pointA}
-                onChangeText={setPointA}
-              />
-            </View>
+            {/* 2. Starting Location (Origin) */}
+            <LocationSearchInput
+              label="Starting Location (Origin) *"
+              placeholder="Search origin in Nepal (e.g. Kalanki, Butwal)..."
+              value={origin.text}
+              onChangeText={handleOriginChange}
+              suggestions={originSuggestions}
+              onSelectSuggestion={selectOriginSuggestion}
+              isSearching={isSearchingOrigin}
+              showNotFound={showOriginNotFound}
+              onOpenPinPicker={() => openPinPicker('origin')}
+              iconName="disc-outline"
+              iconColor="#16A34A"
+              useGpsButton={true}
+              isFetchingGPS={isFetchingOriginGPS}
+              onUseGpsLocation={useCurrentLocationForOrigin}
+            />
 
-            {/* Destination Location */}
-            <Text style={styles.inputLabel}>Destination Location</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons name="flag-sharp" size={20} color="#DC2626" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Bhairahawa, Koteshwor"
-                placeholderTextColor={Colors.textMuted}
-                value={pointB}
-                onChangeText={setPointB}
-              />
-            </View>
+            {/* 3. Destination Location */}
+            <LocationSearchInput
+              label="Destination Location *"
+              placeholder="Search destination in Nepal (e.g. Bhairahawa, Koteshwor)..."
+              value={destination.text}
+              onChangeText={handleDestChange}
+              suggestions={destSuggestions}
+              onSelectSuggestion={selectDestSuggestion}
+              isSearching={isSearchingDest}
+              showNotFound={showDestNotFound}
+              onOpenPinPicker={() => openPinPicker('destination')}
+              iconName="location-sharp"
+              iconColor="#DC2626"
+            />
 
-            {/* Auto Corridor Summary */}
-            <View style={styles.autoCorridorCard}>
-              <View style={styles.autoCorridorHeader}>
-                <Ionicons name="git-merge-outline" size={18} color={Colors.primary} />
-                <Text style={styles.autoCorridorTitle}>Auto-Detected Corridor</Text>
-              </View>
-              <Text style={styles.routeSummaryText}>{fullRouteCorridor.join('  ➔  ')}</Text>
-            </View>
-
-            {/* Seats Offered & Price */}
+            {/* 4 & 5. Available Seats (Read-only) & Price per Seat */}
             <View style={styles.rowInputs}>
               <View style={{ flex: 1 }}>
                 <Text style={styles.inputLabel}>Available Seats</Text>
-                <View style={styles.inputContainer}>
-                  <Ionicons name="people-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
-                  <TextInput
-                    style={styles.input}
-                    placeholder="1"
-                    placeholderTextColor={Colors.textMuted}
-                    value={seatsLeft}
-                    onChangeText={setSeatsLeft}
-                    keyboardType="numeric"
-                  />
+                <View style={[styles.inputContainer, { backgroundColor: '#F1F5F9' }]}>
+                  <Ionicons name="person" size={18} color={Colors.textMuted} style={styles.inputIcon} />
+                  <Text style={[styles.input, { paddingTop: 14, color: Colors.textMuted, fontWeight: '700' }]}>
+                    Seats: 1
+                  </Text>
                 </View>
               </View>
 
               <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Price / Seat (NPR)</Text>
+                <Text style={styles.inputLabel}>Price / Seat (NPR) *</Text>
                 <View style={styles.inputContainer}>
                   <Text style={styles.currencyPrefix}>Rs.</Text>
                   <TextInput
@@ -307,8 +416,8 @@ export default function HomeScreen() {
               </View>
             </View>
 
-            {/* Departure Time */}
-            <Text style={styles.inputLabel}>Departure Time</Text>
+            {/* 6. Departure Time */}
+            <Text style={styles.inputLabel}>Departure Time *</Text>
             <View style={styles.inputContainer}>
               <Ionicons name="time-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
               <TextInput
@@ -320,11 +429,74 @@ export default function HomeScreen() {
               />
             </View>
 
-            {/* Confirm & Publish Button */}
-            <TouchableOpacity style={styles.createButton} onPress={handleCreateOffer} activeOpacity={0.9}>
-              <Text style={styles.createText}>Publish Route Offer</Text>
-              <Ionicons name="paper-plane" size={18} color="#FFF" />
-            </TouchableOpacity>
+            {/* 7. Confirm & Publish Button */}
+            {(() => {
+              const isValid = Boolean(
+                selectedVehicle &&
+                origin.coords &&
+                destination.coords &&
+                price.trim() &&
+                departureTime.trim()
+              );
+              return (
+                <TouchableOpacity
+                  style={[
+                    styles.createButton,
+                    (!isValid || isCalculatingRoute) && { backgroundColor: '#94A3B8', opacity: 0.75 },
+                  ]}
+                  onPress={handleCreateOffer}
+                  disabled={!isValid || isCalculatingRoute}
+                  activeOpacity={0.9}
+                >
+                  {isCalculatingRoute ? (
+                    <Text style={styles.createText}>Calculating Route Directions...</Text>
+                  ) : (
+                    <>
+                      <Text style={styles.createText}>Publish Route Offer</Text>
+                      <Ionicons name="paper-plane" size={18} color="#FFF" />
+                    </>
+                  )}
+                </TouchableOpacity>
+              );
+            })()}
+
+            {/* Active Offered Rides List */}
+            {rides.filter(r => r.riderName === user?.name || r.phone === user?.phone).length > 0 && (
+              <View style={styles.myOffersSection}>
+                <Text style={styles.myOffersHeading}>Your Active Ride Offers</Text>
+                {rides.filter(r => r.riderName === user?.name || r.phone === user?.phone).map(ride => (
+                  <View key={ride.id} style={styles.myOfferCard}>
+                    <View style={styles.myOfferHeader}>
+                      <View style={{ flex: 1 }}>
+                        <Text style={styles.myOfferRoute} numberOfLines={1}>
+                          {ride.route.join(' → ')}
+                        </Text>
+                        <Text style={styles.myOfferSub}>
+                          {ride.vehicleName} • {ride.seatsLeft} seat(s) • NPR {ride.price}/seat
+                        </Text>
+                        <Text style={styles.myOfferTime}>{ride.departureTime}</Text>
+                      </View>
+                    </View>
+                    <View style={styles.myOfferActions}>
+                      <TouchableOpacity
+                        style={styles.editOfferBtn}
+                        onPress={() => handleOpenEditRide(ride)}
+                      >
+                        <Ionicons name="create-outline" size={16} color={Colors.primary} />
+                        <Text style={styles.editOfferBtnText}>Edit</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.deleteOfferBtn}
+                        onPress={() => handleDeleteRide(ride.id)}
+                      >
+                        <Ionicons name="trash-outline" size={16} color="#DC2626" />
+                        <Text style={styles.deleteOfferBtnText}>Delete</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                ))}
+              </View>
+            )}
 
             <View style={{ height: 100 }} />
           </ScrollView>
@@ -397,14 +569,14 @@ export default function HomeScreen() {
                     {activeBooking.lifecycleState === 'request_pending'
                       ? 'RIDE REQUEST PENDING'
                       : activeBooking.lifecycleState === 'waiting_for_pickup' || activeBooking.lifecycleState === 'pickup_otp_required'
-                      ? 'DRIVER ARRIVING AT PICKUP'
-                      : activeBooking.lifecycleState === 'ride_started'
-                      ? 'LIVE RIDE IN PROGRESS'
-                      : activeBooking.lifecycleState === 'completion_otp_required'
-                      ? 'ARRIVED AT DESTINATION'
-                      : activeBooking.lifecycleState === 'payment_pending'
-                      ? 'PAYMENT PENDING'
-                      : 'RATE YOUR DRIVER'}
+                        ? 'DRIVER ARRIVING AT PICKUP'
+                        : activeBooking.lifecycleState === 'ride_started'
+                          ? 'LIVE RIDE IN PROGRESS'
+                          : activeBooking.lifecycleState === 'completion_otp_required'
+                            ? 'ARRIVED AT DESTINATION'
+                            : activeBooking.lifecycleState === 'payment_pending'
+                              ? 'PAYMENT PENDING'
+                              : 'RATE YOUR DRIVER'}
                   </Text>
                 </View>
 
@@ -417,10 +589,10 @@ export default function HomeScreen() {
                     {activeBooking.lifecycleState === 'request_pending'
                       ? 'Waiting for driver response...'
                       : activeBooking.lifecycleState === 'pickup_otp_required'
-                      ? 'Pickup OTP: 4821'
-                      : activeBooking.lifecycleState === 'completion_otp_required'
-                      ? 'Completion OTP: 7392'
-                      : 'Tap to continue active ride'}
+                        ? 'Pickup OTP: 4821'
+                        : activeBooking.lifecycleState === 'completion_otp_required'
+                          ? 'Completion OTP: 7392'
+                          : 'Tap to continue active ride'}
                   </Text>
                   <View style={styles.continueButton}>
                     <Text style={styles.continueButtonText}>Continue Ride →</Text>
@@ -589,6 +761,153 @@ export default function HomeScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Edit Ride Modal */}
+      <Modal
+        visible={!!editingRide}
+        transparent={true}
+        animationType="slide"
+        onRequestClose={() => setEditingRide(null)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalContent}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Edit Ride Offer</Text>
+              <TouchableOpacity onPress={() => setEditingRide(null)}>
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <ScrollView showsVerticalScrollIndicator={false} style={styles.modalScroll}>
+              <Text style={styles.inputLabel}>Price / Seat (NPR)</Text>
+              <View style={styles.inputContainer}>
+                <Text style={styles.currencyPrefix}>Rs.</Text>
+                <TextInput
+                  style={styles.input}
+                  placeholder="Price per seat"
+                  value={editPrice}
+                  onChangeText={setEditPrice}
+                  keyboardType="numeric"
+                />
+              </View>
+
+              <Text style={styles.inputLabel}>Available Seats</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons name="people-outline" size={18} color={Colors.textMuted} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Available seats"
+                  value={editSeats}
+                  onChangeText={setEditSeats}
+                  keyboardType="numeric"
+                />
+              </View>
+
+              <Text style={styles.inputLabel}>Departure Time</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons name="time-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Departure time"
+                  value={editDepartureTime}
+                  onChangeText={setEditDepartureTime}
+                />
+              </View>
+
+              <TouchableOpacity style={styles.createButton} onPress={handleSaveEditRide} activeOpacity={0.9}>
+                <Text style={styles.createText}>Save Changes</Text>
+              </TouchableOpacity>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── 📍 FULL SCREEN PIN PICKER FALLBACK MAP MODAL ── */}
+      <Modal
+        visible={pinPickerModalOpen}
+        animationType="slide"
+        transparent={false}
+        onRequestClose={closePinPicker}
+      >
+        <View style={styles.pinPickerContainer}>
+          <View style={styles.pinPickerHeader}>
+            <TouchableOpacity onPress={closePinPicker} style={styles.pinPickerBackBtn}>
+              <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
+            </TouchableOpacity>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.pinPickerTitle}>
+                Set {pinPickerTargetType === 'origin' ? 'Origin' : 'Destination'} Pin
+              </Text>
+              <Text style={styles.pinPickerSub}>Drag or tap on map to confirm exact location</Text>
+            </View>
+          </View>
+
+          {/* Pin Picker Content Body */}
+          <View style={{ flex: 1, position: 'relative' }}>
+            {/* Quick Location Chips */}
+            <View style={styles.pinQuickChipsRow}>
+              <Text style={styles.quickChipHeading}>Quick Locations in Nepal:</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
+                {[
+                  { name: 'Kathmandu Center', lat: 27.7172, lng: 85.3240 },
+                  { name: 'Kalanki Chok', lat: 27.6938, lng: 85.2817 },
+                  { name: 'Butwal Highway', lat: 27.7006, lng: 83.4484 },
+                  { name: 'Bhairahawa Station', lat: 27.5065, lng: 83.4485 },
+                  { name: 'Harkatta Chok', lat: 27.6500, lng: 83.5000 },
+                ].map(item => (
+                  <TouchableOpacity
+                    key={item.name}
+                    style={styles.pinQuickChip}
+                    onPress={() => setDraggedPinCoords({ lat: item.lat, lng: item.lng })}
+                  >
+                    <Ionicons name="location" size={14} color={Colors.primary} />
+                    <Text style={styles.pinQuickChipText}>{item.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* Interactive Map View */}
+            <LocationPinPickerMap
+              initialLocation={draggedPinCoords}
+              targetType={pinPickerTargetType}
+              onConfirmPin={(coords, placeName) => {
+                setDraggedPinCoords(prev => {
+                  const next = { ...coords };
+                  if (placeName) {
+                    (next as any).placeName = placeName;
+                  } else if (prev && (prev as any).placeName) {
+                    (next as any).placeName = (prev as any).placeName;
+                  }
+                  return next;
+                });
+              }}
+              quickLocations={[
+                { name: 'Kathmandu Center', lat: 27.7172, lng: 85.3240 },
+                { name: 'Kalanki Chok', lat: 27.6938, lng: 85.2817 },
+                { name: 'Butwal Highway', lat: 27.7006, lng: 83.4484 },
+                { name: 'Bhairahawa Station', lat: 27.5065, lng: 83.4485 },
+                { name: 'Harkatta Chok', lat: 27.6500, lng: 83.5000 },
+              ]}
+            />
+          </View>
+
+          <View style={styles.pinPickerFooter}>
+            <TouchableOpacity
+              style={styles.confirmPinBtn}
+              onPress={() => {
+                if (draggedPinCoords) {
+                  const placeName = (draggedPinCoords as any).placeName || `Pin (${draggedPinCoords.lat.toFixed(4)}, ${draggedPinCoords.lng.toFixed(4)})`;
+                  confirmPinLocation(draggedPinCoords, placeName);
+                }
+              }}
+            >
+              <Text style={styles.confirmPinBtnText}>Confirm Location Pin</Text>
+              <Ionicons name="checkmark-circle" size={20} color="#FFF" />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -624,7 +943,9 @@ const styles = StyleSheet.create({
     justifyContent: 'space-between',
     paddingHorizontal: 16,
     paddingVertical: 10,
-    backgroundColor: Colors.primary,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
   },
   driverBadgePill: {
     flexDirection: 'row',
@@ -724,7 +1045,7 @@ const styles = StyleSheet.create({
     resizeMode: 'cover',
   },
   heroOverlay: {
-    ...StyleSheet.absoluteFillObject,
+    ...StyleSheet.absoluteFill,
     backgroundColor: 'rgba(255, 255, 255, 0.55)',
   },
   heroTextContainer: {
@@ -1175,6 +1496,423 @@ const styles = StyleSheet.create({
   continueButtonText: {
     color: '#FFFFFF',
     fontSize: 12,
+    fontWeight: 'bold',
+  },
+  vehicleCardPill: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F1F5F9',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+    marginRight: 10,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    gap: 10,
+  },
+  vehicleCardPillSelected: {
+    backgroundColor: Colors.primary,
+    borderColor: Colors.primary,
+  },
+  vehiclePillTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  vehiclePillTitleSelected: {
+    color: '#FFFFFF',
+  },
+  vehiclePillSub: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  vehiclePillSubSelected: {
+    color: '#E2E8F0',
+  },
+  noVehicleCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFF1F2',
+    borderWidth: 1,
+    borderColor: '#FECDD3',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+    gap: 10,
+  },
+  noVehicleTitle: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: '#9F1239',
+  },
+  noVehicleSub: {
+    fontSize: 11,
+    color: '#BE123C',
+    marginTop: 2,
+  },
+  locationSelectorCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#CBD5E1',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 12,
+    gap: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  labelWithActionRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 10,
+    marginBottom: 6,
+  },
+  liveLocationBadgeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    gap: 4,
+  },
+  liveLocationBadgeText: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  locationInputBoxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 12,
+    height: 48,
+    paddingHorizontal: 12,
+    marginBottom: 12,
+  },
+  quickPickModalBtn: {
+    padding: 6,
+    borderRadius: 8,
+    backgroundColor: '#F1F5F9',
+    marginLeft: 8,
+  },
+  locationCardTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  locationCardSub: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  modalSubheading: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginBottom: 14,
+    lineHeight: 16,
+  },
+  landmarkOptionCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 10,
+    gap: 12,
+  },
+  landmarkOptionCardSelected: {
+    backgroundColor: '#EFF6FF',
+    borderColor: Colors.primary,
+  },
+  landmarkOptionTitle: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  landmarkOptionCoords: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  myOffersSection: {
+    marginTop: 24,
+    gap: 12,
+  },
+  myOffersHeading: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  myOfferCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  myOfferHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    justifyContent: 'space-between',
+  },
+  myOfferRoute: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: Colors.primary,
+    marginBottom: 4,
+  },
+  myOfferSub: {
+    fontSize: 13,
+    color: Colors.textPrimary,
+    fontWeight: '600',
+  },
+  myOfferTime: {
+    fontSize: 12,
+    color: Colors.success,
+    fontWeight: '600',
+    marginTop: 2,
+  },
+  myOfferActions: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    justifyContent: 'flex-end',
+  },
+  editOfferBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#EFF6FF',
+  },
+  editOfferBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  deleteOfferBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+  },
+  deleteOfferBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  autocompleteDropdown: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginTop: -8,
+    marginBottom: 12,
+    overflow: 'hidden',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+    zIndex: 99,
+  },
+  autocompleteItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  autocompleteMainText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  autocompleteSubText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  searchingText: {
+    fontSize: 11,
+    color: Colors.primary,
+    fontWeight: '700',
+    fontStyle: 'italic',
+    paddingRight: 6,
+  },
+  cantFindBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    backgroundColor: '#EFF6FF',
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#BFDBFE',
+    marginTop: -4,
+    marginBottom: 14,
+  },
+  cantFindText: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  pinPickerContainer: {
+    flex: 1,
+    backgroundColor: '#F8FAFC',
+  },
+  pinPickerHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    paddingHorizontal: 16,
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    paddingBottom: 16,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  pinPickerBackBtn: {
+    padding: 6,
+    borderRadius: 20,
+    backgroundColor: '#F1F5F9',
+  },
+  pinPickerTitle: {
+    fontSize: 16,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  pinPickerSub: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  pinPickerMapArea: {
+    flex: 1,
+    position: 'relative',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#E2E8F0',
+  },
+  mapMockBackground: {
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  mapMockTitle: {
+    fontSize: 16,
+    fontWeight: '800',
+    color: '#475569',
+    marginTop: 8,
+  },
+  mapMockCoords: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.primary,
+    marginTop: 4,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+    borderRadius: 12,
+  },
+  pinQuickChipsRow: {
+    position: 'absolute',
+    top: 16,
+    left: 16,
+    right: 16,
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  quickChipHeading: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    marginBottom: 8,
+  },
+  pinQuickChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  pinQuickChipText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.textPrimary,
+  },
+  floatingCenterPin: {
+    position: 'absolute',
+    top: '44%',
+    alignSelf: 'center',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 5,
+  },
+  pinPickerFooter: {
+    padding: 16,
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  confirmPinBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: 14,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.2,
+    shadowRadius: 8,
+    elevation: 4,
+  },
+  confirmPinBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
     fontWeight: 'bold',
   },
 });

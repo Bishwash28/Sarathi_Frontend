@@ -149,7 +149,7 @@ export default function TabLayout() {
   return (
     <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top']}>
       <Tabs
-        tabBar={(props) => <CustomTabBar {...props} isDriver={isDriverMode} />}
+        tabBar={(props: any) => <CustomTabBar {...props} isDriver={isDriverMode} />}
         screenOptions={{
           headerShown: false,
         }}

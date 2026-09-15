@@ -7,7 +7,14 @@ import { supabase } from '../lib/supabase';
 import {
   triggerMobilePushNotification
 } from '../services/notificationService';
-import { deleteUser, getUser, loginUser, signupUser, updateUser, switchRole, uploadKycDocument, verifyKycStatus } from '../services/userService';
+// NOTE: rideService and bookingService API calls are intentionally disabled.
+// Ride/booking functionality is being rebuilt — these will be re-enabled in a later pass.
+import { deleteUser, getUser, loginUser, signupUser, switchRole, updateUser, uploadKycDocument, verifyKycStatus } from '../services/userService';
+
+import * as Linking from 'expo-linking';
+import * as WebBrowser from 'expo-web-browser';
+
+WebBrowser.maybeCompleteAuthSession();
 
 export interface DriverNotificationItem {
   id: string;
@@ -49,27 +56,6 @@ export type RideLifecycleState =
   | 'completed'
   | 'cancelled';
 
-// Landmark coordinates on our map & GPS grid (Butwal and surrounding areas)
-export interface Landmark {
-  name: string;
-  x: number; // percentage width on map canvas (0-100)
-  y: number; // percentage height on map canvas (0-100)
-  latitude: number;
-  longitude: number;
-}
-
-export const LANDMARKS: Record<string, Landmark> = {
-  'Butwal': { name: 'Butwal', x: 20, y: 30, latitude: 27.7006, longitude: 83.4484 },
-  'Golpark': { name: 'Golpark', x: 25, y: 35, latitude: 27.7050, longitude: 83.4520 },
-  'Devinagar': { name: 'Devinagar', x: 30, y: 40, latitude: 27.6910, longitude: 83.4560 },
-  'Milanchowk': { name: 'Milanchowk', x: 35, y: 45, latitude: 27.6850, longitude: 83.4600 },
-  'Yogikuti': { name: 'Yogikuti', x: 42, y: 50, latitude: 27.6750, longitude: 83.4660 },
-  'Drivertole': { name: 'Drivertole', x: 48, y: 55, latitude: 27.6620, longitude: 83.4690 },
-  'Tilottama': { name: 'Tilottama', x: 55, y: 62, latitude: 27.6500, longitude: 83.4720 },
-  'Manigram': { name: 'Manigram', x: 65, y: 70, latitude: 27.6300, longitude: 83.4750 },
-  'Kotihawa': { name: 'Kotihawa', x: 75, y: 80, latitude: 27.5800, longitude: 83.4500 },
-  'Bhairahawa': { name: 'Bhairahawa', x: 85, y: 90, latitude: 27.5020, longitude: 83.4510 },
-};
 
 export interface Ride {
   id: string;
@@ -85,6 +71,10 @@ export interface Ride {
   price: number;
   route: string[]; // Landmark names
   pickupPoint: string;
+  origin?: { lat: number; lng: number };
+  destination?: { lat: number; lng: number };
+  ecodedPolyLine?: string;
+  vehicleId?: string;
 }
 
 export interface Booking {
@@ -135,6 +125,7 @@ interface UserProfile {
   rating: number;
   photo: string;
   kycVerified?: boolean;
+  kycStatus?: 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED';
   nid?: string;
   vehicleType?: 'bike' | 'scooter';
   vehicleName?: string;
@@ -165,6 +156,7 @@ interface AppContextType {
   activeTripProgress: number; // 0 to 100 representing percentage along route
   activeTripCoords: { x: number; y: number } | null;
   login: (email: string, password?: string) => Promise<{ success: boolean; error?: string }>;
+  loginWithGoogle: () => Promise<{ success: boolean; error?: string }>;
   signup: (profile: Partial<UserProfile> & { password?: string }) => Promise<{ success: boolean; error?: string }>;
   completeProfile: (profile: Partial<UserProfile>) => void;
   updateEmergencyContact: (contact: string) => void;
@@ -190,6 +182,8 @@ interface AppContextType {
   processPayment: (bookingId: string, method: 'cash' | 'khalti' | 'esewa') => { success: boolean; error?: string };
   submitRideRating: (bookingId: string, rating: number, comment?: string) => void;
   createRide: (ride: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => void;
+  updateRide: (id: string, updatedFields: Partial<Omit<Ride, 'id'>>) => void;
+  deleteRide: (id: string) => void;
   acceptBooking: (bookingId: string) => void;
   declineBooking: (bookingId: string) => void;
   logout: () => Promise<void>;
@@ -197,128 +191,13 @@ interface AppContextType {
 
 const AppContext = createContext<AppContextType | undefined>(undefined);
 
-const initialRides: Ride[] = [
-  {
-    id: 'ride-1',
-    riderName: 'Anish Shrestha',
-    riderPhoto: 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
-    phone: '+9779841234567',
-    rating: 4.9,
-    vehicleType: 'scooter',
-    vehicleName: 'Vespa VXL 150',
-    vehicleNumber: 'LU 1 PA 1234',
-    departureTime: 'Leaving in 5 mins',
-    seatsLeft: 1,
-    price: 150,
-    route: ['Butwal', 'Golpark', 'Devinagar', 'Tilottama', 'Manigram', 'Bhairahawa'],
-    pickupPoint: 'Butwal Bus Park Main Gate',
-  },
-  {
-    id: 'ride-2',
-    riderName: 'Bibek Gurung',
-    riderPhoto: 'https://images.unsplash.com/photo-1599566150163-29194dcaad36?auto=format&fit=crop&w=200&h=200&q=80',
-    phone: '+9779851098765',
-    rating: 4.6,
-    vehicleType: 'scooter',
-    vehicleName: 'Honda Activa 6G',
-    vehicleNumber: 'LU 2 PA 5678',
-    departureTime: 'Leaving in 10 mins',
-    seatsLeft: 1,
-    price: 120,
-    route: ['Butwal', 'Milanchowk', 'Yogikuti', 'Drivertole', 'Tilottama'],
-    pickupPoint: 'Milanchowk Highway Stop',
-  },
-  {
-    id: 'ride-3',
-    riderName: 'Sita Sharma',
-    riderPhoto: 'https://images.unsplash.com/photo-1494790108377-be9c29b29330?auto=format&fit=crop&w=200&h=200&q=80',
-    phone: '+9779860112233',
-    rating: 4.8,
-    vehicleType: 'bike',
-    vehicleName: 'Yamaha FZS V3',
-    vehicleNumber: 'LU 3 PA 9012',
-    departureTime: 'Leaving in 15 mins',
-    seatsLeft: 1,
-    price: 200,
-    route: ['Golpark', 'Devinagar', 'Yogikuti', 'Manigram', 'Bhairahawa'],
-    pickupPoint: 'Golpark Traffic Chowk',
-  },
-  {
-    id: 'ride-4',
-    riderName: 'Rajesh Thapa',
-    riderPhoto: 'https://images.unsplash.com/photo-1507003211169-0a1dd7228f2d?auto=format&fit=crop&w=200&h=200&q=80',
-    phone: '+9779812345678',
-    rating: 4.9,
-    vehicleType: 'bike',
-    vehicleName: 'Royal Enfield Classic 350',
-    vehicleNumber: 'LU 1 PA 7788',
-    departureTime: 'Leaving in 20 mins',
-    seatsLeft: 2,
-    price: 180,
-    route: ['Devinagar', 'Tilottama', 'Manigram', 'Kotihawa', 'Bhairahawa'],
-    pickupPoint: 'Devinagar Highway Gate',
-  },
-];
+const initialRides: Ride[] = [];
 
-const initialDriverMessages: Record<string, DriverMessage[]> = {
-  'ride-1': [
-    { id: 'dm-1-1', rideId: 'ride-1', sender: 'driver', text: 'Namaste! I am Anish. Are you waiting near Butwal Bus Park Gate?', timestamp: new Date(Date.now() - 300000) },
-    { id: 'dm-1-2', rideId: 'ride-1', sender: 'user', text: 'Yes, standing right near the main gate wearing a black jacket.', timestamp: new Date(Date.now() - 180000) },
-    { id: 'dm-1-3', rideId: 'ride-1', sender: 'driver', text: 'Great! Arriving in 2 minutes on Vespa VXL 150.', timestamp: new Date(Date.now() - 60000) },
-  ],
-  'ride-2': [
-    { id: 'dm-2-1', rideId: 'ride-2', sender: 'driver', text: 'Hi! Bibek here. Starting from Milanchowk in 10 mins.', timestamp: new Date(Date.now() - 600000) },
-  ],
-  'ride-3': [
-    { id: 'dm-3-1', rideId: 'ride-3', sender: 'driver', text: 'Namaste! Sita here, leaving Golpark Chowk shortly.', timestamp: new Date(Date.now() - 900000) },
-  ],
-  'ride-4': [
-    { id: 'dm-4-1', rideId: 'ride-4', sender: 'driver', text: 'Hi! Rajesh here on Royal Enfield. Let me know when you arrive.', timestamp: new Date(Date.now() - 1200000) },
-  ],
-};
+const initialDriverMessages: Record<string, DriverMessage[]> = {};
 
-const initialDriverNotifications: DriverNotificationItem[] = [
-  {
-    id: 'notif-1',
-    type: 'ride_request',
-    title: 'New Ride Request',
-    description: 'Ram requested a ride from Butwal → Bhairahawa',
-    timestamp: new Date(Date.now() - 120000),
-    isRead: false,
-    iconName: 'car-sport',
-    iconColor: '#2563EB',
-    targetScreen: '/activity',
-  },
-  {
-    id: 'notif-2',
-    type: 'kyc',
-    title: 'KYC Verification Approved',
-    description: 'Your driver identity and vehicle documents (LU 1 PA 7788) have been verified successfully.',
-    timestamp: new Date(Date.now() - 3600000),
-    isRead: false,
-    iconName: 'shield-checkmark',
-    iconColor: '#16A34A',
-    targetScreen: '/profile',
-  },
-  {
-    id: 'notif-3',
-    type: 'announcement',
-    title: 'System Announcement',
-    description: 'Welcome to Sarathi Driver Workspace! Publish your route and split travel costs with passengers.',
-    timestamp: new Date(Date.now() - 86400000),
-    isRead: true,
-    iconName: 'notifications',
-    iconColor: '#F59E0B',
-    targetScreen: '/index',
-  },
-];
+const initialDriverNotifications: DriverNotificationItem[] = [];
 
-const initialSavedPlaces: SavedPlaceItem[] = [
-  { id: 'sp-1', name: 'Butwal Hub', landmark: 'Butwal' },
-  { id: 'sp-2', name: 'Bhairahawa Station', landmark: 'Bhairahawa' },
-  { id: 'sp-3', name: 'Kalanki Junction', landmark: 'Kalanki' },
-  { id: 'sp-4', name: 'Koteshwor Stop', landmark: 'Koteshwor' },
-];
+const initialSavedPlaces: SavedPlaceItem[] = [];
 
 // ─── JWT decoder (no signature verification — client-side only) ──────────────
 /**
@@ -343,7 +222,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [user, setUser] = useState<UserProfile | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [authToken, setAuthToken] = useState<string | null>(null);
-  const [deviceLocation, setDeviceLocation] = useState<string>('Kalanki');
+  const [deviceLocation, setDeviceLocation] = useState<string>('');
   const [supabaseUser, setSupabaseUser] = useState<User | null>(null);
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
   const [recentSearches, setRecentSearches] = useState<RecentSearchItem[]>([]);
@@ -378,11 +257,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [bookings, setBookings] = useState<Booking[]>([]);
   const [driverNotifications, setDriverNotifications] = useState<DriverNotificationItem[]>(initialDriverNotifications);
   const [driverMessages, setDriverMessages] = useState<Record<string, DriverMessage[]>>(initialDriverMessages);
-  const [activeChatRideIds, setActiveChatRideIds] = useState<string[]>(['ride-1']);
-  const [notifications, setNotifications] = useState<string[]>([
-    'Your ride request with Sakar Aryal has been ACCEPTED!',
-    'Welcome to Sarathi! Set up your profile to start booking rides.',
-  ]);
+  const [activeChatRideIds, setActiveChatRideIds] = useState<string[]>([]);
+  const [notifications, setNotifications] = useState<string[]>([]);
   const [messages, setMessages] = useState<Message[]>([
     {
       id: 'msg-welcome',
@@ -412,11 +288,32 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           return;
         }
 
-        let location = await Location.getCurrentPositionAsync({});
-        let geocode = await Location.reverseGeocodeAsync({
-          latitude: location.coords.latitude,
-          longitude: location.coords.longitude,
-        });
+        let location = null;
+        try {
+          location = await Location.getCurrentPositionAsync({
+            accuracy: Location.Accuracy.Balanced,
+          });
+        } catch (locErr) {
+          console.warn('[AppContext] getCurrentPositionAsync failed, trying last known position:', locErr);
+          try {
+            location = await Location.getLastKnownPositionAsync();
+          } catch (lastLocErr) {
+            console.warn('[AppContext] getLastKnownPositionAsync also failed:', lastLocErr);
+          }
+        }
+
+        if (location) {
+          let geocode = await Location.reverseGeocodeAsync({
+            latitude: location.coords.latitude,
+            longitude: location.coords.longitude,
+          });
+          if (geocode && geocode.length > 0) {
+            const place = geocode[0];
+            const name = place.name || place.street || place.district || place.city || place.subregion || 'My Location';
+            setDeviceLocation(name);
+            await AsyncStorage.setItem('@device_location', name);
+          }
+        }
 
         const storedToken = await AsyncStorage.getItem('@sarathi_auth_token');
         const storedUserId = await AsyncStorage.getItem('@sarathi_user_id');
@@ -442,8 +339,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                 rating: prev?.rating ?? 5.0,
                 photo: userData.avatarUrl || prev?.photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
                 kycVerified: userData.kycVerified ?? prev?.kycVerified,
+                kycStatus: userData.kycStatus || (userData.kycVerified ? 'VERIFIED' : prev?.kycStatus),
               }));
             }
+            // Booking load from backend disabled — will be re-enabled when booking logic is rebuilt.
           } catch (err) {
             console.log('[AppContext] Failed to refresh user on startup:', err);
           }
@@ -499,107 +398,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  // Poll simulator for pending bookings
-  useEffect(() => {
-    const pendingBooking = bookings.find(b => b.status === 'pending');
-    if (pendingBooking) {
-      const timer = setTimeout(() => {
-        setBookings(prev =>
-          prev.map(b => {
-            if (b.id === pendingBooking.id) {
-              const ride = rides.find(r => r.id === b.rideId);
-              const startLandmark = ride ? LANDMARKS[ride.route[0]] : null;
-              return {
-                ...b,
-                status: 'accepted',
-                lifecycleState: 'waiting_for_pickup',
-                currentLat: startLandmark ? startLandmark.latitude : 27.6937,
-                currentLng: startLandmark ? startLandmark.longitude : 85.2817,
-              };
-            }
-            return b;
-          })
-        );
-        const ride = rides.find(r => r.id === pendingBooking.rideId);
-        const driverName = ride ? ride.riderName : 'Your driver';
-        setNotifications(prev => [`Your ride request with ${driverName} has been ACCEPTED!`, ...prev]);
-      }, 5000);
-      return () => clearTimeout(timer);
-    }
-  }, [bookings, rides]);
-
-  // GPS Simulation Loop
-  useEffect(() => {
-    const acceptedBooking = bookings.find(b => b.status === 'ongoing');
-    if (acceptedBooking) {
-      const ride = rides.find(r => r.id === acceptedBooking.rideId);
-      if (ride && ride.route.length > 1) {
-        if (tripIntervalRef.current) clearInterval(tripIntervalRef.current);
-
-        setActiveTripProgress(0);
-
-        tripIntervalRef.current = setInterval(() => {
-          setActiveTripProgress(prev => {
-            if (prev >= 100) {
-              clearInterval(tripIntervalRef.current!);
-              setBookings(currBookings =>
-                currBookings.map(b => b.id === acceptedBooking.id ? { ...b, status: 'arrived' } : b)
-              );
-              setNotifications(prevNotifs => ['Your ride has reached the destination! Verify OTP to complete.', ...prevNotifs]);
-              return 100;
-            }
-            const nextProgress = prev + 5;
-
-            const routeLandmarks = ride.route.map(name => LANDMARKS[name]).filter(Boolean);
-            if (routeLandmarks.length >= 2) {
-              const totalSegments = routeLandmarks.length - 1;
-              const currentSegmentFraction = nextProgress / 100;
-              const segmentFloat = currentSegmentFraction * totalSegments;
-              const segmentIndex = Math.min(Math.floor(segmentFloat), totalSegments - 1);
-              const segmentProgress = segmentFloat - segmentIndex;
-
-              const startNode = routeLandmarks[segmentIndex];
-              const endNode = routeLandmarks[segmentIndex + 1];
-
-              const currentX = startNode.x + (endNode.x - startNode.x) * segmentProgress;
-              const currentY = startNode.y + (endNode.y - startNode.y) * segmentProgress;
-              setActiveTripCoords({ x: currentX, y: currentY });
-
-              const currentLat = startNode.latitude + (endNode.latitude - startNode.latitude) * segmentProgress;
-              const currentLng = startNode.longitude + (endNode.longitude - startNode.longitude) * segmentProgress;
-
-              setBookings(curr => curr.map(b => b.id === acceptedBooking.id ? { ...b, currentLat, currentLng } : b));
-            }
-
-            return nextProgress;
-          });
-        }, 2500);
-      }
-    } else {
-      if (tripIntervalRef.current) {
-        clearInterval(tripIntervalRef.current);
-        tripIntervalRef.current = null;
-      }
-      setActiveTripCoords(null);
-    }
-
-    return () => {
-      if (tripIntervalRef.current) clearInterval(tripIntervalRef.current);
-    };
-  }, [bookings, rides]);
+  // Poll simulator and GPS simulation loop removed — booking/ride logic being rebuilt.
 
   const login = async (email: string, password?: string) => {
     if (!password) {
       // No password — mock/guest session
       setUser({
-        name: 'Sakar Aryal',
-        phone: '9841234567',
-        email: email || 'sakar@sarathi.com',
+        name: '',
+        phone: '',
+        email: email || '',
         role: 'passenger',
-        collegeOrCompany: 'Tribhuvan University',
-        emergencyContact: '9801234567',
-        rating: 4.8,
-        photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+        collegeOrCompany: '',
+        emergencyContact: '',
+        rating: 0,
+        photo: '',
       });
       setIsAuthenticated(true);
       return { success: true };
@@ -688,6 +500,79 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setIsAuthenticated(true);
       return { success: true };
+    }
+  };
+
+  const loginWithGoogle = async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const redirectUrl = Linking.createURL('/(tabs)');
+
+      const { data, error } = await supabase.auth.signInWithOAuth({
+        provider: 'google',
+        options: {
+          redirectTo: redirectUrl,
+          skipBrowserRedirect: true,
+        },
+      });
+
+      if (error) {
+        return { success: false, error: error.message };
+      }
+
+      if (!data?.url) {
+        return { success: false, error: 'Could not generate Google sign-in URL' };
+      }
+
+      const result = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
+
+      if (result.type === 'success' && result.url) {
+        let access_token: string | undefined;
+        let refresh_token: string | undefined;
+
+        // In OAuth hash fragment (#access_token=...&refresh_token=...)
+        if (result.url.includes('#')) {
+          const hashString = result.url.split('#')[1];
+          const params = new URLSearchParams(hashString);
+          access_token = params.get('access_token') || undefined;
+          refresh_token = params.get('refresh_token') || undefined;
+        }
+
+        // Fallback to query params (?access_token=...)
+        if (!access_token) {
+          const parsedUrl = Linking.parse(result.url);
+          access_token = parsedUrl.queryParams?.access_token as string;
+          refresh_token = parsedUrl.queryParams?.refresh_token as string;
+        }
+
+        if (access_token && refresh_token) {
+          const { data: sessionData, error: sessionErr } = await supabase.auth.setSession({
+            access_token,
+            refresh_token,
+          });
+
+          if (sessionErr) {
+            return { success: false, error: sessionErr.message };
+          }
+
+          if (sessionData.user) {
+            setUser({
+              name: sessionData.user.user_metadata?.full_name || sessionData.user.email?.split('@')[0] || 'User',
+              email: sessionData.user.email || '',
+              phone: sessionData.user.user_metadata?.phone || '',
+              role: 'passenger',
+              collegeOrCompany: 'N/A',
+              emergencyContact: '',
+              rating: 5.0,
+              photo: sessionData.user.user_metadata?.avatar_url || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
+            });
+            setIsAuthenticated(true);
+          }
+        }
+      }
+
+      return { success: true };
+    } catch (err: any) {
+      return { success: false, error: err.message || 'Google Sign-In failed' };
     }
   };
 
@@ -886,212 +771,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     b => b.lifecycleState !== 'completed' && b.lifecycleState !== 'cancelled'
   ) || null;
 
-  const requestBooking = (rideId: string, passengerPickup?: string, passengerDropoff?: string) => {
-    const existing = bookings.find(
-      b => b.lifecycleState !== 'completed' && b.lifecycleState !== 'cancelled'
-    );
-    if (existing) {
-      Alert.alert('Ongoing Booking Active', 'You already have an ongoing ride or request. Please complete or cancel it first.');
-      return;
-    }
-
-    const ride = rides.find(r => r.id === rideId);
-    const startLandmark = ride ? LANDMARKS[ride.route[0]] : null;
-
-    const newBooking: Booking = {
-      id: `booking-${Date.now()}`,
-      rideId,
-      passengerId: user?.email || 'passenger@sarathi.com',
-      passengerPhone: user?.phone || '+9779841234567',
-      passengerPickup: passengerPickup || ride?.route[0] || 'Butwal',
-      passengerDropoff: passengerDropoff || ride?.route[(ride?.route.length || 1) - 1] || 'Bhairahawa',
-      status: 'pending',
-      lifecycleState: 'request_pending',
-      createdAt: new Date(),
-      currentLat: startLandmark ? startLandmark.latitude : 27.7006,
-      currentLng: startLandmark ? startLandmark.longitude : 83.4484,
-      pickupOtp: '4821',
-      completionOtp: '7392',
-    };
-
-    setBookings(prev => [newBooking, ...prev]);
-    saveActiveBookingToStorage(newBooking);
-    setNotifications(prev => ['Your ride request has been submitted to the driver!', ...prev]);
-
-    // Send Push Notification to Driver
-    addDriverNotification({
-      type: 'ride_request',
-      title: '🚗 New Ride Request',
-      description: `Passenger requested a ride from ${newBooking.passengerPickup} → ${newBooking.passengerDropoff}`,
-      iconName: 'car-sport',
-      iconColor: '#2563EB',
-      targetScreen: '/activity',
-      targetParams: { rideId },
-    });
+  // requestBooking disabled — ride/booking functionality being rebuilt
+  const requestBooking = (_rideId: string, _passengerPickup?: string, _passengerDropoff?: string): void => {
+    Alert.alert('Coming Soon', 'Ride booking will be available soon. Stay tuned!');
   };
 
-  const acceptBooking = (bookingId: string) => {
-    let updatedBooking: Booking | null = null;
-    setBookings(prev =>
-      prev.map(b => {
-        if (b.id === bookingId) {
-          updatedBooking = {
-            ...b,
-            status: 'accepted',
-            lifecycleState: 'waiting_for_pickup',
-          };
-          return updatedBooking;
-        }
-        return b;
-      })
-    );
+  // acceptBooking disabled — ride/booking functionality being rebuilt
+  const acceptBooking = (_bookingId: string): void => {};
 
-    if (updatedBooking) {
-      saveActiveBookingToStorage(updatedBooking);
-    }
-    setNotifications(prev => ['Your ride request has been ACCEPTED by the driver!', ...prev]);
+
+  // verifyPickupOtp disabled — ride/booking functionality being rebuilt
+  const verifyPickupOtp = (_bookingId: string, _otp: string): { success: boolean; error?: string } => {
+    return { success: false, error: 'Coming soon.' };
   };
 
-  const verifyPickupOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
-    const targetBooking = bookings.find(b => b.id === bookingId);
-    if (!targetBooking) return { success: false, error: 'Booking not found.' };
-
-    if (otp.trim() === targetBooking.pickupOtp || otp.trim() === '4821') {
-      let updatedBooking: Booking | null = null;
-      setBookings(prev =>
-        prev.map(b => {
-          if (b.id === bookingId) {
-            updatedBooking = {
-              ...b,
-              status: 'ongoing',
-              lifecycleState: 'ride_started',
-              otpError: null,
-            };
-            return updatedBooking;
-          }
-          return b;
-        })
-      );
-      if (updatedBooking) saveActiveBookingToStorage(updatedBooking);
-      setNotifications(prev => ['Pickup verified! Your ride has officially started.', ...prev]);
-      return { success: true };
-    }
-
-    setBookings(prev =>
-      prev.map(b => (b.id === bookingId ? { ...b, otpError: 'Incorrect Pickup OTP (Default: 4821)' } : b))
-    );
-    return { success: false, error: 'Incorrect Pickup OTP. Please enter 4821.' };
+  // verifyCompletionOtp disabled — ride/booking functionality being rebuilt
+  const verifyCompletionOtp = (_bookingId: string, _otp: string): { success: boolean; error?: string } => {
+    return { success: false, error: 'Coming soon.' };
   };
 
-  const verifyCompletionOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
-    const targetBooking = bookings.find(b => b.id === bookingId);
-    if (!targetBooking) return { success: false, error: 'Booking not found.' };
-
-    if (otp.trim() === targetBooking.completionOtp || otp.trim() === '7392') {
-      let updatedBooking: Booking | null = null;
-      setBookings(prev =>
-        prev.map(b => {
-          if (b.id === bookingId) {
-            updatedBooking = {
-              ...b,
-              status: 'arrived',
-              lifecycleState: 'payment_pending',
-              otpError: null,
-            };
-            return updatedBooking;
-          }
-          return b;
-        })
-      );
-      if (updatedBooking) saveActiveBookingToStorage(updatedBooking);
-      setNotifications(prev => ['Destination reached! Please select payment method.', ...prev]);
-      return { success: true };
-    }
-
-    setBookings(prev =>
-      prev.map(b => (b.id === bookingId ? { ...b, otpError: 'Incorrect Completion OTP (Default: 7392)' } : b))
-    );
-    return { success: false, error: 'Incorrect Completion OTP. Please enter 7392.' };
+  // processPayment disabled — ride/booking functionality being rebuilt
+  const processPayment = (_bookingId: string, _method: 'cash' | 'khalti' | 'esewa'): { success: boolean; error?: string } => {
+    return { success: false, error: 'Coming soon.' };
   };
 
-  const processPayment = (bookingId: string, method: 'cash' | 'khalti' | 'esewa'): { success: boolean; error?: string } => {
-    let updatedBooking: Booking | null = null;
-    setBookings(prev =>
-      prev.map(b => {
-        if (b.id === bookingId) {
-          updatedBooking = {
-            ...b,
-            paymentMethod: method,
-            paymentStatus: 'completed',
-            lifecycleState: 'rating_pending',
-          };
-          return updatedBooking;
-        }
-        return b;
-      })
-    );
+  // submitRideRating disabled — ride/booking functionality being rebuilt
+  const submitRideRating = (_bookingId: string, _rating: number, _comment?: string): void => {};
 
-    if (updatedBooking) saveActiveBookingToStorage(updatedBooking);
-    setNotifications(prev => [`Payment of NPR 180 completed via ${method.toUpperCase()}!`, ...prev]);
-    return { success: true };
-  };
+  // cancelBooking / declineBooking disabled — ride/booking functionality being rebuilt
+  const cancelBooking = (_bookingId: string): void => {};
+  const declineBooking = (_bookingId: string): void => {};
 
-  const submitRideRating = (bookingId: string, rating: number, comment?: string) => {
-    setBookings(prev =>
-      prev.map(b => {
-        if (b.id === bookingId) {
-          return {
-            ...b,
-            rating,
-            reviewComment: comment,
-            status: 'completed',
-            lifecycleState: 'completed',
-          };
-        }
-        return b;
-      })
-    );
-
-    saveActiveBookingToStorage(null);
-    setNotifications(prev => ['Thank you for rating your Sarathi ride!', ...prev]);
-  };
-
-  const cancelBooking = (bookingId: string) => {
-    setBookings(prev =>
-      prev.map(b => (b.id === bookingId ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b))
-    );
-    saveActiveBookingToStorage(null);
-    setNotifications(prev => ['You cancelled your ride request.', ...prev]);
-  };
-
-  const declineBooking = (bookingId: string) => {
-    setBookings(prev =>
-      prev.map(b => (b.id === bookingId ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b))
-    );
-    saveActiveBookingToStorage(null);
-    setNotifications(prev => ['You declined the passenger request.', ...prev]);
-  };
-
-  const nudgeDriverLocation = (bookingId: string) => {
-    setActiveTripProgress(prev => {
-      const nextProgress = Math.min(100, prev + 15);
-      const booking = bookings.find(b => b.id === bookingId);
-      if (booking) {
-        const ride = rides.find(r => r.id === booking.rideId);
-        if (ride && ride.route.length >= 2) {
-          const startLandmark = LANDMARKS[ride.route[0]];
-          const endLandmark = LANDMARKS[ride.route[ride.route.length - 1]];
-          if (startLandmark && endLandmark) {
-            const frac = nextProgress / 100;
-            const newLat = startLandmark.latitude + (endLandmark.latitude - startLandmark.latitude) * frac;
-            const newLng = startLandmark.longitude + (endLandmark.longitude - startLandmark.longitude) * frac;
-            setBookings(curr => curr.map(b => b.id === bookingId ? { ...b, currentLat: newLat, currentLng: newLng } : b));
-          }
-        }
-      }
-      return nextProgress;
-    });
-  };
+  // nudgeDriverLocation disabled — ride/booking functionality being rebuilt
+  const nudgeDriverLocation = (_bookingId: string): void => {};
 
   const sendDriverMessage = (rideId: string, text: string) => {
     const userMsg: DriverMessage = {
@@ -1316,6 +1028,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     if (!result.success) {
       return { success: false, error: result.error };
     }
+    // Update local user status to PENDING upon successful submission
+    setUser(prev => prev ? { ...prev, kycStatus: 'PENDING' } : null);
     return { success: true };
   };
 
@@ -1327,22 +1041,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       return { success: false, error: result.error };
     }
     if (result.data?.kycVerified) {
-      setUser(prev => prev ? { ...prev, kycVerified: true } : null);
+      setUser(prev => prev ? { ...prev, kycVerified: true, kycStatus: 'VERIFIED' } : null);
     }
     return { success: true };
   };
 
-  const createRide = (newRideData: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => {
-    const newRide: Ride = {
-      id: `ride-${Date.now()}`,
-      riderName: user?.name || 'Sarathi Driver',
-      riderPhoto: user?.photo || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80',
-      phone: user?.phone || '+9779841234567',
-      rating: 5.0,
-      ...newRideData,
-    };
-    setRides(prev => [newRide, ...prev]);
-    setNotifications(prev => [`You have offered a new ride going to ${newRideData.route[newRideData.route.length - 1]}!`, ...prev]);
+  // createRide / updateRide / deleteRide disabled — ride functionality being rebuilt
+  const createRide = async (_newRideData: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>): Promise<void> => {
+    console.log('[createRide] disabled — coming soon');
+  };
+
+  const updateRide = async (_id: string, _updatedFields: Partial<Omit<Ride, 'id'>>): Promise<void> => {
+    console.log('[updateRide] disabled — coming soon');
+  };
+
+  const deleteRide = async (_id: string): Promise<void> => {
+    console.log('[deleteRide] disabled — coming soon');
   };
 
   return (
@@ -1369,6 +1083,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         activeTripProgress,
         activeTripCoords,
         login,
+        loginWithGoogle,
         signup,
         completeProfile,
         updateEmergencyContact,
@@ -1394,6 +1109,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         processPayment,
         submitRideRating,
         createRide,
+        updateRide,
+        deleteRide,
         acceptBooking,
         declineBooking,
         logout,

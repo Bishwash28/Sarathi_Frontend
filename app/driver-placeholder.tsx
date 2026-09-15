@@ -13,22 +13,21 @@ import {
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/Colors';
-import { useApp, LANDMARKS } from '../context/AppContext';
+import { useApp } from '../context/AppContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { RouteMap } from '../components/RouteMap';
-import { getAutoRouteCorridor } from '../utils/routeValidation';
+
 
 export default function OfferRideScreen() {
   const { user, createRide } = useApp();
 
   // Route States: Point A (Start) and Point B (End)
-  const [pointA, setPointA] = useState('Butwal');
-  const [pointB, setPointB] = useState('Bhairahawa');
+  const [pointA, setPointA] = useState('');
+  const [pointB, setPointB] = useState('');
 
   // Fare & Offer Details
-  const [price, setPrice] = useState('180');
-  const [seatsLeft, setSeatsLeft] = useState('2');
-  const [departureTime, setDepartureTime] = useState('Leaving in 15 mins');
+  const [price, setPrice] = useState('');
+  const [seatsLeft, setSeatsLeft] = useState('1');
+  const [departureTime, setDepartureTime] = useState('');
 
   // Map Height Expand Toggle
   const [isMapExpanded, setIsMapExpanded] = useState(false);
@@ -37,8 +36,8 @@ export default function OfferRideScreen() {
     router.back();
   };
 
-  // Automatically calculated full route corridor: [Point A, ...autoIntermediates, Point B]
-  const fullRouteCorridor = getAutoRouteCorridor(pointA, pointB, LANDMARKS);
+  // Simple origin → destination corridor (landmark auto-detection removed)
+  const fullRouteCorridor = [pointA, pointB].filter(Boolean);
 
   const handleCreateOffer = () => {
     if (!pointA || !pointA.trim()) {
@@ -65,55 +64,20 @@ export default function OfferRideScreen() {
       return;
     }
 
-    createRide({
-      vehicleType: user?.vehicleType || 'bike',
-      vehicleName: user?.vehicleName || 'Royal Enfield Classic 350',
-      vehicleNumber: user?.vehicleNumber || 'LU 1 PA 7788',
-      departureTime: departureTime || 'Leaving soon',
-      seatsLeft: parsedSeats,
-      price: parsedPrice,
-      route: fullRouteCorridor,
-      pickupPoint: `${pointA} Chowk Main Gate`,
-    });
-
+    // Ride publishing is coming soon — API integration being rebuilt
     Alert.alert(
-      'Route Published!',
-      `Your route from ${pointA} to ${pointB} (${fullRouteCorridor.join(' → ')}) is now live for passenger matching!`,
-      [
-        {
-          text: 'Return to Home',
-          onPress: () => router.replace('/(tabs)'),
-        },
-      ]
+      'Coming Soon 🚧',
+      'Ride publishing will be available soon. Stay tuned!',
+      [{ text: 'OK' }]
     );
+
   };
 
-  // Resolve coordinates for map preview
-  const resolveLandmarkCoord = (name: string, fallbackName: string) => {
-    const cleanName = name.trim().toLowerCase();
-    const matched = Object.entries(LANDMARKS).find(([key]) =>
-      key.toLowerCase().includes(cleanName) || cleanName.includes(key.toLowerCase())
-    );
-    if (matched) return { latitude: matched[1].latitude, longitude: matched[1].longitude };
-    const fallback = LANDMARKS[fallbackName] || LANDMARKS['Butwal'] || LANDMARKS['Kalanki'];
-    return { latitude: fallback.latitude, longitude: fallback.longitude };
-  };
-
-  const startCoord = resolveLandmarkCoord(pointA, 'Butwal');
-  const endCoord = resolveLandmarkCoord(pointB, 'Bhairahawa');
-
-  // Driver's current position Red Marker
-  const driverCurrentLocation = {
-    latitude: startCoord.latitude + 0.002,
-    longitude: startCoord.longitude + 0.002,
-  };
-
-  const waypointCoords = fullRouteCorridor
-    .slice(1, -1)
-    .map((name) => {
-      const coord = resolveLandmarkCoord(name, 'Tilottama');
-      return { coordinate: coord, title: name };
-    });
+  // Coord lookups removed (LANDMARKS data removed)
+  const startCoord = undefined;
+  const endCoord = undefined;
+  const driverCurrentLocation = undefined;
+  const waypointCoords: { coordinate: { latitude: number; longitude: number }; title: string }[] = [];
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
@@ -135,28 +99,7 @@ export default function OfferRideScreen() {
         style={{ flex: 1 }}
         behavior={Platform.OS === 'ios' ? 'padding' : undefined}
       >
-        {/* Prominent Always-Visible Map View */}
-        <View style={[styles.mapContainer, isMapExpanded && { height: 380 }]}>
-          <RouteMap
-            startCoord={startCoord}
-            endCoord={endCoord}
-            startTitle={pointA}
-            endTitle={pointB}
-            driverLocation={driverCurrentLocation}
-            waypoints={waypointCoords}
-            vehicleType={user?.vehicleType || 'bike'}
-            strokeColor="#C62026"
-            showControls={true}
-          />
-
-          {/* Map Overlay Badge Info */}
-          <View style={styles.mapBadgeOverlay}>
-            <View style={styles.driverDotRed} />
-            <Text style={styles.mapBadgeText} numberOfLines={1}>
-              Driver Location (Red Pin) & Route: {fullRouteCorridor.join(' → ')}
-            </Text>
-          </View>
-        </View>
+        {/* Form Container */}
 
         {/* Scrollable Form Below Map */}
         <ScrollView

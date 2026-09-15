@@ -1,8 +1,11 @@
-import React, { useEffect, useState } from 'react';
+import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
+import * as ImagePicker from 'expo-image-picker';
+import { router } from 'expo-router';
+import { useEffect, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
-  Image,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -11,22 +14,18 @@ import {
   Text,
   TextInput,
   TouchableOpacity,
-  View,
+  View
 } from 'react-native';
-import { router } from 'expo-router';
-import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import * as ImagePicker from 'expo-image-picker';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
 import {
   VehicleData,
+  deleteVehicle,
+  getUserVehicles,
+  getVehicle,
   registerVehicle,
   updateVehicle,
-  deleteVehicle,
-  getVehicle,
-  getUserVehicles,
 } from '../services/vehicleService';
 
 export default function VehiclesScreen() {
@@ -248,11 +247,12 @@ export default function VehiclesScreen() {
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-        {/* Primary Add Vehicle Button */}
-        {/* <TouchableOpacity style={styles.primaryAddBtn} onPress={openAddModal} activeOpacity={0.85}>
-          <Ionicons name="add-circle" size={22} color="#FFF" />
-          <Text style={styles.primaryAddBtnText}>Register New Vehicle</Text>
-        </TouchableOpacity> */}
+
+        {/* Primary Add Vehicle Action Button */}
+        <TouchableOpacity style={styles.primaryAddBtn} onPress={openAddModal} activeOpacity={0.85}>
+          <Ionicons name="add-circle" size={22} color="#FFFFFF" />
+          <Text style={styles.primaryAddBtnText}>Add New Vehicle</Text>
+        </TouchableOpacity>
 
         {/* Vehicles List */}
         <View style={styles.sectionHeaderRow}>

@@ -14,8 +14,7 @@ import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
-import { useApp, LANDMARKS } from '../context/AppContext';
-import { RouteMap } from '../components/RouteMap';
+import { useApp } from '../context/AppContext';
 import { makePhoneCall } from '../utils/phoneUtils';
 
 export default function ActiveTripScreen() {
@@ -117,15 +116,13 @@ export default function ActiveTripScreen() {
     }
   };
 
-  const startLandmark = LANDMARKS[currentBooking.passengerPickup || ride.route[0]] || LANDMARKS['Butwal'];
-  const endLandmark = LANDMARKS[currentBooking.passengerDropoff || ride.route[ride.route.length - 1]] || LANDMARKS['Bhairahawa'];
-
-  const startCoord = { latitude: startLandmark.latitude, longitude: startLandmark.longitude };
-  const endCoord = { latitude: endLandmark.latitude, longitude: endLandmark.longitude };
-
-  const liveCoord = (currentBooking.currentLat && currentBooking.currentLng)
+  // Coord lookups removed (LANDMARKS data removed)
+  const startCoord = (currentBooking.currentLat && currentBooking.currentLng)
     ? { latitude: currentBooking.currentLat, longitude: currentBooking.currentLng }
-    : startCoord;
+    : undefined;
+  const endCoord = undefined;
+
+  const liveCoord = startCoord;
 
   const eta = Math.max(1, Math.ceil((100 - activeTripProgress) / 10));
 
@@ -169,20 +166,7 @@ export default function ActiveTripScreen() {
           </View>
         </View>
 
-        {/* ── Map View (for tracking states) ── */}
-        {(lifecycle === 'waiting_for_pickup' ||
-          lifecycle === 'pickup_otp_required' ||
-          lifecycle === 'ride_started' ||
-          lifecycle === 'completion_otp_required') && (
-          <View style={styles.mapWrapper}>
-            <RouteMap
-              startCoord={startCoord}
-              endCoord={endCoord}
-              liveCoord={liveCoord}
-              vehicleType={ride.vehicleType}
-            />
-          </View>
-        )}
+        {/* ── Status Banner (without map) ── */}
 
         {/* ── Dynamic State Body ── */}
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 20 }}>

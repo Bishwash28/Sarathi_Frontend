@@ -2,10 +2,11 @@ import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
 import { router } from 'expo-router';
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
   Image,
   KeyboardAvoidingView,
   Modal,
@@ -20,6 +21,34 @@ import {
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
 import { BackendUser, getUser } from '../../services/userService';
+
+// ── Facebook-style top left-to-right animated loading bar ────────────────────
+const TopFacebookLoadingBar = () => {
+  const animValue = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const loopAnimation = Animated.loop(
+      Animated.timing(animValue, {
+        toValue: 1,
+        duration: 1100,
+        useNativeDriver: false,
+      })
+    );
+    loopAnimation.start();
+    return () => loopAnimation.stop();
+  }, [animValue]);
+
+  const left = animValue.interpolate({
+    inputRange: [0, 1],
+    outputRange: ['-50%', '100%'],
+  });
+
+  return (
+    <View style={styles.topLoadingTrack}>
+      <Animated.View style={[styles.topLoadingFill, { left }]} />
+    </View>
+  );
+};
 
 export default function ProfileScreen() {
   const { user, completeProfile, updateEmergencyContact, logout, updateUserProfile, deleteAccount, switchUserRole } = useApp();
@@ -46,8 +75,7 @@ export default function ProfileScreen() {
       }
     })();
     return () => { cancelled = true; };
-  }, [user?.email]); // re-run when user changes (email is a stable key)
-
+  }, [user?.email]);
 
   // Use backend data when available, fall back to local context
   const displayName = backendUser?.name || user?.name || 'User';
@@ -57,9 +85,6 @@ export default function ProfileScreen() {
   const displayKyc = backendUser?.kycVerified ?? user?.kycVerified;
   const displayRole = backendUser?.activeRole?.toLowerCase() === 'driver' ? 'driver' : (user?.role ?? 'passenger');
   const memberSince = backendUser?.createdAt ? new Date(backendUser.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : null;
-
-
-
 
   // ── Edit Profile modal ───────────────────────────────────────────────────────
   const [editModalVisible, setEditModalVisible] = useState(false);
@@ -193,13 +218,14 @@ export default function ProfileScreen() {
 
     if (!res.success) {
       Alert.alert('Role Switch Failed', res.error || 'Unable to switch role at this time.');
-    } else {
-      Alert.alert('Success', `Switched active role to ${targetRole === 'DRIVER' ? 'Driver / Rider' : 'Passenger'}.`);
     }
   };
 
   return (
     <View style={styles.safeArea}>
+      {/* ── Facebook-style Top Loading Bar ── */}
+      {isFetchingProfile && <TopFacebookLoadingBar />}
+
       <KeyboardAvoidingView style={styles.keyboardContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
 
         {/* ── Scrollable content ─────────────────────────────────────────── */}
@@ -207,62 +233,56 @@ export default function ProfileScreen() {
 
           {/* ── Profile Header Card ─────────────────────────────────────────── */}
           <View style={styles.profileHeaderCard}>
-            {isFetchingProfile ? (
-              <ActivityIndicator size="large" color={Colors.primary} style={{ marginVertical: 28 }} />
-            ) : (
-              <>
-                {/* Horizontal Facebook-style Profile Info */}
-                <View style={styles.horizontalProfileRow}>
-                  <View style={styles.avatarContainer}>
-                    <Image source={{ uri: displayAvatar }} style={styles.avatar} />
-                    <TouchableOpacity style={styles.avatarEditButton} onPress={handlePickAvatar} activeOpacity={0.8}>
-                      <Ionicons name="camera" size={14} color="#FFF" />
-                    </TouchableOpacity>
+            {/* Horizontal Facebook-style Profile Info */}
+            <View style={styles.horizontalProfileRow}>
+              <View style={styles.avatarContainer}>
+                <Image source={{ uri: displayAvatar }} style={styles.avatar} />
+                <TouchableOpacity style={styles.avatarEditButton} onPress={handlePickAvatar} activeOpacity={0.8}>
+                  <Ionicons name="camera" size={14} color="#FFF" />
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.profileInfoTextContainer}>
+                <Text style={styles.userName}>{displayName}</Text>
+
+                {memberSince && (
+                  <Text style={styles.memberSince}>Member since {memberSince}</Text>
+                )}
+
+                <View style={styles.badgeRow}>
+                  <View style={styles.roleBadge}>
+                    <Ionicons
+                      name={displayRole === 'driver' ? 'car-sport' : 'person'}
+                      size={13}
+                      color="#FFF"
+                    />
+                    <Text style={styles.roleText}>
+                      {displayRole === 'driver' ? 'Driver' : 'Rider'}
+                    </Text>
                   </View>
-
-                  <View style={styles.profileInfoTextContainer}>
-                    <Text style={styles.userName}>{displayName}</Text>
-
-                    {memberSince && (
-                      <Text style={styles.memberSince}>Member since {memberSince}</Text>
-                    )}
-
-                    <View style={styles.badgeRow}>
-                      <View style={styles.roleBadge}>
-                        <Ionicons
-                          name={displayRole === 'driver' ? 'car-sport' : 'person'}
-                          size={13}
-                          color="#FFF"
-                        />
-                        <Text style={styles.roleText}>
-                          {displayRole === 'driver' ? 'Driver' : 'Rider'}
-                        </Text>
-                      </View>
-                      <View style={styles.ratingBadge}>
-                        <Ionicons name="star" size={13} color="#FFF" />
-                        <Text style={styles.ratingText}>{user?.rating?.toFixed(1) ?? '5.0'}</Text>
-                      </View>
-                    </View>
+                  <View style={styles.ratingBadge}>
+                    <Ionicons name="star" size={13} color="#FFF" />
+                    <Text style={styles.ratingText}>{user?.rating?.toFixed(1) ?? '5.0'}</Text>
                   </View>
                 </View>
+              </View>
+            </View>
 
-                {/* Role Switch Button at Bottom of Profile Card */}
-                <TouchableOpacity
-                  style={styles.cardBottomRoleSwitchBtn}
-                  onPress={handleSwitchMode}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons
-                    name="swap-horizontal"
-                    size={16}
-                    color={Colors.primary}
-                  />
-                  <Text style={styles.cardBottomRoleSwitchText}>
-                    Switch to {displayRole === 'driver' ? 'Rider' : 'Driver'}
-                  </Text>
-                </TouchableOpacity>
-              </>
-            )}
+            {/* Role Switch Button at Bottom of Profile Card */}
+            <TouchableOpacity
+              style={styles.cardBottomRoleSwitchBtn}
+              onPress={handleSwitchMode}
+              activeOpacity={0.8}
+            >
+              <Ionicons
+                name="swap-horizontal"
+                size={16}
+                color={Colors.primary}
+              />
+              <Text style={styles.cardBottomRoleSwitchText}>
+                Switch to {displayRole === 'driver' ? 'Rider' : 'Driver'}
+              </Text>
+            </TouchableOpacity>
           </View>
 
           {/* Account Details Card */}
@@ -293,9 +313,28 @@ export default function ProfileScreen() {
               <Ionicons name="shield-checkmark-outline" size={20} color={Colors.textMuted} />
               <View style={styles.detailTextContainer}>
                 <Text style={styles.detailLabel}>KYC Status</Text>
-                <Text style={[styles.detailValue, { color: displayKyc ? Colors.success : Colors.warning }]}>
-                  {displayKyc ? 'Verified' : 'Not Verified'}
-                </Text>
+                {(() => {
+                  const isVerified = displayKyc === true || backendUser?.kycStatus === 'VERIFIED' || user?.kycStatus === 'VERIFIED';
+                  const isPending = !isVerified && (backendUser?.kycStatus === 'PENDING' || user?.kycStatus === 'PENDING');
+                  
+                  if (isVerified) {
+                    return <Text style={[styles.detailValue, { color: Colors.success }]}>Verified</Text>;
+                  } else if (isPending) {
+                    return <Text style={[styles.detailValue, { color: '#F59E0B' }]}>Pending Verification</Text>;
+                  } else {
+                    return (
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
+                        <Text style={[styles.detailValue, { color: Colors.error, marginTop: 0 }]}>Not Verified</Text>
+                        <TouchableOpacity
+                          style={styles.completeKycButton}
+                          onPress={() => router.push('/kyc')}
+                        >
+                          <Text style={styles.completeKycText}>Verify Now →</Text>
+                        </TouchableOpacity>
+                      </View>
+                    );
+                  }
+                })()}
               </View>
             </View>
           </View>
@@ -421,6 +460,26 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: Colors.background,
+    position: 'relative',
+  },
+  topLoadingTrack: {
+    height: 3,
+    width: '100%',
+    backgroundColor: '#E2E8F0',
+    overflow: 'hidden',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    right: 0,
+    zIndex: 999,
+  },
+  topLoadingFill: {
+    position: 'absolute',
+    top: 0,
+    bottom: 0,
+    width: '50%',
+    backgroundColor: Colors.primary,
+    borderRadius: 2,
   },
   keyboardContainer: {
     flex: 1,

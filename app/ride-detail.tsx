@@ -4,9 +4,9 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
-import { useApp, LANDMARKS } from '../context/AppContext';
-import { RouteMap } from '../components/RouteMap';
+import { useApp } from '../context/AppContext';
 import { validatePassengerJourney, findLandmarkIndexInRoute } from '../utils/routeValidation';
+import { matchPassengerToRoute, calculateProratedFare, RouteMatchResult } from '../utils/routeMatching';
 
 import { makePhoneCall } from '../utils/phoneUtils';
 
@@ -34,14 +34,62 @@ export default function RideDetailScreen() {
   const driverPointB = ride.route[ride.route.length - 1];
 
   // Passenger's custom selected Pickup and Drop-off locations
-  const initialPickup = typeof selectedPickup === 'string' && selectedPickup.trim() ? selectedPickup : (ride.route[0] || 'Butwal');
-  const initialDropoff = typeof selectedDest === 'string' && selectedDest.trim() ? selectedDest : (ride.route[ride.route.length - 1] || 'Bhairahawa');
+  const initialPickup = typeof selectedPickup === 'string' && selectedPickup.trim() ? selectedPickup : (ride.route[0] || '');
+  const initialDropoff = typeof selectedDest === 'string' && selectedDest.trim() ? selectedDest : (ride.route[ride.route.length - 1] || '');
 
   const [passengerPickup, setPassengerPickup] = useState<string>(initialPickup);
   const [passengerDropoff, setPassengerDropoff] = useState<string>(initialDropoff);
 
-  // Validate passenger journey against driver's published route corridor
-  const validationResult = validatePassengerJourney(ride.route, passengerPickup, passengerDropoff);
+  // Coordinates for Map (landmark lookup removed — use real GPS coords from ride data)
+  const startCoord = ride.origin ? { latitude: ride.origin.lat, longitude: ride.origin.lng } : undefined;
+  const endCoord = ride.destination ? { latitude: ride.destination.lat, longitude: ride.destination.lng } : undefined;
+  const pickupCoord = undefined;
+  const dropoffCoord = undefined;
+
+  // Validate passenger journey against driver's published route polyline & sequence
+  let validationResult: { isValid: boolean; reason: string } = { isValid: false, reason: '' };
+  let calculatedFare = ride.price;
+
+  if (ride.ecodedPolyLine && pickupCoord && dropoffCoord) {
+    // 1. Live polyline geometrical matching with 1000m threshold
+    const polyMatch: RouteMatchResult = matchPassengerToRoute(
+      ride.ecodedPolyLine,
+      pickupCoord,
+      dropoffCoord,
+      1000
+    );
+
+    if (polyMatch.isValid) {
+      validationResult = {
+        isValid: true,
+        reason: `Journey from "${passengerPickup}" to "${passengerDropoff}" is along the driver's polyline route!`,
+      };
+      // Prorate fare dynamically based on segment distance vs full route distance
+      calculatedFare = calculateProratedFare(
+        ride.ecodedPolyLine,
+        pickupCoord,
+        dropoffCoord,
+        ride.price
+      );
+    } else {
+      validationResult = {
+        isValid: false,
+        reason: polyMatch.reason || `Drop-off (${passengerDropoff}) must come after pickup (${passengerPickup}) along driver's route direction.`,
+      };
+    }
+  } else {
+    // 2. Sequence/landmark index fallback validation
+    const fallbackVal = validatePassengerJourney(ride.route, passengerPickup, passengerDropoff);
+    validationResult = {
+      isValid: fallbackVal.isValid,
+      reason: fallbackVal.reason,
+    };
+    if (fallbackVal.isValid && fallbackVal.pickupIndex !== undefined && fallbackVal.dropoffIndex !== undefined) {
+      const totalStops = Math.max(1, ride.route.length - 1);
+      const travelledStops = Math.max(1, fallbackVal.dropoffIndex - fallbackVal.pickupIndex);
+      calculatedFare = Math.max(30, Math.round((travelledStops / totalStops) * ride.price));
+    }
+  }
 
   const handleBooking = () => {
     if (!validationResult.isValid) {
@@ -74,68 +122,27 @@ export default function RideDetailScreen() {
     });
   };
 
-  // Helper to map landmark string to coordinates
-  const resolveLandmarkCoord = (name: string, fallbackName: string) => {
-    const cleanName = name.trim().toLowerCase();
-    const matched = Object.entries(LANDMARKS).find(([key]) => 
-      key.toLowerCase().includes(cleanName) || cleanName.includes(key.toLowerCase())
-    );
-    if (matched) return { latitude: matched[1].latitude, longitude: matched[1].longitude };
-    const fallback = LANDMARKS[fallbackName] || LANDMARKS['Butwal'];
-    return { latitude: fallback.latitude, longitude: fallback.longitude };
-  };
-
-  // Coordinates for Map
-  const startCoord = resolveLandmarkCoord(driverPointA, 'Butwal');
-  const endCoord = resolveLandmarkCoord(driverPointB, 'Bhairahawa');
-  const pickupCoord = resolveLandmarkCoord(passengerPickup, driverPointA);
-  const dropoffCoord = resolveLandmarkCoord(passengerDropoff, driverPointB);
-
-  // Passenger's current GPS location marker (Blue marker)
-  const passengerCurrentLocation = {
-    latitude: pickupCoord.latitude - 0.003,
-    longitude: pickupCoord.longitude - 0.003,
-  };
-
-  // Driver's location marker (Red marker)
-  const driverCurrentLocation = {
+  // Driver's location marker
+  const driverCurrentLocation = startCoord ? {
     latitude: startCoord.latitude + 0.002,
     longitude: startCoord.longitude + 0.002,
-  };
+  } : undefined;
 
-  const waypoints = ride.route.slice(1, -1).map(name => {
-    const coord = resolveLandmarkCoord(name, 'Tripureshwor');
-    return { coordinate: coord, title: name };
-  });
+  // Waypoints removed (landmark lookup removed)
+  const waypoints: { coordinate: { latitude: number; longitude: number }; title: string }[] = [];
+
 
   return (
     <View style={styles.rootContainer}>
-      {/* Full-Screen Interactive Map Background */}
-      <View style={styles.mapContainer}>
-        <RouteMap
-          startCoord={startCoord}
-          endCoord={endCoord}
-          startTitle={driverPointA}
-          endTitle={driverPointB}
-          driverLocation={driverCurrentLocation}
-          passengerLocation={passengerCurrentLocation}
-          passengerPickupCoord={pickupCoord}
-          passengerPickupTitle={`Pickup: ${passengerPickup}`}
-          passengerDropoffCoord={dropoffCoord}
-          passengerDropoffTitle={`Dropoff: ${passengerDropoff}`}
-          waypoints={waypoints}
-          vehicleType={ride.vehicleType}
-          strokeColor="#C62026"
-          showControls={true}
-        />
-        
-        {/* Floating Top Back Button */}
-        <SafeAreaView style={styles.floatingHeaderArea} edges={['top']}>
-          <TouchableOpacity style={styles.floatingBackButton} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={20} color="#1E293B" />
+      {/* Top Navigation Header */}
+      <SafeAreaView style={{ backgroundColor: '#FFFFFF' }} edges={['top']}>
+        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E2E8F0', backgroundColor: '#FFFFFF' }}>
+          <TouchableOpacity style={{ padding: 4 }} onPress={() => router.back()}>
+            <Ionicons name="arrow-back" size={24} color={Colors.primary} />
           </TouchableOpacity>
-        </SafeAreaView>
-      </View>
+          <Text style={{ fontSize: 16, fontWeight: 'bold', color: Colors.textPrimary, marginLeft: 12 }}>Ride Offer Details</Text>
+        </View>
+      </SafeAreaView>
 
       {/* Overlaying White Bottom Sheet */}
       <View style={styles.bottomSheetCard}>
@@ -269,7 +276,7 @@ export default function RideDetailScreen() {
           <View style={styles.bottomCtaRow}>
             <View>
               <Text style={styles.fareLabel}>Total Fare</Text>
-              <Text style={styles.fareValue}>NPR {ride.price}</Text>
+              <Text style={styles.fareValue}>NPR {calculatedFare}</Text>
             </View>
             <TouchableOpacity
               style={[
