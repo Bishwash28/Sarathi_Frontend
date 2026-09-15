@@ -202,23 +202,39 @@ export default function ProfileScreen() {
       return;
     }
 
-    setIsFetchingProfile(true);
-    const res = await switchUserRole(targetRole);
+    const targetLabel = targetRole === 'DRIVER' ? 'Driver' : 'Rider';
+    const currentLabel = displayRole === 'driver' ? 'Driver' : 'Rider';
 
-    // Refresh local backendUser state from storage / API
-    const uid = await AsyncStorage.getItem('@sarathi_user_id');
-    const token = (await AsyncStorage.getItem('@sarathi_token')) || (await AsyncStorage.getItem('@sarathi_auth_token'));
-    if (uid) {
-      const refreshed = await getUser(uid, token ?? undefined);
-      if (refreshed.success && refreshed.data) {
-        setBackendUser(refreshed.data);
-      }
-    }
-    setIsFetchingProfile(false);
+    Alert.alert(
+      `Switch to ${targetLabel}?`,
+      `You are currently in ${currentLabel} mode. Are you sure you want to switch to ${targetLabel} mode?`,
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: `Switch to ${targetLabel}`,
+          style: 'default',
+          onPress: async () => {
+            setIsFetchingProfile(true);
+            const res = await switchUserRole(targetRole);
 
-    if (!res.success) {
-      Alert.alert('Role Switch Failed', res.error || 'Unable to switch role at this time.');
-    }
+            // Refresh local backendUser state from storage / API
+            const uid = await AsyncStorage.getItem('@sarathi_user_id');
+            const token = (await AsyncStorage.getItem('@sarathi_token')) || (await AsyncStorage.getItem('@sarathi_auth_token'));
+            if (uid) {
+              const refreshed = await getUser(uid, token ?? undefined);
+              if (refreshed.success && refreshed.data) {
+                setBackendUser(refreshed.data);
+              }
+            }
+            setIsFetchingProfile(false);
+
+            if (!res.success) {
+              Alert.alert('Role Switch Failed', res.error || 'Unable to switch role at this time.');
+            }
+          },
+        },
+      ],
+    );
   };
 
   return (

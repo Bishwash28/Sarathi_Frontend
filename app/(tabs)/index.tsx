@@ -152,7 +152,18 @@ export default function HomeScreen() {
   // Driver Access Check Handler
   const handleOfferRide = () => {
     if (user?.kycVerified === true) {
-      completeProfile({ role: 'driver' });
+      Alert.alert(
+        'Switch to Driver mode?',
+        'You are currently in Rider mode. Are you sure you want to switch to Driver mode?',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Switch to Driver',
+            style: 'default',
+            onPress: () => completeProfile({ role: 'driver' }),
+          },
+        ]
+      );
     } else {
       Alert.alert(
         'Driver KYC Verification Required',
@@ -169,7 +180,18 @@ export default function HomeScreen() {
   };
 
   const handleSwitchToPassenger = () => {
-    completeProfile({ role: 'passenger' });
+    Alert.alert(
+      'Switch to Rider mode?',
+      'You are currently in Driver mode. Are you sure you want to switch to Rider mode?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Switch to Rider',
+          style: 'default',
+          onPress: () => completeProfile({ role: 'passenger' }),
+        },
+      ]
+    );
   };
 
   const handleCreateOffer = async () => {
