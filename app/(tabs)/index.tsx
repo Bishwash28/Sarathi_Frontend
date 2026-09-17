@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
-import { router } from 'expo-router';
+import { router, useFocusEffect } from 'expo-router';
 import React, { useState } from 'react';
 import {
   Alert,
@@ -20,6 +20,7 @@ import {
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
 import { getUserVehicles, VehicleData } from '../../services/vehicleService';
+import { getRouteDirections } from '../../services/locationService';
 import { useLocationSearch } from '../../hooks/useLocationSearch';
 import { LocationPinPickerMap } from '../../components/LocationPinPickerMap';
 import { LocationSearchInput } from '../../components/LocationSearchInput';
@@ -89,6 +90,7 @@ export default function HomeScreen() {
     calculateRoute,
     isBothResolved,
     errorMsg: locationErrorMsg,
+    routeInfo,
   } = useLocationSearch();
 
   // Temporary pin drag position for Modal map picker
@@ -107,27 +109,41 @@ export default function HomeScreen() {
     }
   }, [pinPickerModalOpen, pinPickerTargetType]);
 
-  // Fetch driver vehicles on mount
-  React.useEffect(() => {
-    (async () => {
-      try {
-        const storedToken =
-          (await AsyncStorage.getItem('@sarathi_token')) ||
-          (await AsyncStorage.getItem('@sarathi_auth_token'));
-        const res = await getUserVehicles(storedToken ?? undefined);
-        if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-          setUserVehicles(res.data);
-          setSelectedVehicle(res.data[0]);
-        } else if (res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) {
-          const vObj = res.data as unknown as VehicleData;
-          setUserVehicles([vObj]);
-          setSelectedVehicle(vObj);
-        }
-      } catch (err) {
-        console.warn('Failed to load driver vehicles:', err);
+  // Fetch driver vehicles on mount & on screen focus
+  const fetchVehicles = React.useCallback(async () => {
+    try {
+      const storedToken =
+        (await AsyncStorage.getItem('@sarathi_token')) ||
+        (await AsyncStorage.getItem('@sarathi_auth_token'));
+      console.log('=== [DEBUG] index tab fetchVehicles storedToken ===', storedToken ? 'TOKEN_PRESENT' : 'NO_TOKEN');
+      const res = await getUserVehicles(storedToken ?? undefined);
+      console.log('=== [DEBUG] index tab fetchVehicles response ===', JSON.stringify(res, null, 2));
+      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
+        const vehicleList = res.data;
+        setUserVehicles(vehicleList);
+        setSelectedVehicle(prev => (prev ? vehicleList.find(v => v.id === prev.id) || vehicleList[0] : vehicleList[0]));
+      } else if (res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) {
+        const vObj = res.data as unknown as VehicleData;
+        setUserVehicles([vObj]);
+        setSelectedVehicle(vObj);
+      } else {
+        setUserVehicles([]);
+        setSelectedVehicle(null);
       }
-    })();
+    } catch (err) {
+      console.warn('Failed to load driver vehicles:', err);
+    }
   }, []);
+
+  React.useEffect(() => {
+    fetchVehicles();
+  }, [fetchVehicles]);
+
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchVehicles();
+    }, [fetchVehicles])
+  );
 
   // Edit Ride Modal State
   const [editingRide, setEditingRide] = useState<any | null>(null);
@@ -219,12 +235,49 @@ export default function HomeScreen() {
       return;
     }
 
-    // Ride publishing is coming soon — API integration being rebuilt
-    Alert.alert(
-      'Coming Soon 🚧',
-      'Ride publishing will be available soon. Your route details have been saved locally.',
-      [{ text: 'OK' }]
-    );
+    // Fetch polyline if not set
+    let polylineString = encodedPolyLine || routeInfo?.encodedPolyline || '';
+    if (!polylineString && origin.coords && destination.coords) {
+      try {
+        const route = await getRouteDirections(origin.coords, destination.coords);
+        if (route?.encodedPolyline) {
+          polylineString = route.encodedPolyline;
+        }
+      } catch (rErr) {
+        console.warn('[index tab] Polyline fetch error:', rErr);
+      }
+    }
+
+    // Publish ride to backend
+    try {
+      const result = await createRide({
+        vehicleType: 'scooter',
+        vehicleName: selectedVehicle.vehicleModelName,
+        vehicleNumber: selectedVehicle.vehicleNumber,
+        vehicleId: selectedVehicle.id,
+        origin: origin.coords!,
+        destination: destination.coords!,
+        encodedPolyLine: polylineString,
+        departureTime,
+        seatsLeft: parseInt(seatsLeft, 10) || 1,
+        price: parsedPrice,
+        route: [origin.text, destination.text],
+        pickupPoint: origin.text,
+      });
+
+      if (result.success) {
+        Alert.alert('Ride Published! 🎉', 'Your ride offer is now live for passengers to discover.');
+        // Reset form
+        setPrice('');
+        setSeatsLeft('1');
+        setDepartureTime('');
+        setEncodedPolyLine('');
+      } else {
+        Alert.alert('Failed to Publish', result.error || 'Please check your inputs and try again.');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to publish ride. Please try again.');
+    }
 
   };
 
@@ -368,13 +421,18 @@ export default function HomeScreen() {
                 )}
               </View>
             ) : (
-              <View style={[styles.noVehicleCard, { marginBottom: 16 }]}>
+              <TouchableOpacity
+                style={[styles.noVehicleCard, { marginBottom: 16 }]}
+                onPress={() => router.push('/vehicles')}
+                activeOpacity={0.8}
+              >
                 <Ionicons name="alert-circle-outline" size={22} color={Colors.warning} />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.noVehicleTitle}>No Vehicles Available</Text>
-                  <Text style={styles.noVehicleSub}>Add a vehicle from Profile → Settings → My Vehicles</Text>
+                  <Text style={styles.noVehicleSub}>Tap here to add a vehicle (My Vehicles screen)</Text>
                 </View>
-              </View>
+                <Ionicons name="chevron-forward" size={20} color={Colors.primary} />
+              </TouchableOpacity>
             )}
 
             {/* 2. Starting Location (Origin) */}

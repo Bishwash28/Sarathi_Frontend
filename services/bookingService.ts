@@ -1,48 +1,63 @@
 /**
  * bookingService.ts
  * API service for booking management and ride lifecycle status operations.
+ * Field names verified against POST /api/book-ride, POST /api/respond-booking,
+ * POST /api/start-ride, POST /api/complete-ride, GET /api/bookings, GET /api/booking/{id}
  */
 
 import apiClient, { ApiResponse } from '../lib/apiClient';
 
 export interface BookRidePayload {
-  rideId: string;
-  passengerPickup?: string;
-  passengerDropoff?: string;
+  ridePostId: string;
+  pickupAddress: string;
+  pickupLat: number;
+  pickupLng: number;
+  dropAddress: string;
+  dropLat: number;
+  dropLng: number;
   seatsBooked?: number;
 }
 
 export interface BookRideResponseData {
-  id: string;
-  rideId: string;
-  passengerId?: string;
+  bookingId: string;
+  ridePostId: string;
   status: 'PENDING' | 'ACCEPTED' | 'REJECTED' | 'ONGOING' | 'COMPLETED' | 'CANCELLED';
-  pickupOtp?: string;
-  startOtp?: string;
-  completionOtp?: string;
-  endOtp?: string;
+  seatsBooked?: number;
+  startOtpCode?: string; // Pickup OTP
+  endOtpCode?: string;   // Completion OTP
+  // Legacy / fallback fields
+  id?: string;
+  passengerId?: string;
   pickupLocation?: string;
   dropoffLocation?: string;
   createdAt?: string;
   updatedAt?: string;
 }
 
+/**
+ * Action string used by driver to accept or reject a booking.
+ */
 export interface RespondBookingPayload {
   bookingId: string;
-  accept: boolean;
-  status?: 'ACCEPTED' | 'REJECTED';
+  action: 'ACCEPT' | 'REJECT';
 }
 
 export interface StartRidePayload {
   bookingId: string;
-  otp: string;
-  startOtp?: string;
+  startOtp: string; // Pickup OTP code
 }
 
 export interface CompleteRidePayload {
   bookingId: string;
-  otp: string;
-  endOtp?: string;
+  endOtp: string; // Completion / drop-off OTP code
+}
+
+export interface CancelRidePayload {
+  bookingId?: string;
+  ridePostId?: string;
+  cancelledById: string;
+  cancelledByRole?: 'PASSENGER' | 'RIDER';
+  reason?: string;
 }
 
 /**
@@ -52,50 +67,45 @@ export async function bookRideApi(
   payload: BookRidePayload,
   token?: string,
 ): Promise<ApiResponse<BookRideResponseData>> {
-  const result = await apiClient.post<BookRideResponseData>(
+  return apiClient.post<BookRideResponseData>(
     '/api/book-ride',
     payload as unknown as Record<string, unknown>,
     token,
   );
-  if (!result.success && result.error?.includes('404')) {
-    return apiClient.post<BookRideResponseData>(
-      '/api/bookings',
-      payload as unknown as Record<string, unknown>,
-      token,
-    );
-  }
-  return result;
 }
 
 /**
  * Driver accepts or rejects a ride booking request via POST /api/respond-booking
+ * action must be 'ACCEPT' or 'REJECT'
  */
 export async function respondBookingApi(
   payload: RespondBookingPayload,
   token?: string,
 ): Promise<ApiResponse<BookRideResponseData>> {
-  const result = await apiClient.post<BookRideResponseData>(
+  return apiClient.post<BookRideResponseData>(
     '/api/respond-booking',
     payload as unknown as Record<string, unknown>,
     token,
   );
-  if (!result.success && result.error?.includes('404')) {
-    return apiClient.post<BookRideResponseData>(
-      `/api/bookings/${payload.bookingId}/respond`,
-      payload as unknown as Record<string, unknown>,
-      token,
-    );
-  }
-  return result;
 }
 
 /**
  * Get all bookings for the logged-in user (as passenger or driver) via GET /api/bookings
+ * role: 'PASSENGER' | 'RIDER', status optional filter
  */
 export async function getBookingsApi(
+  params?: { role?: string; status?: string },
   token?: string,
 ): Promise<ApiResponse<BookRideResponseData[]>> {
-  return apiClient.get<BookRideResponseData[]>('/api/bookings', token);
+  let endpoint = '/api/bookings';
+  if (params) {
+    const query = new URLSearchParams();
+    if (params.role) query.set('role', params.role);
+    if (params.status) query.set('status', params.status);
+    const qs = query.toString();
+    if (qs) endpoint += `?${qs}`;
+  }
+  return apiClient.get<BookRideResponseData[]>(endpoint, token);
 }
 
 /**
@@ -105,11 +115,7 @@ export async function getBookingByIdApi(
   id: string,
   token?: string,
 ): Promise<ApiResponse<BookRideResponseData>> {
-  const result = await apiClient.get<BookRideResponseData>(`/api/booking/${id}`, token);
-  if (!result.success && result.error?.includes('404')) {
-    return apiClient.get<BookRideResponseData>(`/api/bookings/${id}`, token);
-  }
-  return result;
+  return apiClient.get<BookRideResponseData>(`/api/booking/${id}`, token);
 }
 
 /**
@@ -119,19 +125,11 @@ export async function startRideApi(
   payload: StartRidePayload,
   token?: string,
 ): Promise<ApiResponse<BookRideResponseData>> {
-  const result = await apiClient.post<BookRideResponseData>(
+  return apiClient.post<BookRideResponseData>(
     '/api/start-ride',
     payload as unknown as Record<string, unknown>,
     token,
   );
-  if (!result.success && result.error?.includes('404')) {
-    return apiClient.post<BookRideResponseData>(
-      `/api/bookings/${payload.bookingId}/start`,
-      payload as unknown as Record<string, unknown>,
-      token,
-    );
-  }
-  return result;
 }
 
 /**
@@ -141,17 +139,23 @@ export async function completeRideApi(
   payload: CompleteRidePayload,
   token?: string,
 ): Promise<ApiResponse<BookRideResponseData>> {
-  const result = await apiClient.post<BookRideResponseData>(
+  return apiClient.post<BookRideResponseData>(
     '/api/complete-ride',
     payload as unknown as Record<string, unknown>,
     token,
   );
-  if (!result.success && result.error?.includes('404')) {
-    return apiClient.post<BookRideResponseData>(
-      `/api/bookings/${payload.bookingId}/complete`,
-      payload as unknown as Record<string, unknown>,
-      token,
-    );
-  }
-  return result;
+}
+
+/**
+ * Cancel a booking or ride post via POST /api/cancel-ride
+ */
+export async function cancelRideApi(
+  payload: CancelRidePayload,
+  token?: string,
+): Promise<ApiResponse<unknown>> {
+  return apiClient.post<unknown>(
+    '/api/cancel-ride',
+    payload as unknown as Record<string, unknown>,
+    token,
+  );
 }

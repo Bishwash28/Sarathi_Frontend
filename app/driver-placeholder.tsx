@@ -15,6 +15,7 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { getRouteDirections } from '../services/locationService';
 
 
 export default function OfferRideScreen() {
@@ -39,7 +40,7 @@ export default function OfferRideScreen() {
   // Simple origin → destination corridor (landmark auto-detection removed)
   const fullRouteCorridor = [pointA, pointB].filter(Boolean);
 
-  const handleCreateOffer = () => {
+  const handleCreateOffer = async () => {
     if (!pointA || !pointA.trim()) {
       Alert.alert('Missing Start', 'Please enter your Starting Location (Point A).');
       return;
@@ -64,13 +65,44 @@ export default function OfferRideScreen() {
       return;
     }
 
-    // Ride publishing is coming soon — API integration being rebuilt
-    Alert.alert(
-      'Coming Soon 🚧',
-      'Ride publishing will be available soon. Stay tuned!',
-      [{ text: 'OK' }]
-    );
+    const originCoords = { lat: 27.7172, lng: 85.3240 };
+    const destCoords = { lat: 27.6710, lng: 85.3120 };
 
+    let polylineString = '';
+    try {
+      const route = await getRouteDirections(originCoords, destCoords);
+      if (route?.encodedPolyline) {
+        polylineString = route.encodedPolyline;
+      }
+    } catch (rErr) {
+      console.warn('[driver-placeholder] Route polyline fetch error:', rErr);
+    }
+
+    try {
+      const result = await createRide({
+        vehicleType: 'scooter',
+        vehicleName: user?.vehicleName || 'Vehicle',
+        vehicleNumber: user?.vehicleNumber || '',
+        departureTime: departureTime.trim() || 'Leaving soon',
+        seatsLeft: parsedSeats,
+        price: parsedPrice,
+        route: [pointA.trim(), pointB.trim()],
+        pickupPoint: pointA.trim(),
+        origin: originCoords,
+        destination: destCoords,
+        encodedPolyLine: polylineString,
+      });
+
+      if (result.success) {
+        Alert.alert('Offer Created! 🎉', 'Your ride offer has been published.', [
+          { text: 'OK', onPress: () => router.back() },
+        ]);
+      } else {
+        Alert.alert('Failed to Create Offer', result.error || 'Please check your inputs and try again.');
+      }
+    } catch (err: any) {
+      Alert.alert('Error', err?.message || 'Failed to connect to server.');
+    }
   };
 
   // Coord lookups removed (LANDMARKS data removed)

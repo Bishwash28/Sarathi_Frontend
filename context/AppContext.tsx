@@ -7,9 +7,28 @@ import { supabase } from '../lib/supabase';
 import {
   triggerMobilePushNotification
 } from '../services/notificationService';
-// NOTE: rideService and bookingService API calls are intentionally disabled.
-// Ride/booking functionality is being rebuilt — these will be re-enabled in a later pass.
 import { deleteUser, getUser, loginUser, signupUser, switchRole, updateUser, uploadKycDocument, verifyKycStatus } from '../services/userService';
+import {
+  bookRideApi,
+  cancelRideApi,
+  completeRideApi,
+  getBookingByIdApi,
+  getBookingsApi,
+  respondBookingApi,
+  startRideApi,
+  BookRideResponseData,
+} from '../services/bookingService';
+import { getUserVehicles } from '../services/vehicleService';
+import {
+  createRideApi,
+  getAllRidesApi,
+  updateRideApi,
+  deleteRideApi,
+  searchRidesApi,
+  backendRideToLocal,
+  searchResultToLocal,
+  SearchRideResult,
+} from '../services/rideService';
 
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -73,7 +92,7 @@ export interface Ride {
   pickupPoint: string;
   origin?: { lat: number; lng: number };
   destination?: { lat: number; lng: number };
-  ecodedPolyLine?: string;
+  encodedPolyLine?: string;
   vehicleId?: string;
 }
 
@@ -165,7 +184,7 @@ interface AppContextType {
   switchUserRole: (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => Promise<{ success: boolean; error?: string }>;
   uploadUserKycDocument: (documentType: string, document: string, file: string) => Promise<{ success: boolean; error?: string }>;
   submitKycVerify: () => Promise<{ success: boolean; error?: string }>;
-  requestBooking: (rideId: string, passengerPickup?: string, passengerDropoff?: string) => void;
+  requestBooking: (ridePostId: string, passengerPickup?: string, passengerDropoff?: string, pickupCoords?: { lat: number; lng: number }, dropCoords?: { lat: number; lng: number }) => void;
   cancelBooking: (bookingId: string) => void;
   addDriverNotification: (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => void;
   markNotificationAsRead: (id: string) => void;
@@ -181,7 +200,7 @@ interface AppContextType {
   verifyCompletionOtp: (bookingId: string, otp: string) => { success: boolean; error?: string };
   processPayment: (bookingId: string, method: 'cash' | 'khalti' | 'esewa') => { success: boolean; error?: string };
   submitRideRating: (bookingId: string, rating: number, comment?: string) => void;
-  createRide: (ride: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => void;
+  createRide: (ride: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => Promise<{ success: boolean; error?: string }>;
   updateRide: (id: string, updatedFields: Partial<Omit<Ride, 'id'>>) => void;
   deleteRide: (id: string) => void;
   acceptBooking: (bookingId: string) => void;
@@ -346,6 +365,51 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           } catch (err) {
             console.log('[AppContext] Failed to refresh user on startup:', err);
           }
+
+          // Load bookings from backend on startup
+          try {
+            const bookingRole = (await AsyncStorage.getItem('@sarathi_active_role')) === 'driver' ? 'RIDER' : 'PASSENGER';
+            const bookingsRes = await getBookingsApi({ role: bookingRole }, storedToken);
+            if (bookingsRes.success && Array.isArray(bookingsRes.data) && bookingsRes.data.length > 0) {
+              const mapped: Booking[] = bookingsRes.data.map((b: BookRideResponseData) => {
+                const st = (b.status || '').toUpperCase();
+                const statusMap: Record<string, Booking['status']> = {
+                  PENDING: 'pending', ACCEPTED: 'accepted', ONGOING: 'ongoing',
+                  COMPLETED: 'completed', CANCELLED: 'cancelled',
+                };
+                const lcMap: Record<string, RideLifecycleState> = {
+                  PENDING: 'request_pending', ACCEPTED: 'waiting_for_pickup',
+                  ONGOING: 'ride_started', COMPLETED: 'completed', CANCELLED: 'cancelled',
+                };
+                return {
+                  id: b.bookingId || b.id || `booking-${Date.now()}`,
+                  rideId: b.ridePostId || (b as any).rideId || '',
+                  passengerId: b.passengerId || storedUserId || '',
+                  passengerPickup: b.pickupLocation || (b as any).pickupAddress || '',
+                  passengerDropoff: b.dropoffLocation || (b as any).dropAddress || '',
+                  status: statusMap[st] ?? 'pending',
+                  lifecycleState: lcMap[st] ?? 'request_pending',
+                  createdAt: b.createdAt ? new Date(b.createdAt) : new Date(),
+                  pickupOtp: b.startOtpCode || (b as any).pickupOtp || '',
+                  completionOtp: b.endOtpCode || (b as any).completionOtp || '',
+                  paymentStatus: 'pending',
+                } as Booking;
+              });
+              setBookings(mapped);
+            }
+          } catch (bErr) {
+            console.log('[AppContext] Failed to load bookings on startup:', bErr);
+          }
+
+          // Load rides from backend on startup
+          try {
+            const ridesRes = await getAllRidesApi(storedToken);
+            if (ridesRes.success && Array.isArray(ridesRes.data)) {
+              setRides(ridesRes.data.map(backendRideToLocal));
+            }
+          } catch (rErr) {
+            console.log('[AppContext] Failed to load rides on startup:', rErr);
+          }
         }
       } catch (error) {
         console.error('Error loading stored state:', error);
@@ -421,7 +485,33 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     try {
       const apiResult = await loginUser({ email, password });
 
+      console.log('[RAW_LOGIN_RESULT] success:', apiResult.success, 'error:', apiResult.error, 'data:', JSON.stringify(apiResult.data));
+
       if (!apiResult.success) {
+        // ── Email-verification gate ──────────────────────────────────────────
+        // The backend currently has NO email verification system (confirmed from
+        // /docs/all.json — no verified field, no /verify-email endpoint).
+        // This gate is future-proof: when the backend adds it, the error message
+        // will likely contain words like "verified", "confirm", or "not verified".
+        // We intercept that here so no further frontend changes are needed.
+        const errMsg = (apiResult.error || '').toLowerCase();
+        const isVerificationError =
+          errMsg.includes('not verified') ||
+          errMsg.includes('email not verified') ||
+          errMsg.includes('verify your email') ||
+          errMsg.includes('email verification') ||
+          errMsg.includes('account not verified') ||
+          errMsg.includes('please verify') ||
+          errMsg.includes('confirm your email');
+
+        if (isVerificationError) {
+          console.log('[login] Email verification required — blocking login');
+          return {
+            success: false,
+            error: 'EMAIL_NOT_VERIFIED',
+          };
+        }
+
         return { success: false, error: apiResult.error || 'Login failed. Check your credentials.' };
       }
 
@@ -486,20 +576,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       return { success: true };
     } catch (networkErr: any) {
-      // ── 3. Network fallback ────────────────────────────────────────────────
-      console.warn('[login] Backend unreachable, falling back to local session:', networkErr?.message ?? networkErr);
-      setUser({
-        name: email.split('@')[0] || 'User',
-        phone: '',
-        email,
-        role: 'passenger',
-        collegeOrCompany: 'N/A',
-        emergencyContact: '',
-        rating: 4.8,
-        photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
-      });
-      setIsAuthenticated(true);
-      return { success: true };
+      // Network-level failure (device offline, DNS failure, etc.).
+      // Do NOT silently log the user in — that would allow bypassing auth
+      // by simply going offline. Return a proper error instead.
+      console.error('[login] Network error — not falling back to local session:', networkErr?.message ?? networkErr);
+      return {
+        success: false,
+        error: 'Network error. Please check your internet connection and try again.',
+      };
     }
   };
 
@@ -771,39 +855,205 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     b => b.lifecycleState !== 'completed' && b.lifecycleState !== 'cancelled'
   ) || null;
 
-  // requestBooking disabled — ride/booking functionality being rebuilt
-  const requestBooking = (_rideId: string, _passengerPickup?: string, _passengerDropoff?: string): void => {
-    Alert.alert('Coming Soon', 'Ride booking will be available soon. Stay tuned!');
+  // ─── Helper: map backend status strings → local types ───────────────────
+  const mapBackendStatus = (s?: string): Booking['status'] => {
+    switch ((s || '').toUpperCase()) {
+      case 'PENDING': return 'pending';
+      case 'ACCEPTED': return 'accepted';
+      case 'ONGOING': return 'ongoing';
+      case 'COMPLETED': return 'completed';
+      case 'CANCELLED': return 'cancelled';
+      default: return 'pending';
+    }
   };
 
-  // acceptBooking disabled — ride/booking functionality being rebuilt
-  const acceptBooking = (_bookingId: string): void => {};
-
-
-  // verifyPickupOtp disabled — ride/booking functionality being rebuilt
-  const verifyPickupOtp = (_bookingId: string, _otp: string): { success: boolean; error?: string } => {
-    return { success: false, error: 'Coming soon.' };
+  const mapBackendLifecycle = (s?: string): RideLifecycleState => {
+    switch ((s || '').toUpperCase()) {
+      case 'PENDING': return 'request_pending';
+      case 'ACCEPTED': return 'waiting_for_pickup';
+      case 'ONGOING': return 'ride_started';
+      case 'COMPLETED': return 'completed';
+      case 'CANCELLED': return 'cancelled';
+      default: return 'request_pending';
+    }
   };
 
-  // verifyCompletionOtp disabled — ride/booking functionality being rebuilt
-  const verifyCompletionOtp = (_bookingId: string, _otp: string): { success: boolean; error?: string } => {
-    return { success: false, error: 'Coming soon.' };
+  // ─── Helper: map backend booking response → local Booking shape ──────────
+  const mapBackendBooking = (b: BookRideResponseData): Booking => ({
+    id: b.bookingId || b.id || `booking-${Date.now()}`,
+    rideId: b.ridePostId || (b as any).rideId || '',
+    passengerId: b.passengerId || userId || '',
+    passengerPickup: b.pickupLocation || (b as any).pickupAddress || '',
+    passengerDropoff: b.dropoffLocation || (b as any).dropAddress || '',
+    status: mapBackendStatus(b.status),
+    lifecycleState: mapBackendLifecycle(b.status),
+    createdAt: b.createdAt ? new Date(b.createdAt) : new Date(),
+    pickupOtp: b.startOtpCode || (b as any).pickupOtp || '',
+    completionOtp: b.endOtpCode || (b as any).completionOtp || '',
+    paymentStatus: 'pending',
+  });
+
+
+  /**
+   * Passenger: book a ride via POST /api/book-ride
+   * Requires origin/destination coords from the ride search result.
+   */
+  const requestBooking = async (
+    ridePostId: string,
+    passengerPickup?: string,
+    passengerDropoff?: string,
+    pickupCoords?: { lat: number; lng: number },
+    dropCoords?: { lat: number; lng: number },
+  ): Promise<void> => {
+    const token = await getStoredToken();
+    const result = await bookRideApi(
+      {
+        ridePostId,
+        pickupAddress: passengerPickup || 'Pickup',
+        pickupLat: pickupCoords?.lat ?? 0,
+        pickupLng: pickupCoords?.lng ?? 0,
+        dropAddress: passengerDropoff || 'Drop-off',
+        dropLat: dropCoords?.lat ?? 0,
+        dropLng: dropCoords?.lng ?? 0,
+        seatsBooked: 1,
+      },
+      token,
+    );
+    if (!result.success) {
+      Alert.alert('Booking Failed', result.error || 'Could not book ride.');
+      return;
+    }
+    const newBooking = mapBackendBooking(result.data!);
+    setBookings(prev => [
+      ...prev.filter(b => b.id !== newBooking.id),
+      newBooking,
+    ]);
+    await saveActiveBookingToStorage(newBooking);
   };
 
-  // processPayment disabled — ride/booking functionality being rebuilt
+  /** Driver: accept a pending booking via POST /api/respond-booking */
+  const acceptBooking = async (bookingId: string): Promise<void> => {
+    const token = await getStoredToken();
+    const result = await respondBookingApi({ bookingId, action: 'ACCEPT' }, token);
+    if (result.success) {
+      setBookings(prev =>
+        prev.map(b =>
+          b.id === bookingId
+            ? { ...b, status: 'accepted', lifecycleState: 'waiting_for_pickup' }
+            : b
+        )
+      );
+    }
+  };
+
+  /** Driver: verify pickup OTP via POST /api/start-ride */
+  const verifyPickupOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
+    // Async wrapper — fire and update state
+    (async () => {
+      const token = await getStoredToken();
+      const result = await startRideApi({ bookingId, startOtp: otp }, token);
+      if (result.success) {
+        setBookings(prev =>
+          prev.map(b =>
+            b.id === bookingId
+              ? { ...b, status: 'ongoing', lifecycleState: 'ride_started', otpError: null }
+              : b
+          )
+        );
+      } else {
+        setBookings(prev =>
+          prev.map(b =>
+            b.id === bookingId ? { ...b, otpError: result.error || 'Invalid OTP' } : b
+          )
+        );
+      }
+    })();
+    return { success: true }; // Optimistically return; UI updates via state
+  };
+
+  /** Driver: verify completion OTP via POST /api/complete-ride */
+  const verifyCompletionOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
+    (async () => {
+      const token = await getStoredToken();
+      const result = await completeRideApi({ bookingId, endOtp: otp }, token);
+      if (result.success) {
+        setBookings(prev =>
+          prev.map(b =>
+            b.id === bookingId
+              ? { ...b, status: 'completed', lifecycleState: 'payment_pending', otpError: null }
+              : b
+          )
+        );
+      } else {
+        setBookings(prev =>
+          prev.map(b =>
+            b.id === bookingId ? { ...b, otpError: result.error || 'Invalid OTP' } : b
+          )
+        );
+      }
+    })();
+    return { success: true };
+  };
+
+  /** Payment — no backend endpoint yet; show options locally and mark complete */
   const processPayment = (_bookingId: string, _method: 'cash' | 'khalti' | 'esewa'): { success: boolean; error?: string } => {
-    return { success: false, error: 'Coming soon.' };
+    // Payment gateway not yet available on backend
+    setBookings(prev =>
+      prev.map(b =>
+        b.id === _bookingId
+          ? { ...b, paymentMethod: _method, paymentStatus: 'completed', lifecycleState: 'rating_pending' }
+          : b
+      )
+    );
+    return { success: true };
   };
 
-  // submitRideRating disabled — ride/booking functionality being rebuilt
-  const submitRideRating = (_bookingId: string, _rating: number, _comment?: string): void => {};
+  /** Rating submission — no backend endpoint yet; store locally */
+  const submitRideRating = (_bookingId: string, _rating: number, _comment?: string): void => {
+    setBookings(prev =>
+      prev.map(b =>
+        b.id === _bookingId
+          ? { ...b, rating: _rating, reviewComment: _comment, lifecycleState: 'completed', status: 'completed' }
+          : b
+      )
+    );
+    saveActiveBookingToStorage(null);
+  };
 
-  // cancelBooking / declineBooking disabled — ride/booking functionality being rebuilt
-  const cancelBooking = (_bookingId: string): void => {};
-  const declineBooking = (_bookingId: string): void => {};
+  /** Cancel a booking via POST /api/cancel-ride */
+  const cancelBooking = async (bookingId: string): Promise<void> => {
+    const token = await getStoredToken();
+    const currentUserId = userId || (await AsyncStorage.getItem('@sarathi_user_id'));
+    if (!currentUserId) return;
+    await cancelRideApi(
+      { bookingId, cancelledById: currentUserId, cancelledByRole: 'PASSENGER' },
+      token,
+    );
+    setBookings(prev =>
+      prev.map(b =>
+        b.id === bookingId ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b
+      )
+    );
+    saveActiveBookingToStorage(null);
+  };
 
-  // nudgeDriverLocation disabled — ride/booking functionality being rebuilt
-  const nudgeDriverLocation = (_bookingId: string): void => {};
+  /** Driver rejects a booking via POST /api/respond-booking with action REJECT */
+  const declineBooking = async (bookingId: string): Promise<void> => {
+    const token = await getStoredToken();
+    const result = await respondBookingApi({ bookingId, action: 'REJECT' }, token);
+    if (result.success) {
+      setBookings(prev =>
+        prev.map(b =>
+          b.id === bookingId ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b
+        )
+      );
+    }
+  };
+
+  /** Simulate GPS nudge — no backend endpoint for live tracking */
+  const nudgeDriverLocation = (_bookingId: string): void => {
+    setActiveTripProgress(prev => Math.min(100, prev + 15));
+  };
 
   const sendDriverMessage = (rideId: string, text: string) => {
     const userMsg: DriverMessage = {
@@ -1046,17 +1296,105 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: true };
   };
 
-  // createRide / updateRide / deleteRide disabled — ride functionality being rebuilt
-  const createRide = async (_newRideData: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>): Promise<void> => {
-    console.log('[createRide] disabled — coming soon');
+  /**
+   * Driver: create a new ride offer via POST /api/create-ride
+   * The payload must include coords (origin/dest), vehicleId, departureTime, seats.
+   */
+  const createRide = async (newRideData: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>): Promise<{ success: boolean; error?: string }> => {
+    const token = await getStoredToken();
+    const currentUserId = userId || (await AsyncStorage.getItem('@sarathi_user_id'));
+    console.log('=== [DEBUG] createRide CALLED ===', {
+      currentUserId,
+      tokenPreview: token ? `${token.substring(0, 20)}...` : 'MISSING',
+      newRideData,
+    });
+
+    if (!currentUserId) {
+      console.log('=== [DEBUG] createRide ERROR: Not logged in ===');
+      return { success: false, error: 'Please log in to publish a ride.' };
+    }
+
+    let vehicleIdToUse = newRideData.vehicleId;
+    if (!vehicleIdToUse) {
+      try {
+        console.log('=== [DEBUG] createRide: No vehicleId provided, fetching user vehicles... ===');
+        const vRes = await getUserVehicles(token);
+        console.log('=== [DEBUG] createRide: getUserVehicles response ===', vRes);
+        if (vRes.success && Array.isArray(vRes.data) && vRes.data.length > 0) {
+          vehicleIdToUse = vRes.data[0].id;
+        } else if (vRes.success && vRes.data && typeof vRes.data === 'object' && !Array.isArray(vRes.data)) {
+          vehicleIdToUse = (vRes.data as any).id;
+        }
+      } catch (vErr) {
+        console.warn('=== [DEBUG] createRide: Could not fetch vehicle ID ===', vErr);
+      }
+    }
+
+    console.log('=== [DEBUG] createRide: Resolved vehicleIdToUse ===', vehicleIdToUse);
+
+    if (!newRideData.origin || !newRideData.destination) {
+      return { success: false, error: 'Origin and destination are required.' };
+    }
+    if (!vehicleIdToUse) {
+      return { success: false, error: 'No registered vehicle found for driver. Please register a vehicle in your profile first.' };
+    }
+
+    const payload = {
+      origin: newRideData.origin,
+      destination: newRideData.destination,
+      ecodedPolyLine: newRideData.encodedPolyLine || '',
+      departureTime: newRideData.departureTime,
+      vehicleId: vehicleIdToUse,
+      availbleSeats: newRideData.seatsLeft,
+      pricePerSeat: newRideData.price,
+    };
+
+    console.log('=== [DEBUG] createRide: Sending payload to createRideApi ===', payload);
+
+    const result = await createRideApi(payload, currentUserId, token);
+
+    console.log('=== [DEBUG] createRide: Raw API Result ===', result);
+
+    if (!result.success) {
+      return { success: false, error: result.error || 'Could not create ride offer.' };
+    }
+    // Add the newly created ride to local state
+    if (result.data) {
+      setRides(prev => [backendRideToLocal(result.data!), ...prev]);
+    }
+    return { success: true };
   };
 
-  const updateRide = async (_id: string, _updatedFields: Partial<Omit<Ride, 'id'>>): Promise<void> => {
-    console.log('[updateRide] disabled — coming soon');
+  /** Driver: update an existing ride offer via PUT /api/update-ride?rideId= */
+  const updateRide = async (id: string, updatedFields: Partial<Omit<Ride, 'id'>>): Promise<void> => {
+    const token = await getStoredToken();
+    const payload: Record<string, unknown> = {};
+    if (updatedFields.price !== undefined) payload.pricePerSeat = updatedFields.price;
+    if (updatedFields.seatsLeft !== undefined) payload.availbleSeats = updatedFields.seatsLeft;
+    if (updatedFields.departureTime !== undefined) payload.departureTime = updatedFields.departureTime;
+    if (updatedFields.vehicleId !== undefined) payload.vehicleId = updatedFields.vehicleId;
+    if (updatedFields.origin !== undefined) payload.origin = updatedFields.origin;
+    if (updatedFields.destination !== undefined) payload.destination = updatedFields.destination;
+    if (updatedFields.encodedPolyLine !== undefined) payload.ecodedPolyLine = updatedFields.encodedPolyLine;
+
+    const result = await updateRideApi(id, payload as any, token);
+    if (result.success && result.data) {
+      setRides(prev =>
+        prev.map(r => (r.id === id ? backendRideToLocal(result.data!) : r))
+      );
+    } else if (!result.success) {
+      // Optimistic local update even if backend fails (shows user their change)
+      setRides(prev =>
+        prev.map(r => (r.id === id ? { ...r, ...updatedFields } : r))
+      );
+    }
   };
 
-  const deleteRide = async (_id: string): Promise<void> => {
-    console.log('[deleteRide] disabled — coming soon');
+  /** Driver: delete a ride offer via DELETE /api/delete-ride?rideId= */
+  const deleteRide = async (id: string): Promise<void> => {
+    const token = await getStoredToken();
+    await deleteRideApi(id, token);
+    setRides(prev => prev.filter(r => r.id !== id));
   };
 
   return (

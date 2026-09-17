@@ -13,9 +13,14 @@ export default function LoginScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  /** Holds the email address that needs verification; non-null triggers the banner. */
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
 
   const handleLogin = async () => {
     if (isLoading) return;
+    // Clear any previous verification banner when retrying
+    setUnverifiedEmail(null);
+
     const cleanEmail = sanitizeInput(email);
     
     if (hasScriptTags(email) || hasScriptTags(password)) {
@@ -37,7 +42,15 @@ export default function LoginScreen() {
     setIsLoading(true);
     const result = await login(cleanEmail, password);
     setIsLoading(false);
+
     if (!result.success) {
+      // ── Email verification gate ──────────────────────────────────────────────
+      // AppContext returns 'EMAIL_NOT_VERIFIED' as the error sentinel when the
+      // backend signals the account hasn't been verified yet.
+      if (result.error === 'EMAIL_NOT_VERIFIED') {
+        setUnverifiedEmail(cleanEmail);
+        return; // Show the inline banner — do NOT navigate
+      }
       alert(result.error || 'Login failed');
       return;
     }
@@ -77,6 +90,33 @@ export default function LoginScreen() {
               <Text style={styles.subtitle}>Log in to continue your Sarathi journey</Text>
             </View>
 
+            {/* ── Email Verification Banner ─────────────────────────────── */}
+            {unverifiedEmail !== null && (
+              <View style={styles.verificationBanner}>
+                <View style={styles.verificationIconRow}>
+                  <Ionicons name="mail-unread-outline" size={24} color="#C62026" />
+                  <Text style={styles.verificationTitle}>Verify Your Email First</Text>
+                </View>
+                <Text style={styles.verificationBody}>
+                  Your account isn't verified yet. We sent a verification link to{' '}
+                  <Text style={styles.verificationEmail}>{unverifiedEmail}</Text>.
+                  {' '}Please check your inbox (and spam/junk folder) and click the link before logging in.
+                </Text>
+                <TouchableOpacity
+                  style={styles.resendButton}
+                  onPress={() => {
+                    // Resend endpoint not yet available on the backend.
+                    // When POST /api/auth/resend-verification is added, call it here.
+                    alert('Resend verification is not yet available. Please contact support if you did not receive the email.');
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="refresh-outline" size={15} color={Colors.primary} style={{ marginRight: 5 }} />
+                  <Text style={styles.resendButtonText}>Resend verification email</Text>
+                </TouchableOpacity>
+              </View>
+            )}
+
             {/* Glassmorphic Form Card */}
             <View style={styles.card}>
               <Text style={styles.label}>Email Address</Text>
@@ -87,7 +127,7 @@ export default function LoginScreen() {
                   placeholder="Enter your email"
                   placeholderTextColor="#94A3B8"
                   value={email}
-                  onChangeText={setEmail}
+                  onChangeText={(v) => { setEmail(v); setUnverifiedEmail(null); }}
                   keyboardType="email-address"
                   autoCapitalize="none"
                 />
@@ -217,6 +257,53 @@ const styles = StyleSheet.create({
     color: '#64748B',
     textAlign: 'center',
   },
+  // ── Email Verification Banner ────────────────────────────────────────────────
+  verificationBanner: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#FCA5A5',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 20,
+  },
+  verificationIconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  verificationTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#C62026',
+    marginLeft: 8,
+  },
+  verificationBody: {
+    fontSize: 13.5,
+    color: '#7F1D1D',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  verificationEmail: {
+    fontWeight: '700',
+    color: '#991B1B',
+  },
+  resendButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  resendButtonText: {
+    fontSize: 13,
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+  // ────────────────────────────────────────────────────────────────────────────
   card: {
     backgroundColor: 'transparent',
     padding: 0,
@@ -334,3 +421,4 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 });
+

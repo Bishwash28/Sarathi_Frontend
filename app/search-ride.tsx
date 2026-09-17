@@ -1,7 +1,10 @@
 import { Ionicons } from '@expo/vector-icons';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useLocalSearchParams } from 'expo-router';
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
+  Alert,
   KeyboardAvoidingView,
   Modal,
   Platform,
@@ -19,10 +22,19 @@ import { useApp } from '../context/AppContext';
 import { useLocationSearch } from '../hooks/useLocationSearch';
 import { LocationPinPickerMap } from '../components/LocationPinPickerMap';
 import { LocationSearchInput } from '../components/LocationSearchInput';
+import { getRouteDirections } from '../services/locationService';
+import { searchRidesApi, searchResultToLocal, SearchRideResult } from '../services/rideService';
+import type { RideData } from '../services/rideService';
 
 export default function SearchRideScreen() {
-  const { rides, deviceLocation, addRecentSearch, recentSearches, savedPlaces } = useApp();
+  const { rides, deviceLocation, addRecentSearch, recentSearches, savedPlaces, requestBooking } = useApp();
   const params = useLocalSearchParams();
+
+  // Search state
+  const [candidateRides, setCandidateRides] = useState<RideData[]>([]);
+  const [isSearching, setIsSearching] = useState(false);
+  const [hasSearched, setHasSearched] = useState(false);
+  const [searchError, setSearchError] = useState<string | null>(null);
 
   const {
     origin,
@@ -48,6 +60,8 @@ export default function SearchRideScreen() {
     openPinPicker,
     closePinPicker,
     confirmPinLocation,
+
+    routeInfo,
   } = useLocationSearch();
 
   const [activeTab, setActiveTab] = useState<'recent' | 'saved'>('recent');
@@ -97,8 +111,64 @@ export default function SearchRideScreen() {
     }
   };
 
-  // candidateRides — ride matching disabled, will be rebuilt with real backend data
-  const candidateRides: typeof rides = [];
+  // candidateRides — populated via backend search below
+
+  const handleSearchRides = async () => {
+    if (!origin.coords || !destination.coords) {
+      Alert.alert('Missing Location', 'Please select both origin and destination.');
+      return;
+    }
+    setIsSearching(true);
+    setHasSearched(true);
+    setSearchError(null);
+    console.log('=== [DEBUG] searchRidesApi CALLED ===', {
+      originCoords: origin.coords,
+      destCoords: destination.coords,
+      originText: origin.text,
+      destText: destination.text,
+    });
+    try {
+      const storedToken =
+        (await AsyncStorage.getItem('@sarathi_token')) ||
+        (await AsyncStorage.getItem('@sarathi_auth_token'));
+
+      let polylineString = routeInfo?.encodedPolyline || '';
+      if (!polylineString) {
+        try {
+          const route = await getRouteDirections(origin.coords, destination.coords);
+          if (route?.encodedPolyline) {
+            polylineString = route.encodedPolyline;
+          }
+        } catch (rErr) {
+          console.warn('[search-ride] Directions polyline fetch error:', rErr);
+        }
+      }
+
+      const payload = {
+        origin: origin.coords,
+        destination: destination.coords,
+        encodedPolyLine: polylineString,
+        seatsNeeded: 1,
+      };
+      console.log('=== [DEBUG] searchRidesApi Sending payload ===', payload);
+      const result = await searchRidesApi(payload, storedToken ?? undefined);
+      console.log('=== [DEBUG] searchRidesApi Raw Result ===', result);
+
+      if (result.success && Array.isArray(result.data)) {
+        setCandidateRides(result.data.map(searchResultToLocal));
+      } else {
+        setSearchError(result.error || 'No rides found.');
+        setCandidateRides([]);
+      }
+    } catch (err: any) {
+      console.error('=== [DEBUG] searchRidesApi EXCEPTION ===', err);
+      setSearchError('Failed to search rides. Please try again.');
+      setCandidateRides([]);
+    } finally {
+      setIsSearching(false);
+    }
+  };
+
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
@@ -152,6 +222,26 @@ export default function SearchRideScreen() {
           />
         </View>
 
+        {/* ── Search Rides Button ── */}
+        {origin.coords && destination.coords && (
+          <TouchableOpacity
+            style={[styles.searchBtn, isSearching && { opacity: 0.7 }]}
+            onPress={handleSearchRides}
+            disabled={isSearching}
+            activeOpacity={0.85}
+          >
+            {isSearching ? (
+              <ActivityIndicator size="small" color="#fff" />
+            ) : (
+              <Ionicons name="search" size={18} color="#fff" />
+            )}
+            <Text style={styles.searchBtnText}>
+              {isSearching ? 'Searching...' : 'Search Rides'}
+            </Text>
+          </TouchableOpacity>
+        )}
+
+
         <ScrollView
           style={styles.scroll}
           contentContainerStyle={styles.scrollContent}
@@ -159,12 +249,29 @@ export default function SearchRideScreen() {
         >
           {destination.text ? (
             <View style={styles.resultsContainer}>
-              <Text style={styles.resultsHeading}>Matched Rides going to "{destination.text}"</Text>
-              {candidateRides.length === 0 ? (
+              <Text style={styles.resultsHeading}>Matched Rides to "{destination.text}"</Text>
+              {isSearching ? (
+                <View style={styles.noResultsCard}>
+                  <ActivityIndicator size="large" color={Colors.primary} />
+                  <Text style={{ marginTop: 12, color: Colors.textMuted, fontSize: 14 }}>Searching for rides...</Text>
+                </View>
+              ) : searchError ? (
+                <View style={styles.noResultsCard}>
+                  <Ionicons name="alert-circle-outline" size={48} color={Colors.error} />
+                  <Text style={styles.noResultsText}>Search error</Text>
+                  <Text style={styles.noResultsSubtext}>{searchError}</Text>
+                </View>
+              ) : !hasSearched ? (
                 <View style={styles.noResultsCard}>
                   <Ionicons name="search-outline" size={48} color={Colors.textMuted} />
+                  <Text style={styles.noResultsText}>Tap "Search Rides" above</Text>
+                  <Text style={styles.noResultsSubtext}>Enter both locations, then tap Search Rides to find available drivers.</Text>
+                </View>
+              ) : candidateRides.length === 0 ? (
+                <View style={styles.noResultsCard}>
+                  <Ionicons name="car-outline" size={48} color={Colors.textMuted} />
                   <Text style={styles.noResultsText}>No rides found on this route</Text>
-                  <Text style={styles.noResultsSubtext}>No drivers are currently heading along this route corridor.</Text>
+                  <Text style={styles.noResultsSubtext}>No drivers are currently heading along this route.</Text>
                 </View>
               ) : (
                 candidateRides.map(ride => (
@@ -172,14 +279,25 @@ export default function SearchRideScreen() {
                     key={ride.id}
                     style={styles.rideCard}
                     onPress={() => {
-                      addRecentSearch(origin.text || ride.route[0], destination.text);
-                      router.push({ 
-                        pathname: '/ride-detail', 
-                        params: { 
+                      addRecentSearch(origin.text || 'Origin', destination.text);
+                      router.push({
+                        pathname: '/ride-detail',
+                        params: {
                           id: ride.id,
                           selectedPickup: origin.text,
-                          selectedDest: destination.text
-                        } 
+                          selectedDest: destination.text,
+                          pickupLat: origin.coords?.lat ?? 0,
+                          pickupLng: origin.coords?.lng ?? 0,
+                          dropLat: destination.coords?.lat ?? 0,
+                          dropLng: destination.coords?.lng ?? 0,
+                          riderName: ride.riderName,
+                          vehicleName: ride.vehicleName,
+                          vehicleNumber: ride.vehicleNumber,
+                          price: ride.price,
+                          seatsLeft: ride.seatsLeft,
+                          departureTime: ride.departureTime,
+                          rating: ride.rating ?? 5,
+                        },
                       });
                     }}
                     activeOpacity={0.9}
@@ -189,22 +307,15 @@ export default function SearchRideScreen() {
                         <Text style={styles.driverNameText}>{ride.riderName}</Text>
                         <View style={styles.ratingBadge}>
                           <Ionicons name="star" size={12} color="#F59E0B" />
-                          <Text style={styles.ratingText}>{ride.rating}</Text>
+                          <Text style={styles.ratingText}>{(ride.rating ?? 5).toFixed(1)}</Text>
                         </View>
                       </View>
                       <Text style={styles.priceText}>NPR {ride.price}</Text>
                     </View>
 
                     <View style={styles.vehicleInfoRow}>
-                      <Ionicons name={ride.vehicleType === 'bike' ? 'bicycle' : 'speedometer-outline'} size={14} color={Colors.textMuted} />
+                      <Ionicons name="speedometer-outline" size={14} color={Colors.textMuted} />
                       <Text style={styles.vehicleNameText}>{ride.vehicleName} • {ride.vehicleNumber}</Text>
-                    </View>
-
-                    <View style={styles.routeTrace}>
-                      <Ionicons name="arrow-forward-circle" size={16} color={Colors.accent} />
-                      <Text style={styles.routeTraceText} numberOfLines={1}>
-                        {ride.route.join(' → ')}
-                      </Text>
                     </View>
 
                     <View style={styles.cardFooter}>
@@ -212,6 +323,7 @@ export default function SearchRideScreen() {
                       <View style={styles.seatsBadge}>
                         <Text style={styles.seatsText}>{ride.seatsLeft} seat{ride.seatsLeft > 1 ? 's' : ''} left</Text>
                       </View>
+
                     </View>
                   </TouchableOpacity>
                 ))
@@ -543,6 +655,22 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: Colors.textPrimary,
     marginBottom: 12,
+  },
+  searchBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    paddingVertical: 14,
+    marginHorizontal: 16,
+    marginBottom: 8,
+  },
+  searchBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   noResultsCard: {
     backgroundColor: '#FFFFFF',

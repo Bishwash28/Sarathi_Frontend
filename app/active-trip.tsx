@@ -81,14 +81,14 @@ export default function ActiveTripScreen() {
   };
 
   const handleVerifyPickup = () => {
-    const res = verifyPickupOtp(currentBooking.id, inputPickupOtp || '4821');
+    const res = verifyPickupOtp(currentBooking.id, inputPickupOtp);
     if (!res.success) {
       Alert.alert('Verification Failed', res.error || 'Incorrect OTP');
     }
   };
 
   const handleVerifyCompletion = () => {
-    const res = verifyCompletionOtp(currentBooking.id, inputCompletionOtp || '7392');
+    const res = verifyCompletionOtp(currentBooking.id, inputCompletionOtp);
     if (!res.success) {
       Alert.alert('Verification Failed', res.error || 'Incorrect OTP');
     }
@@ -177,7 +177,7 @@ export default function ActiveTripScreen() {
                 <Ionicons name="key" size={24} color="#FFF" />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.otpBannerTitle}>YOUR PICKUP OTP</Text>
-                  <Text style={styles.otpBannerCode}>{currentBooking.pickupOtp || '4821'}</Text>
+                  <Text style={styles.otpBannerCode}>{currentBooking.pickupOtp || '----'}</Text>
                 </View>
               </View>
               <Text style={styles.stepHelpText}>
@@ -189,7 +189,7 @@ export default function ActiveTripScreen() {
               <View style={styles.otpInputRow}>
                 <TextInput
                   style={styles.otpTextInput}
-                  placeholder="Enter OTP (4821)"
+                  placeholder="Enter 4-digit OTP"
                   placeholderTextColor={Colors.textMuted}
                   value={inputPickupOtp}
                   onChangeText={setInputPickupOtp}
@@ -230,10 +230,10 @@ export default function ActiveTripScreen() {
 
               <TouchableOpacity
                 style={[styles.verifyButton, { backgroundColor: Colors.accent, marginTop: 8 }]}
-                onPress={() => verifyCompletionOtp(currentBooking.id, '7392')}
+                onPress={() => verifyCompletionOtp(currentBooking.id, currentBooking.completionOtp || '')}
               >
                 <Ionicons name="flag" size={18} color="#FFF" />
-                <Text style={styles.verifyButtonText}>Dev: Reach Destination</Text>
+                <Text style={styles.verifyButtonText}>Complete & Verify End</Text>
               </TouchableOpacity>
             </View>
           )}
@@ -245,7 +245,7 @@ export default function ActiveTripScreen() {
                 <Ionicons name="checkmark-done-circle" size={24} color="#FFF" />
                 <View style={{ flex: 1 }}>
                   <Text style={styles.otpBannerTitle}>YOUR RIDE COMPLETION OTP</Text>
-                  <Text style={styles.otpBannerCode}>{currentBooking.completionOtp || '7392'}</Text>
+                  <Text style={styles.otpBannerCode}>{currentBooking.completionOtp || '----'}</Text>
                 </View>
               </View>
               <Text style={styles.stepHelpText}>
@@ -257,7 +257,7 @@ export default function ActiveTripScreen() {
               <View style={styles.otpInputRow}>
                 <TextInput
                   style={styles.otpTextInput}
-                  placeholder="Enter OTP (7392)"
+                  placeholder="Enter 4-digit OTP"
                   placeholderTextColor={Colors.textMuted}
                   value={inputCompletionOtp}
                   onChangeText={setInputCompletionOtp}

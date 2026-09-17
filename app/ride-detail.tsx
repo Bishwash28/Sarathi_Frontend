@@ -11,10 +11,35 @@ import { matchPassengerToRoute, calculateProratedFare, RouteMatchResult } from '
 import { makePhoneCall } from '../utils/phoneUtils';
 
 export default function RideDetailScreen() {
-  const { id, selectedPickup, selectedDest } = useLocalSearchParams();
+  const {
+    id, selectedPickup, selectedDest,
+    pickupLat, pickupLng, dropLat, dropLng,
+    riderName: paramRiderName, vehicleName: paramVehicleName,
+    vehicleNumber: paramVehicleNumber, price: paramPrice,
+    seatsLeft: paramSeatsLeft, departureTime: paramDepartureTime,
+    rating: paramRating,
+  } = useLocalSearchParams();
   const { rides, requestBooking, bookings, startRiderChat, deviceLocation } = useApp();
 
-  const ride = rides.find(r => r.id === id);
+  // Try to find the ride in the local rides array, fall back to params
+  const foundRide = rides.find(r => r.id === id);
+  const ride = foundRide ?? (id ? {
+    id: id as string,
+    riderName: (paramRiderName as string) || 'Driver',
+    riderPhoto: '',
+    phone: undefined,
+    rating: parseFloat((paramRating as string) || '5') || 5,
+    vehicleType: 'scooter' as const,
+    vehicleName: (paramVehicleName as string) || 'Vehicle',
+    vehicleNumber: (paramVehicleNumber as string) || '',
+    departureTime: (paramDepartureTime as string) || 'Soon',
+    seatsLeft: parseInt((paramSeatsLeft as string) || '1', 10),
+    price: parseFloat((paramPrice as string) || '0') || 0,
+    route: [selectedPickup as string || '', selectedDest as string || ''],
+    pickupPoint: (selectedPickup as string) || '',
+    origin: pickupLat && pickupLng ? { lat: parseFloat(pickupLat as string), lng: parseFloat(pickupLng as string) } : undefined,
+    destination: dropLat && dropLng ? { lat: parseFloat(dropLat as string), lng: parseFloat(dropLng as string) } : undefined,
+  } : null);
 
   if (!ride) {
     return (
@@ -50,10 +75,10 @@ export default function RideDetailScreen() {
   let validationResult: { isValid: boolean; reason: string } = { isValid: false, reason: '' };
   let calculatedFare = ride.price;
 
-  if (ride.ecodedPolyLine && pickupCoord && dropoffCoord) {
+  if (ride.encodedPolyLine && pickupCoord && dropoffCoord) {
     // 1. Live polyline geometrical matching with 1000m threshold
     const polyMatch: RouteMatchResult = matchPassengerToRoute(
-      ride.ecodedPolyLine,
+      ride.encodedPolyLine,
       pickupCoord,
       dropoffCoord,
       1000
@@ -66,7 +91,7 @@ export default function RideDetailScreen() {
       };
       // Prorate fare dynamically based on segment distance vs full route distance
       calculatedFare = calculateProratedFare(
-        ride.ecodedPolyLine,
+        ride.encodedPolyLine,
         pickupCoord,
         dropoffCoord,
         ride.price
@@ -91,23 +116,34 @@ export default function RideDetailScreen() {
     }
   }
 
-  const handleBooking = () => {
-    if (!validationResult.isValid) {
-      Alert.alert('Cannot Request Ride', validationResult.reason);
-      return;
-    }
-
+  const handleBooking = async () => {
     const pendingBooking = bookings.find(b => b.status === 'pending' || b.status === 'accepted');
     if (pendingBooking) {
       Alert.alert('Active Booking Exists', 'You already have an active or pending booking. Please manage your active trip first.');
       return;
     }
 
-    requestBooking(ride.id, passengerPickup, passengerDropoff);
-    router.push({
-      pathname: '/booking-status',
-      params: { rideId: ride.id }
-    });
+    // Build pickup/drop coords from navigation params
+    const pLat = parseFloat((pickupLat as string) || '0');
+    const pLng = parseFloat((pickupLng as string) || '0');
+    const dLat = parseFloat((dropLat as string) || '0');
+    const dLng = parseFloat((dropLng as string) || '0');
+
+    try {
+      await requestBooking(
+        ride!.id,
+        passengerPickup,
+        passengerDropoff,
+        pLat && pLng ? { lat: pLat, lng: pLng } : ride?.origin,
+        dLat && dLng ? { lat: dLat, lng: dLng } : ride?.destination,
+      );
+      router.push({
+        pathname: '/booking-status',
+        params: { rideId: ride!.id }
+      });
+    } catch (err: any) {
+      Alert.alert('Booking Failed', err?.message || 'Could not place booking request.');
+    }
   };
 
   const handleCall = () => {

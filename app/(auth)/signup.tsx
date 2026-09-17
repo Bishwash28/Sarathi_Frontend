@@ -15,6 +15,9 @@ export default function SignupScreen() {
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  /** When true, replaces the form with a "check your email" confirmation panel. */
+  const [signupSuccess, setSignupSuccess] = useState(false);
+  const [signupEmail, setSignupEmail] = useState('');
 
   const handleGoogleLogin = async () => {
     if (isLoading) return;
@@ -83,8 +86,11 @@ export default function SignupScreen() {
       return;
     }
 
-    // Skip OTP — go directly to the app
-    router.replace('/(tabs)');
+    // Show confirmation panel — do NOT auto-navigate to tabs.
+    // When the backend adds email verification, the user will need to verify
+    // before logging in. Showing this panel is correct in both scenarios.
+    setSignupEmail(cleanEmail);
+    setSignupSuccess(true);
   };
 
   return (
@@ -100,115 +106,142 @@ export default function SignupScreen() {
       >
         <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
           <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-            
-            {/* Header Section */}
-            <View style={styles.headerContainer}>
-              <Text style={styles.title}>Create Account</Text>
-              <Text style={styles.subtitle}>Join Sarathi to ride and share together</Text>
-            </View>
 
-            {/* Glassmorphic Form Card */}
-            <View style={styles.card}>
-              <Text style={styles.label}>Full Name</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons name="person-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="e.g. John Doe"
-                  placeholderTextColor="#94A3B8"
-                  value={name}
-                  onChangeText={setName}
-                />
-              </View>
-
-              <Text style={styles.label}>Email Address</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons name="mail-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="e.g. user@email.com"
-                  placeholderTextColor="#94A3B8"
-                  value={email}
-                  onChangeText={setEmail}
-                  keyboardType="email-address"
-                  autoCapitalize="none"
-                />
-              </View>
-
-              <Text style={styles.label}>Phone Number</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons name="call-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="e.g. 9841234567"
-                  placeholderTextColor="#94A3B8"
-                  value={phone}
-                  onChangeText={setPhone}
-                  keyboardType="phone-pad"
-                />
-              </View>
-
-              <Text style={styles.label}>Password</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons name="lock-closed-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
-                <TextInput
-                  style={styles.passwordInput}
-                  placeholder="Min 8 chars, 1 Upper, 1 Lower & 1 Symbol"
-                  placeholderTextColor="#94A3B8"
-                  value={password}
-                  onChangeText={setPassword}
-                  secureTextEntry={!showPassword}
-                />
-                <TouchableOpacity 
-                  style={styles.eyeIcon} 
-                  onPress={() => setShowPassword(!showPassword)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+            {/* ── Success / Email Confirmation Panel ──────────────────────── */}
+            {signupSuccess ? (
+              <View style={styles.successContainer}>
+                <View style={styles.successIconWrap}>
+                  <Ionicons name="mail-open-outline" size={52} color={Colors.primary} />
+                </View>
+                <Text style={styles.successTitle}>Account Created!</Text>
+                <Text style={styles.successBody}>
+                  Your Sarathi account has been created successfully.
+                  {"\n\n"}
+                  We may have sent a verification link to{' '}
+                  <Text style={styles.successEmail}>{signupEmail}</Text>.
+                  {" Please check your inbox (and spam/junk folder) and verify your email before logging in."}
+                </Text>
+                <TouchableOpacity
+                  style={styles.goToLoginButton}
+                  onPress={() => router.replace('/(auth)/login')}
+                  activeOpacity={0.85}
                 >
-                  <Ionicons 
-                    name={showPassword ? "eye-outline" : "eye-off-outline"} 
-                    size={20} 
-                    color="#64748B" 
-                  />
+                  <Ionicons name="log-in-outline" size={18} color="#FFFFFF" style={{ marginRight: 8 }} />
+                  <Text style={styles.goToLoginText}>Go to Log In</Text>
                 </TouchableOpacity>
               </View>
+            ) : (
+              <>
+                {/* Header Section */}
+                <View style={styles.headerContainer}>
+                  <Text style={styles.title}>Create Account</Text>
+                  <Text style={styles.subtitle}>Join Sarathi to ride and share together</Text>
+                </View>
 
-              <TouchableOpacity
-                style={[styles.signupButton, isLoading && styles.signupButtonDisabled]}
-                onPress={handleSignup}
-                activeOpacity={0.85}
-                disabled={isLoading}
-              >
-                {isLoading ? (
-                  <ActivityIndicator size="small" color="#FFFFFF" />
-                ) : (
-                  <>
-                    <Text style={styles.signupButtonText}>Create Account</Text>
-                    <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
-                  </>
-                )}
-              </TouchableOpacity>
+                {/* Glassmorphic Form Card */}
+                <View style={styles.card}>
+                  <Text style={styles.label}>Full Name</Text>
+                  <View style={styles.inputContainer}>
+                    <Ionicons name="person-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="e.g. John Doe"
+                      placeholderTextColor="#94A3B8"
+                      value={name}
+                      onChangeText={setName}
+                    />
+                  </View>
 
-              {/* Divider */}
-              <View style={styles.dividerContainer}>
-                <View style={styles.divider} />
-                <Text style={styles.dividerText}>OR</Text>
-                <View style={styles.divider} />
-              </View>
+                  <Text style={styles.label}>Email Address</Text>
+                  <View style={styles.inputContainer}>
+                    <Ionicons name="mail-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="e.g. user@email.com"
+                      placeholderTextColor="#94A3B8"
+                      value={email}
+                      onChangeText={setEmail}
+                      keyboardType="email-address"
+                      autoCapitalize="none"
+                    />
+                  </View>
 
-              {/* Social Auth */}
-              <TouchableOpacity style={[styles.googleButton, isLoading && { opacity: 0.5 }]} onPress={handleGoogleLogin} activeOpacity={0.85} disabled={isLoading}>
-                <Ionicons name="logo-google" size={20} color="#EA4335" style={{ marginRight: 8 }} />
-                <Text style={styles.googleButtonText}>Continue with Google</Text>
-              </TouchableOpacity>
-            </View>
+                  <Text style={styles.label}>Phone Number</Text>
+                  <View style={styles.inputContainer}>
+                    <Ionicons name="call-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="e.g. 9841234567"
+                      placeholderTextColor="#94A3B8"
+                      value={phone}
+                      onChangeText={setPhone}
+                      keyboardType="phone-pad"
+                    />
+                  </View>
 
-            {/* Footer */}
-            <View style={styles.footerContainer}>
-              <Text style={styles.footerText}>Already have an account? </Text>
-              <TouchableOpacity onPress={() => router.replace('/(auth)/login')}>
-                <Text style={styles.loginText}>Log In</Text>
-              </TouchableOpacity>
-            </View>
+                  <Text style={styles.label}>Password</Text>
+                  <View style={styles.inputContainer}>
+                    <Ionicons name="lock-closed-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.passwordInput}
+                      placeholder="Min 8 chars, 1 Upper, 1 Lower & 1 Symbol"
+                      placeholderTextColor="#94A3B8"
+                      value={password}
+                      onChangeText={setPassword}
+                      secureTextEntry={!showPassword}
+                    />
+                    <TouchableOpacity 
+                      style={styles.eyeIcon} 
+                      onPress={() => setShowPassword(!showPassword)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons 
+                        name={showPassword ? "eye-outline" : "eye-off-outline"} 
+                        size={20} 
+                        color="#64748B" 
+                      />
+                    </TouchableOpacity>
+                  </View>
+
+                  <TouchableOpacity
+                    style={[styles.signupButton, isLoading && styles.signupButtonDisabled]}
+                    onPress={handleSignup}
+                    activeOpacity={0.85}
+                    disabled={isLoading}
+                  >
+                    {isLoading ? (
+                      <ActivityIndicator size="small" color="#FFFFFF" />
+                    ) : (
+                      <>
+                        <Text style={styles.signupButtonText}>Create Account</Text>
+                        <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                      </>
+                    )}
+                  </TouchableOpacity>
+
+                  {/* Divider */}
+                  <View style={styles.dividerContainer}>
+                    <View style={styles.divider} />
+                    <Text style={styles.dividerText}>OR</Text>
+                    <View style={styles.divider} />
+                  </View>
+
+                  {/* Social Auth */}
+                  <TouchableOpacity style={[styles.googleButton, isLoading && { opacity: 0.5 }]} onPress={handleGoogleLogin} activeOpacity={0.85} disabled={isLoading}>
+                    <Ionicons name="logo-google" size={20} color="#EA4335" style={{ marginRight: 8 }} />
+                    <Text style={styles.googleButtonText}>Continue with Google</Text>
+                  </TouchableOpacity>
+                </View>
+
+                {/* Footer */}
+                <View style={styles.footerContainer}>
+                  <Text style={styles.footerText}>Already have an account? </Text>
+                  <TouchableOpacity onPress={() => router.replace('/(auth)/login')}>
+                    <Text style={styles.loginText}>Log In</Text>
+                  </TouchableOpacity>
+                </View>
+              </>
+            )}
 
           </ScrollView>
         </SafeAreaView>
@@ -236,6 +269,66 @@ const styles = StyleSheet.create({
     paddingBottom: 30,
     justifyContent: 'center',
   },
+  // ── Success Panel ───────────────────────────────────────────────────────────────
+  successContainer: {
+    alignItems: 'center',
+    paddingHorizontal: 8,
+    paddingVertical: 32,
+  },
+  successIconWrap: {
+    width: 96,
+    height: 96,
+    borderRadius: 48,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 2,
+    borderColor: '#FCA5A5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 24,
+    shadowColor: '#C62026',
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 4,
+  },
+  successTitle: {
+    fontSize: 26,
+    fontWeight: 'bold',
+    color: Colors.primary,
+    marginBottom: 16,
+    textAlign: 'center',
+  },
+  successBody: {
+    fontSize: 14.5,
+    color: '#374151',
+    textAlign: 'center',
+    lineHeight: 22,
+    marginBottom: 32,
+  },
+  successEmail: {
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  goToLoginButton: {
+    backgroundColor: Colors.primary,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 15,
+    paddingHorizontal: 32,
+    borderRadius: 14,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  goToLoginText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: 'bold',
+  },
+  // ────────────────────────────────────────────────────────────────────────────
   headerContainer: {
     alignItems: 'center',
     marginBottom: 24,
@@ -377,3 +470,4 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 });
+

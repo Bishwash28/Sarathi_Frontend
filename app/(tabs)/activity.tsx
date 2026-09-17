@@ -1,13 +1,42 @@
-import React, { useState } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Image, Alert, Modal, TextInput } from 'react-native';
+import React, { useState, useCallback } from 'react';
+import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Image, Alert, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
+import { useFocusEffect } from 'expo-router';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '../../constants/Colors';
 import { useApp, Booking, Ride } from '../../context/AppContext';
+import { getBookingsApi, BookRideResponseData } from '../../services/bookingService';
+import { getAllRidesApi, backendRideToLocal } from '../../services/rideService';
 
 export default function ActivityScreen() {
   const { bookings, rides, user, updateRide, deleteRide } = useApp();
   const [activeSection, setActiveSection] = useState<'ongoing' | 'history' | 'my_offers'>('ongoing');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
+  // Refresh bookings and rides from backend when the tab is focused
+  useFocusEffect(
+    useCallback(() => {
+      let active = true;
+      (async () => {
+        setIsRefreshing(true);
+        try {
+          const storedToken =
+            (await AsyncStorage.getItem('@sarathi_token')) ||
+            (await AsyncStorage.getItem('@sarathi_auth_token'));
+          const storedRole = (await AsyncStorage.getItem('@sarathi_active_role')) || '';
+          const bookingRole = storedRole === 'driver' ? 'RIDER' : 'PASSENGER';
+          await getBookingsApi({ role: bookingRole }, storedToken ?? undefined);
+          await getAllRidesApi(storedToken ?? undefined);
+        } catch (err) {
+          // ignore — stale data is better than error
+        } finally {
+          if (active) setIsRefreshing(false);
+        }
+      })();
+      return () => { active = false; };
+    }, [])
+  );
 
   // Edit Ride Modal State
   const [editingRide, setEditingRide] = useState<Ride | null>(null);

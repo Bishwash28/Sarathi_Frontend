@@ -65,10 +65,12 @@ async function request<T>(
       : `Bearer ${cleanToken}`;
   }
 
-  console.log(`[apiClient] ${method} ${BASE_URL}${path}`, {
-    hasToken: !!token,
-    tokenPreview: token ? `${token.substring(0, 15)}...` : 'NONE',
-  });
+  console.log(`[RAW_API_REQ] ${method} ${BASE_URL}${path}`, JSON.stringify({
+    method,
+    url: `${BASE_URL}${path}`,
+    headers: { ...headers, Authorization: token ? 'Bearer [HIDDEN]' : 'NONE' },
+    body,
+  }, null, 2));
 
   const config: RequestInit = {
     method,
@@ -90,14 +92,20 @@ async function request<T>(
       json = null;
     }
 
-    console.log(`[apiClient] ${method} ${path} => ${response.status}`, json);
+    console.log(`[RAW_API_RES] ${method} ${path} => ${response.status}`, JSON.stringify({
+      status: response.status,
+      ok: response.ok,
+      json,
+    }, null, 2));
 
     if (!response.ok) {
+      const errStr = typeof json === 'object' && json !== null ? JSON.stringify(json) : String(json);
       return {
         success: false,
         error:
           json?.message ||
           json?.error ||
+          errStr ||
           `Request failed with status ${response.status}`,
       };
     }
