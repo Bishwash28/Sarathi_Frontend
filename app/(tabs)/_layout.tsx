@@ -1,155 +1,26 @@
 import { Ionicons } from '@expo/vector-icons';
 import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
-import { Tabs } from 'expo-router';
+import { Tabs, router } from 'expo-router';
 import React, { useEffect, useRef } from 'react';
-import { Animated, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
+import { Animated, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
 
-interface TabButtonProps {
-  route: any;
-  isFocused: boolean;
-  onPress: () => void;
-  onLongPress: () => void;
-  label: string;
+interface CustomTabProps extends BottomTabBarProps {
   isDriver: boolean;
+  kycVerified: boolean;
 }
-
-const TabButton: React.FC<TabButtonProps> = ({ route, isFocused, onPress, onLongPress, label, isDriver }) => {
-  const lineAnim = useRef(new Animated.Value(isFocused ? 1.0 : 0.0)).current;
-
-  useEffect(() => {
-    Animated.timing(lineAnim, {
-      toValue: isFocused ? 1.0 : 0.0,
-      duration: 200,
-      useNativeDriver: false,
-    }).start();
-  }, [isFocused]);
-
-  const getIconName = (routeName: string, focused: boolean) => {
-    switch (routeName) {
-      case 'index':
-        if (isDriver) {
-          return focused ? 'add-circle' : 'add-circle-outline';
-        }
-        return focused ? 'home' : 'home-outline';
-      case 'activity':
-        return focused ? 'receipt' : 'receipt-outline';
-      case 'inbox':
-        return focused ? 'chatbubbles' : 'chatbubbles-outline';
-      case 'profile':
-        return focused ? 'person' : 'person-outline';
-      default:
-        return 'square-outline';
-    }
-  };
-
-  return (
-    <TouchableOpacity
-      onPress={onPress}
-      onLongPress={onLongPress}
-      style={styles.tabItem}
-      activeOpacity={0.7}
-    >
-      {/* Top Active Indicator Line */}
-      <Animated.View
-        style={[
-          styles.topIndicatorLine,
-          {
-            opacity: lineAnim,
-            backgroundColor: isDriver ? Colors.primary : Colors.accent,
-          },
-        ]}
-      />
-
-      <Ionicons
-        name={getIconName(route.name, isFocused) as any}
-        size={22}
-        color={isFocused ? (isDriver ? Colors.primary : Colors.accent) : Colors.textMuted}
-        style={styles.icon}
-      />
-
-      <Text
-        style={[
-          styles.tabLabel,
-          {
-            color: isFocused ? (isDriver ? Colors.primary : Colors.accent) : Colors.textMuted,
-            fontWeight: isFocused ? '700' : '500',
-          },
-        ]}
-      >
-        {label}
-      </Text>
-    </TouchableOpacity>
-  );
-};
-
-// Custom Tab Bar Container
-const CustomTabBar: React.FC<BottomTabBarProps & { isDriver: boolean }> = ({ state, descriptors, navigation, isDriver }) => {
-  return (
-    <View style={styles.tabBarContainer}>
-      {state.routes.map((route, index) => {
-        const { options } = descriptors[route.key];
-        let label =
-          options.tabBarLabel !== undefined
-            ? (options.tabBarLabel as string)
-            : options.title !== undefined
-              ? options.title
-              : route.name;
-
-        // Customize labels for Driver Workspace vs Passenger Mode
-        if (route.name === 'index') {
-          label = isDriver ? 'Post' : 'Home';
-        } else if (route.name === 'inbox') {
-          label = isDriver ? 'Chats' : 'Inbox';
-        }
-
-        const isFocused = state.index === index;
-
-        const onPress = () => {
-          const event = navigation.emit({
-            type: 'tabPress',
-            target: route.key,
-            canPreventDefault: true,
-          });
-
-          if (!isFocused && !event.defaultPrevented) {
-            navigation.navigate(route.name, route.params);
-          }
-        };
-
-        const onLongPress = () => {
-          navigation.emit({
-            type: 'tabLongPress',
-            target: route.key,
-          });
-        };
-
-        return (
-          <TabButton
-            key={route.key}
-            route={route}
-            isFocused={isFocused}
-            onPress={onPress}
-            onLongPress={onLongPress}
-            label={label}
-            isDriver={isDriver}
-          />
-        );
-      })}
-    </View>
-  );
-};
 
 export default function TabLayout() {
   const { user } = useApp();
   const isDriverMode = user?.role === 'driver' && user?.kycVerified === true;
+  const kycVerified = user?.kycVerified === true;
 
   return (
-    <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top']}>
+    <SafeAreaView style={{ flex: 1, backgroundColor: Colors.background }} edges={['top', 'left', 'right']}>
       <Tabs
-        tabBar={(props: any) => <CustomTabBar {...props} isDriver={isDriverMode} />}
+        tabBar={(props: any) => <FloatingTabBar {...props} isDriver={isDriverMode} kycVerified={kycVerified} />}
         screenOptions={{
           headerShown: false,
         }}
@@ -158,6 +29,12 @@ export default function TabLayout() {
           name="index"
           options={{
             title: isDriverMode ? 'Post' : 'Home',
+          }}
+        />
+        <Tabs.Screen
+          name="notifications"
+          options={{
+            title: 'Alerts',
           }}
         />
         <Tabs.Screen
@@ -183,36 +60,181 @@ export default function TabLayout() {
   );
 }
 
+const FloatingTabBar: React.FC<CustomTabProps> = ({ state, descriptors, navigation, isDriver, kycVerified }) => {
+  const homeRouteIndex = state.routes.findIndex(r => r.name === 'index');
+  const notifRouteIndex = state.routes.findIndex(r => r.name === 'notifications');
+  const activityRouteIndex = state.routes.findIndex(r => r.name === 'activity');
+  const inboxRouteIndex = state.routes.findIndex(r => r.name === 'inbox');
+  const profileRouteIndex = state.routes.findIndex(r => r.name === 'profile');
+
+  const getRouteConfig = (routeName: string) => {
+    switch (routeName) {
+      case 'index':
+        return { label: isDriver ? 'Post' : 'Home', icon: isDriver ? 'add-circle' : 'home' };
+      case 'notifications':
+        return { label: 'Alerts', icon: 'notifications' };
+      case 'activity':
+        return { label: 'Activity', icon: 'time' };
+      case 'inbox':
+        return { label: isDriver ? 'Chats' : 'Inbox', icon: 'chatbubbles' };
+      case 'profile':
+        return { label: 'Profile', icon: 'person' };
+      default:
+        return { label: 'Tab', icon: 'grid' };
+    }
+  };
+
+  const renderTabItem = (index: number) => {
+    if (index < 0 || index >= state.routes.length) return null;
+    const route = state.routes[index];
+    const isFocused = state.index === index;
+    const { label, icon } = getRouteConfig(route.name);
+
+    const onPress = () => {
+      const event = navigation.emit({
+        type: 'tabPress',
+        target: route.key,
+        canPreventDefault: true,
+      });
+
+      if (!isFocused && !event.defaultPrevented) {
+        navigation.navigate(route.name, route.params);
+      }
+    };
+
+    return (
+      <TouchableOpacity
+        key={route.key}
+        onPress={onPress}
+        style={styles.tabItem}
+        activeOpacity={0.75}
+      >
+        <Ionicons
+          name={(isFocused ? icon : `${icon}-outline`) as any}
+          size={22}
+          color={isFocused ? Colors.primary : '#94A3B8'}
+        />
+        <Text
+          style={[
+            styles.tabLabel,
+            { color: isFocused ? Colors.primary : '#94A3B8', fontWeight: isFocused ? '700' : '500' },
+          ]}
+        >
+          {label}
+        </Text>
+      </TouchableOpacity>
+    );
+  };
+
+  const handleCenterPostPress = () => {
+    if (homeRouteIndex >= 0) {
+      navigation.navigate(state.routes[homeRouteIndex].name);
+    }
+  };
+
+  // Passenger UI: 5 Tabs (Home, Alerts, Activity, Inbox, Profile)
+  if (!isDriver) {
+    return (
+      <View style={styles.floatingContainer}>
+        <View style={styles.floatingBar}>
+          {renderTabItem(homeRouteIndex)}
+          {renderTabItem(notifRouteIndex)}
+          {renderTabItem(activityRouteIndex)}
+          {renderTabItem(inboxRouteIndex)}
+          {renderTabItem(profileRouteIndex)}
+        </View>
+      </View>
+    );
+  }
+
+  // Rider UI: Activity | Alerts | Center Big Red (+) POST Button | Chats | Profile
+  return (
+    <View style={styles.floatingContainer}>
+      <View style={styles.floatingBar}>
+        {/* Left Tab 1: Activity */}
+        {renderTabItem(activityRouteIndex)}
+
+        {/* Left Tab 2: Alerts (Notifications) */}
+        {renderTabItem(notifRouteIndex)}
+
+        {/* Center Prominent Floating (+) POST Button for Rider */}
+        <TouchableOpacity
+          style={styles.centerPostButtonDriver}
+          onPress={handleCenterPostPress}
+          activeOpacity={0.88}
+        >
+          <Ionicons
+            name="add"
+            size={28}
+            color="#FFFFFF"
+          />
+          <Text style={styles.centerPostText}>Post</Text>
+        </TouchableOpacity>
+
+        {/* Right Tab 1: Chats */}
+        {renderTabItem(inboxRouteIndex)}
+
+        {/* Right Tab 2: Profile */}
+        {renderTabItem(profileRouteIndex)}
+      </View>
+    </View>
+  );
+};
+
 const styles = StyleSheet.create({
-  tabBarContainer: {
-    flexDirection: 'row',
-    backgroundColor: '#FFFFFF',
-    height: 60,
-    borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
+  floatingContainer: {
+    position: 'absolute',
+    bottom: Platform.OS === 'ios' ? 24 : 16,
+    left: 16,
+    right: 16,
     alignItems: 'center',
-    justifyContent: 'space-around',
+    justifyContent: 'center',
+  },
+  floatingBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 32,
+    height: 64,
+    paddingHorizontal: 12,
+    elevation: 12,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.15,
+    shadowRadius: 16,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    width: '100%',
   },
   tabItem: {
     flex: 1,
     alignItems: 'center',
     justifyContent: 'center',
     height: '100%',
-    position: 'relative',
-    paddingTop: 6,
-    paddingBottom: 2,
-  },
-  topIndicatorLine: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    height: 2.5,
-  },
-  icon: {
-    marginBottom: 2,
   },
   tabLabel: {
-    fontSize: 11,
+    fontSize: 10,
+    marginTop: 2,
+  },
+  centerPostButtonDriver: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    top: -14,
+    elevation: 8,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.35,
+    shadowRadius: 10,
+  },
+  centerPostText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800',
+    marginTop: -2,
   },
 });

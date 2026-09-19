@@ -8,8 +8,20 @@ import {
   ActivityIndicator,
 } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { PlaceSuggestion, LocationCoordinates } from '../services/locationService';
 import { Colors } from '../constants/Colors';
+
+export interface LocationCoordinates {
+  lat: number;
+  lng: number;
+}
+
+export interface PlaceSuggestion {
+  placeId: string;
+  description: string;
+  mainText: string;
+  secondaryText: string;
+  coordinates?: LocationCoordinates;
+}
 
 export interface LocationSearchInputProps {
   label?: string;

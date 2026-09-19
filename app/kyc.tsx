@@ -11,14 +11,16 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
+import { supabase } from '../lib/supabase';
 
-type DocumentType = 'DRIVING_LICENSE' | 'CITIZENSHIP' | 'PASSPORT' | 'VOTER_ID';
+type DocumentType = 'NID' | 'CITIZENSHIP' | 'PASSPORT';
 
 interface DocTypeOption {
   type: DocumentType;
@@ -29,38 +31,36 @@ interface DocTypeOption {
 
 const DOCUMENT_TYPES: DocTypeOption[] = [
   {
-    type: 'DRIVING_LICENSE',
-    label: 'Driving License',
-    icon: 'car-outline',
-    description: 'Driver identification document',
+    type: 'NID',
+    label: 'National Identity Card (NID)',
+    icon: 'card-outline',
+    description: 'National biometric identity card',
   },
   {
     type: 'CITIZENSHIP',
     label: 'Citizenship Certificate',
-    icon: 'card-outline',
-    description: 'National identity document',
+    icon: 'document-text-outline',
+    description: 'Government citizenship document',
   },
   {
     type: 'PASSPORT',
     label: 'Passport',
-    icon: 'document-text-outline',
-    description: 'International passport document',
-  },
-  {
-    type: 'VOTER_ID',
-    label: 'Voter ID Card',
-    icon: 'person-circle-outline',
-    description: 'Government-issued voter ID card',
+    icon: 'id-card-outline',
+    description: 'International travel passport',
   },
 ];
 
 export default function KYCScreen() {
-  const { uploadUserKycDocument, submitKycVerify } = useApp();
-  const [selectedDocType, setSelectedDocType] = useState<DocumentType>('DRIVING_LICENSE');
+  const { user } = useApp();
+  const [selectedDocType, setSelectedDocType] = useState<DocumentType>('NID');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
-  const [documentUri, setDocumentUri] = useState<string>('');
-  const [fileName, setFileName] = useState<string>('');
+  const [activeImageField, setActiveImageField] = useState<'id_front' | 'license_front'>('id_front');
+  
+  const [idNumber, setIdNumber] = useState('');
+  const [licenseNumber, setLicenseNumber] = useState('');
+  const [idFrontUri, setIdFrontUri] = useState('');
+  const [licenseFrontUri, setLicenseFrontUri] = useState('');
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   const selectedDocObj = DOCUMENT_TYPES.find(d => d.type === selectedDocType) || DOCUMENT_TYPES[0];
@@ -69,13 +69,21 @@ export default function KYCScreen() {
     router.back();
   };
 
+  const handleImagePicked = (uri: string) => {
+    if (activeImageField === 'id_front') {
+      setIdFrontUri(uri);
+    } else {
+      setLicenseFrontUri(uri);
+    }
+  };
+
   // Gallery Picker
   const pickFromGallery = async () => {
     setIsSourceModalOpen(false);
     try {
       const permissionResult = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (!permissionResult.granted) {
-        Alert.alert('Permission Denied', 'Permission to access photo library is required to select document photo.');
+        Alert.alert('Permission Denied', 'Permission to access photo library is required.');
         return;
       }
 
@@ -86,10 +94,7 @@ export default function KYCScreen() {
       });
 
       if (!pickerResult.canceled && pickerResult.assets && pickerResult.assets.length > 0) {
-        const asset = pickerResult.assets[0];
-        setDocumentUri(asset.uri);
-        const name = asset.fileName || `${selectedDocType.toLowerCase()}_${Date.now()}.jpg`;
-        setFileName(name);
+        handleImagePicked(pickerResult.assets[0].uri);
       }
     } catch (err) {
       console.error('[pickFromGallery] Error:', err);
@@ -103,7 +108,7 @@ export default function KYCScreen() {
     try {
       const permissionResult = await ImagePicker.requestCameraPermissionsAsync();
       if (!permissionResult.granted) {
-        Alert.alert('Permission Denied', 'Camera permission is required to capture document photo.');
+        Alert.alert('Permission Denied', 'Permission to access camera is required.');
         return;
       }
 
@@ -113,10 +118,7 @@ export default function KYCScreen() {
       });
 
       if (!cameraResult.canceled && cameraResult.assets && cameraResult.assets.length > 0) {
-        const asset = cameraResult.assets[0];
-        setDocumentUri(asset.uri);
-        const name = asset.fileName || `${selectedDocType.toLowerCase()}_camera_${Date.now()}.jpg`;
-        setFileName(name);
+        handleImagePicked(cameraResult.assets[0].uri);
       }
     } catch (err) {
       console.error('[captureFromCamera] Error:', err);
@@ -125,32 +127,44 @@ export default function KYCScreen() {
   };
 
   const handleSubmit = async () => {
-    if (!documentUri) {
-      Alert.alert('Missing Document', 'Please select or capture your KYC document photo.');
+    if (!idFrontUri) {
+      Alert.alert('Missing Photo', `Please upload a clear photo of your ${selectedDocObj.label}.`);
+      return;
+    }
+    if (!licenseFrontUri) {
+      Alert.alert('Missing Photo', 'Driving License photo is compulsory for drivers. Please upload your license photo.');
       return;
     }
 
     setIsSubmitting(true);
+    try {
+      const { error } = await supabase.from('kyc_verifications').upsert({
+        user_id: user?.id,
+        id_type: selectedDocType.toLowerCase(),
+        id_number: 'UPLOADED_DOCUMENT',
+        license_number: 'UPLOADED_LICENSE',
+        id_front_image: idFrontUri,
+        license_front_image: licenseFrontUri,
+        status: 'pending',
+        submitted_at: new Date().toISOString(),
+      });
 
-    // POST /api/users/{userId}/kyc/document
-    const uploadRes = await uploadUserKycDocument(selectedDocType, documentUri, fileName || 'document.jpg');
-    setIsSubmitting(false);
+      setIsSubmitting(false);
 
-    if (!uploadRes.success) {
-      Alert.alert('Upload Failed', uploadRes.error || 'Failed to upload KYC document.');
-      return;
+      if (error) {
+        Alert.alert('Submission Error', error.message);
+        return;
+      }
+
+      Alert.alert(
+        'KYC Submitted',
+        'Your document photos (Identity + Driving License) have been submitted successfully and are pending admin review.',
+        [{ text: 'Done', onPress: () => router.replace('/(tabs)') }]
+      );
+    } catch (err: any) {
+      setIsSubmitting(false);
+      Alert.alert('Error', err.message || 'Failed to submit KYC.');
     }
-
-    Alert.alert(
-      'KYC Document Submitted',
-      'Your KYC document has been uploaded successfully and is currently pending verification by the admin.',
-      [
-        {
-          text: 'Done',
-          onPress: () => router.replace('/(tabs)'),
-        },
-      ]
-    );
   };
 
   return (
@@ -160,7 +174,7 @@ export default function KYCScreen() {
         <TouchableOpacity style={styles.backButton} onPress={handleBack}>
           <Ionicons name="arrow-back" size={24} color={Colors.primary} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>KYC Verification</Text>
+        <Text style={styles.headerTitle}>Driver KYC Verification</Text>
         <View style={{ width: 40 }} />
       </View>
 
@@ -170,15 +184,18 @@ export default function KYCScreen() {
           <View style={styles.introCard}>
             <Ionicons name="shield-checkmark" size={32} color={Colors.primary} />
             <View style={{ flex: 1 }}>
-              <Text style={styles.introTitle}>Verify Your Identity</Text>
+              <Text style={styles.introTitle}>Verify Your Identity & License</Text>
               <Text style={styles.introText}>
-                Select a document type and upload or capture a clear photo of your official ID document to submit for verification.
+                Simply upload clear photos of your primary ID (NID / Citizenship / Passport) and your compulsory Driving License.
               </Text>
             </View>
           </View>
 
+          {/* SECTION 1: IDENTITY DOCUMENT */}
+          <Text style={styles.sectionHeader}>SECTION 1: Government Identity Document</Text>
+
           {/* 1. Document Type Dropdown */}
-          <Text style={styles.inputLabel}>1. Select Document Type</Text>
+          <Text style={styles.inputLabel}>1. Select Identity Document Type</Text>
           <TouchableOpacity
             style={styles.dropdownButton}
             onPress={() => setIsDropdownOpen(!isDropdownOpen)}
@@ -206,8 +223,6 @@ export default function KYCScreen() {
                     onPress={() => {
                       setSelectedDocType(item.type);
                       setIsDropdownOpen(false);
-                      setDocumentUri('');
-                      setFileName('');
                     }}
                     activeOpacity={0.7}
                   >
@@ -222,27 +237,33 @@ export default function KYCScreen() {
             </View>
           )}
 
-          {/* 2. Document Upload / Capture Area */}
-          <Text style={styles.inputLabel}>2. Document File / Photo</Text>
+          {/* Identity Document Photo */}
+          <Text style={styles.inputLabel}>2. Upload {selectedDocObj.label} Photo *</Text>
           <TouchableOpacity
             style={styles.uploadCard}
-            onPress={() => setIsSourceModalOpen(true)}
+            onPress={() => {
+              setActiveImageField('id_front');
+              setIsSourceModalOpen(true);
+            }}
             activeOpacity={0.85}
           >
-            {documentUri ? (
+            {idFrontUri ? (
               <View style={styles.fileSelectedContainer}>
                 <View style={styles.fileIconBadge}>
                   <Ionicons name="document-attach" size={28} color={Colors.primary} />
                 </View>
                 <View style={styles.fileTextContainer}>
-                  <Text style={styles.fileStatusTitle}>Document Attached</Text>
+                  <Text style={styles.fileStatusTitle}>Identity Photo Attached</Text>
                   <Text style={styles.fileNameText} numberOfLines={1} ellipsizeMode="middle">
-                    {fileName.length > 25 ? `${fileName.substring(0, 12)}...${fileName.substring(fileName.length - 10)}` : fileName}
+                    {selectedDocObj.label} Photo
                   </Text>
                 </View>
                 <TouchableOpacity
                   style={styles.changeFileButton}
-                  onPress={() => setIsSourceModalOpen(true)}
+                  onPress={() => {
+                    setActiveImageField('id_front');
+                    setIsSourceModalOpen(true);
+                  }}
                 >
                   <Text style={styles.changeFileText}>Change</Text>
                 </TouchableOpacity>
@@ -258,8 +279,59 @@ export default function KYCScreen() {
                     <Ionicons name="cloud-upload" size={24} color={Colors.primary} />
                   </View>
                 </View>
-                <Text style={styles.uploadTitle}>Tap to Upload or Capture Document</Text>
-                <Text style={styles.uploadSubtitle}>Take photo with camera or choose from gallery</Text>
+                <Text style={styles.uploadTitle}>Tap to Upload {selectedDocObj.label} Photo</Text>
+                <Text style={styles.uploadSubtitle}>Clear photo showing full front document</Text>
+              </View>
+            )}
+          </TouchableOpacity>
+
+          {/* SECTION 2: DRIVING LICENSE (COMPULSORY) */}
+          <Text style={styles.sectionHeader}>SECTION 2: Driving License Document (Compulsory)</Text>
+
+          {/* Driving License Photo */}
+          <Text style={styles.inputLabel}>3. Upload Driving License Photo *</Text>
+          <TouchableOpacity
+            style={styles.uploadCard}
+            onPress={() => {
+              setActiveImageField('license_front');
+              setIsSourceModalOpen(true);
+            }}
+            activeOpacity={0.85}
+          >
+            {licenseFrontUri ? (
+              <View style={styles.fileSelectedContainer}>
+                <View style={styles.fileIconBadge}>
+                  <Ionicons name="ribbon-outline" size={28} color={Colors.primary} />
+                </View>
+                <View style={styles.fileTextContainer}>
+                  <Text style={styles.fileStatusTitle}>Driving License Photo Attached</Text>
+                  <Text style={styles.fileNameText} numberOfLines={1} ellipsizeMode="middle">
+                    Official Driving License Document
+                  </Text>
+                </View>
+                <TouchableOpacity
+                  style={styles.changeFileButton}
+                  onPress={() => {
+                    setActiveImageField('license_front');
+                    setIsSourceModalOpen(true);
+                  }}
+                >
+                  <Text style={styles.changeFileText}>Change</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.uploadPlaceholder}>
+                <View style={styles.iconCircleRow}>
+                  <View style={styles.iconCircle}>
+                    <Ionicons name="camera" size={24} color={Colors.primary} />
+                  </View>
+                  <Text style={styles.orText}>OR</Text>
+                  <View style={styles.iconCircle}>
+                    <Ionicons name="cloud-upload" size={24} color={Colors.primary} />
+                  </View>
+                </View>
+                <Text style={styles.uploadTitle}>Tap to Upload Driving License Photo</Text>
+                <Text style={styles.uploadSubtitle}>Clear photo showing valid license details</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -383,12 +455,41 @@ const styles = StyleSheet.create({
     color: Colors.textMuted,
     lineHeight: 16,
   },
+  sectionHeader: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Colors.primary,
+    textTransform: 'uppercase',
+    letterSpacing: 0.6,
+    marginTop: 20,
+    marginBottom: 8,
+  },
   inputLabel: {
     fontSize: 14,
     fontWeight: '700',
     color: Colors.textPrimary,
-    marginBottom: 10,
+    marginBottom: 8,
     marginTop: 12,
+  },
+  textInputWrapper: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    height: 48,
+    marginBottom: 12,
+  },
+  inputIcon: {
+    marginRight: 10,
+  },
+  textInput: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: '600',
+    color: Colors.textPrimary,
   },
   dropdownButton: {
     flexDirection: 'row',

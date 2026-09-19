@@ -6,35 +6,15 @@ import { useFocusEffect } from 'expo-router';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import { Colors } from '../../constants/Colors';
 import { useApp, Booking, Ride } from '../../context/AppContext';
-import { getBookingsApi, BookRideResponseData } from '../../services/bookingService';
-import { getAllRidesApi, backendRideToLocal } from '../../services/rideService';
 
 export default function ActivityScreen() {
   const { bookings, rides, user, updateRide, deleteRide } = useApp();
   const [activeSection, setActiveSection] = useState<'ongoing' | 'history' | 'my_offers'>('ongoing');
   const [isRefreshing, setIsRefreshing] = useState(false);
 
-  // Refresh bookings and rides from backend when the tab is focused
   useFocusEffect(
     useCallback(() => {
-      let active = true;
-      (async () => {
-        setIsRefreshing(true);
-        try {
-          const storedToken =
-            (await AsyncStorage.getItem('@sarathi_token')) ||
-            (await AsyncStorage.getItem('@sarathi_auth_token'));
-          const storedRole = (await AsyncStorage.getItem('@sarathi_active_role')) || '';
-          const bookingRole = storedRole === 'driver' ? 'RIDER' : 'PASSENGER';
-          await getBookingsApi({ role: bookingRole }, storedToken ?? undefined);
-          await getAllRidesApi(storedToken ?? undefined);
-        } catch (err) {
-          // ignore — stale data is better than error
-        } finally {
-          if (active) setIsRefreshing(false);
-        }
-      })();
-      return () => { active = false; };
+      setIsRefreshing(false);
     }, [])
   );
 
@@ -223,6 +203,14 @@ export default function ActivityScreen() {
           <Text style={styles.headerTitle}>
             {user?.role === 'driver' ? 'Driver Activity & Rides' : 'Your Activity'}
           </Text>
+
+          <TouchableOpacity
+            style={styles.notifBellButton}
+            onPress={() => router.push('/notifications')}
+            activeOpacity={0.8}
+          >
+            <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
+          </TouchableOpacity>
         </View>
 
         {/* Tab Selector */}
@@ -403,8 +391,15 @@ const styles = StyleSheet.create({
   header: {
     paddingHorizontal: 20,
     paddingTop: 16,
-    paddingBottom: 8,
+    paddingBottom: 12,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  notifBellButton: {
+    padding: 8,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
   },
   headerTitle: {
     fontSize: 20,

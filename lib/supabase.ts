@@ -1,29 +1,24 @@
 import 'react-native-url-polyfill/auto';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { createClient } from '@supabase/supabase-js';
-import { Platform } from 'react-native';
+import AsyncStorage from '@react-native-async-storage/async-storage';
 
-const supabaseUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || "https://rxwshocrsgahieqfewjs.supabase.co";
-const supabaseAnonKey = process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InJ4d3Nob2Nyc2dhaGllcWZld2pzIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODM3Nzk1NzYsImV4cCI6MjA5OTM1NTU3Nn0.DplB3nHCzDD4enOHfhvDLeHW_83i8A2LMbsUwCVXS0I";
+const rawUrl = process.env.EXPO_PUBLIC_SUPABASE_URL || 'https://nesciqgijgmslopxrmko.supabase.co';
+const cleanUrl = rawUrl.trim().replace(/^[^\w+:-]+/, '');
+const supabaseUrl = cleanUrl.startsWith('http') ? cleanUrl : 'https://nesciqgijgmslopxrmko.supabase.co';
 
-// Custom storage wrapper to handle SSR / server rendering environments gracefully
+const supabaseAnonKey = (process.env.EXPO_PUBLIC_SUPABASE_ANON_KEY || 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Im5lc2NpcWdpamdtc2xvcHhybWtvIiwicm9sZSI6ImFub24iLCJpYXQiOjE3ODk2NDg2NjcsImV4cCI6MjEwNTIyNDY2N30.mXDbMMCM0Hjo5qRFYzGOImiRAdOssabSqGqZFAnVCxg').trim();
+
 const customStorage = {
-  getItem: async (key: string) => {
-    if (Platform.OS === 'web' && typeof window === 'undefined') {
-      return null;
-    }
+  getItem: (key: string) => {
+    if (typeof window === 'undefined') return Promise.resolve(null);
     return AsyncStorage.getItem(key);
   },
-  setItem: async (key: string, value: string) => {
-    if (Platform.OS === 'web' && typeof window === 'undefined') {
-      return;
-    }
+  setItem: (key: string, value: string) => {
+    if (typeof window === 'undefined') return Promise.resolve();
     return AsyncStorage.setItem(key, value);
   },
-  removeItem: async (key: string) => {
-    if (Platform.OS === 'web' && typeof window === 'undefined') {
-      return;
-    }
+  removeItem: (key: string) => {
+    if (typeof window === 'undefined') return Promise.resolve();
     return AsyncStorage.removeItem(key);
   },
 };
@@ -36,4 +31,3 @@ export const supabase = createClient(supabaseUrl, supabaseAnonKey, {
     detectSessionInUrl: false,
   },
 });
-

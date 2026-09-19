@@ -19,13 +19,19 @@ import {
 } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
-import { getUserVehicles, VehicleData } from '../../services/vehicleService';
-import { getRouteDirections } from '../../services/locationService';
 import { useLocationSearch } from '../../hooks/useLocationSearch';
 import { LocationPinPickerMap } from '../../components/LocationPinPickerMap';
 import { LocationSearchInput } from '../../components/LocationSearchInput';
 
 
+
+export interface VehicleData {
+  id: string;
+  userId?: string;
+  vehicleNumber: string;
+  vehicleModelName: string;
+  images?: string[];
+}
 
 export default function HomeScreen() {
   const {
@@ -109,41 +115,14 @@ export default function HomeScreen() {
     }
   }, [pinPickerModalOpen, pinPickerTargetType]);
 
-  // Fetch driver vehicles on mount & on screen focus
   const fetchVehicles = React.useCallback(async () => {
-    try {
-      const storedToken =
-        (await AsyncStorage.getItem('@sarathi_token')) ||
-        (await AsyncStorage.getItem('@sarathi_auth_token'));
-      console.log('=== [DEBUG] index tab fetchVehicles storedToken ===', storedToken ? 'TOKEN_PRESENT' : 'NO_TOKEN');
-      const res = await getUserVehicles(storedToken ?? undefined);
-      console.log('=== [DEBUG] index tab fetchVehicles response ===', JSON.stringify(res, null, 2));
-      if (res.success && Array.isArray(res.data) && res.data.length > 0) {
-        const vehicleList = res.data;
-        setUserVehicles(vehicleList);
-        setSelectedVehicle(prev => (prev ? vehicleList.find(v => v.id === prev.id) || vehicleList[0] : vehicleList[0]));
-      } else if (res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) {
-        const vObj = res.data as unknown as VehicleData;
-        setUserVehicles([vObj]);
-        setSelectedVehicle(vObj);
-      } else {
-        setUserVehicles([]);
-        setSelectedVehicle(null);
-      }
-    } catch (err) {
-      console.warn('Failed to load driver vehicles:', err);
-    }
+    setUserVehicles([]);
+    setSelectedVehicle(null);
   }, []);
 
   React.useEffect(() => {
     fetchVehicles();
   }, [fetchVehicles]);
-
-  useFocusEffect(
-    React.useCallback(() => {
-      fetchVehicles();
-    }, [fetchVehicles])
-  );
 
   // Edit Ride Modal State
   const [editingRide, setEditingRide] = useState<any | null>(null);
@@ -237,16 +216,6 @@ export default function HomeScreen() {
 
     // Fetch polyline if not set
     let polylineString = encodedPolyLine || routeInfo?.encodedPolyline || '';
-    if (!polylineString && origin.coords && destination.coords) {
-      try {
-        const route = await getRouteDirections(origin.coords, destination.coords);
-        if (route?.encodedPolyline) {
-          polylineString = route.encodedPolyline;
-        }
-      } catch (rErr) {
-        console.warn('[index tab] Polyline fetch error:', rErr);
-      }
-    }
 
     // Publish ride to backend
     try {
@@ -336,20 +305,10 @@ export default function HomeScreen() {
           style={{ flex: 1 }}
           behavior={Platform.OS === 'ios' ? 'padding' : undefined}
         >
-          {/* Header with Notification Icon on Right (White background) */}
-          <View style={styles.driverHeaderBar}>
-            <View style={{ flex: 1 }} />
-            <TouchableOpacity
-              style={styles.driverNotifBell}
-              onPress={() => router.push('/notifications')}
-            >
-              <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
-              {unreadDriverNotifCount > 0 && (
-                <View style={styles.driverNotifBadge}>
-                  <Text style={styles.driverNotifBadgeText}>{unreadDriverNotifCount}</Text>
-                </View>
-              )}
-            </TouchableOpacity>
+          {/* Header Title */}
+          <View style={styles.cleanPostHeader}>
+            <Text style={styles.cleanPostTitle}>Publish Route Offer</Text>
+            <Text style={styles.cleanPostSub}>Post your travel route for passengers along your way</Text>
           </View>
 
           {/* Post Route Form */}
@@ -358,225 +317,235 @@ export default function HomeScreen() {
             contentContainerStyle={styles.driverScrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {/* ── Vehicle Selection Dropdown Menu ── */}
-            <Text style={styles.inputLabel}>Select Your Vehicle *</Text>
-            {userVehicles.length > 0 ? (
-              <View style={{ marginBottom: 16 }}>
-                {/* Dropdown Header Trigger */}
+            <View style={styles.cleanFormCard}>
+              {/* 1. Vehicle Selection Dropdown */}
+              <Text style={styles.inputLabel}>Vehicle *</Text>
+              {userVehicles.length > 0 ? (
+                <View style={{ marginBottom: 16 }}>
+                  <TouchableOpacity
+                    style={[styles.locationInputBoxRow, { justifyContent: 'space-between', paddingRight: 12 }]}
+                    onPress={() => setIsVehicleDropdownOpen(!isVehicleDropdownOpen)}
+                    activeOpacity={0.8}
+                  >
+                    <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
+                      <Ionicons name="car-sport" size={20} color={Colors.primary} />
+                      <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.textPrimary }} numberOfLines={1}>
+                        {selectedVehicle
+                          ? `${selectedVehicle.vehicleModelName} (${selectedVehicle.vehicleNumber})`
+                          : 'Select a vehicle...'}
+                      </Text>
+                    </View>
+                    <Ionicons
+                      name={isVehicleDropdownOpen ? 'chevron-up' : 'chevron-down'}
+                      size={20}
+                      color={Colors.textMuted}
+                    />
+                  </TouchableOpacity>
+
+                  {isVehicleDropdownOpen && (
+                    <View style={[styles.autocompleteDropdown, { marginTop: 4 }]}>
+                      {userVehicles.map(v => {
+                        const isSelected = selectedVehicle?.id === v.id || selectedVehicle?.vehicleNumber === v.vehicleNumber;
+                        return (
+                          <TouchableOpacity
+                            key={v.id || v.vehicleNumber}
+                            style={[styles.autocompleteItem, isSelected && { backgroundColor: Colors.surface }]}
+                            onPress={() => {
+                              setSelectedVehicle(v);
+                              setIsVehicleDropdownOpen(false);
+                            }}
+                            activeOpacity={0.8}
+                          >
+                            <Ionicons
+                              name="car-sport"
+                              size={18}
+                              color={isSelected ? Colors.primary : Colors.textMuted}
+                            />
+                            <View style={{ flex: 1 }}>
+                              <Text style={[styles.autocompleteMainText, isSelected && { color: Colors.primary, fontWeight: '800' }]}>
+                                {v.vehicleModelName}
+                              </Text>
+                              <Text style={styles.autocompleteSubText}>
+                                License Plate: {v.vehicleNumber}
+                              </Text>
+                            </View>
+                            {isSelected && (
+                              <Ionicons name="checkmark-circle" size={18} color={Colors.primary} />
+                            )}
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  )}
+                </View>
+              ) : (
                 <TouchableOpacity
-                  style={[styles.locationInputBoxRow, { justifyContent: 'space-between', paddingRight: 12 }]}
-                  onPress={() => setIsVehicleDropdownOpen(!isVehicleDropdownOpen)}
+                  style={[styles.noVehicleCard, { marginBottom: 16 }]}
+                  onPress={() => router.push('/vehicles')}
                   activeOpacity={0.8}
                 >
-                  <View style={{ flexDirection: 'row', alignItems: 'center', flex: 1, gap: 10 }}>
-                    <Ionicons name="car-sport-outline" size={20} color={Colors.primary} />
-                    <Text style={{ fontSize: 14, fontWeight: '700', color: Colors.textPrimary }} numberOfLines={1}>
-                      {selectedVehicle
-                        ? `${selectedVehicle.vehicleModelName} (${selectedVehicle.vehicleNumber})`
-                        : 'Select a vehicle...'}
-                    </Text>
+                  <Ionicons name="alert-circle-outline" size={22} color={Colors.warning} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.noVehicleTitle}>No Vehicles Registered</Text>
+                    <Text style={styles.noVehicleSub}>Tap here to register your vehicle</Text>
                   </View>
-                  <Ionicons
-                    name={isVehicleDropdownOpen ? 'chevron-up' : 'chevron-down'}
-                    size={20}
-                    color={Colors.textMuted}
-                  />
+                  <Ionicons name="chevron-forward" size={20} color={Colors.primary} />
                 </TouchableOpacity>
+              )}
 
-                {/* Dropdown Options List */}
-                {isVehicleDropdownOpen && (
-                  <View style={[styles.autocompleteDropdown, { marginTop: 4 }]}>
-                    {userVehicles.map(v => {
-                      const isSelected = selectedVehicle?.id === v.id || selectedVehicle?.vehicleNumber === v.vehicleNumber;
-                      return (
-                        <TouchableOpacity
-                          key={v.id || v.vehicleNumber}
-                          style={[styles.autocompleteItem, isSelected && { backgroundColor: Colors.surface }]}
-                          onPress={() => {
-                            setSelectedVehicle(v);
-                            setIsVehicleDropdownOpen(false);
-                          }}
-                          activeOpacity={0.8}
-                        >
-                          <Ionicons
-                            name="car-sport"
-                            size={18}
-                            color={isSelected ? Colors.primary : Colors.textMuted}
-                          />
-                          <View style={{ flex: 1 }}>
-                            <Text style={[styles.autocompleteMainText, isSelected && { color: Colors.primary, fontWeight: '800' }]}>
-                              {v.vehicleModelName}
-                            </Text>
-                            <Text style={styles.autocompleteSubText}>
-                              License Plate: {v.vehicleNumber}
-                            </Text>
-                          </View>
-                          {isSelected && (
-                            <Ionicons name="checkmark-circle" size={18} color={Colors.primary} />
-                          )}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-              </View>
-            ) : (
-              <TouchableOpacity
-                style={[styles.noVehicleCard, { marginBottom: 16 }]}
-                onPress={() => router.push('/vehicles')}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="alert-circle-outline" size={22} color={Colors.warning} />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.noVehicleTitle}>No Vehicles Available</Text>
-                  <Text style={styles.noVehicleSub}>Tap here to add a vehicle (My Vehicles screen)</Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={Colors.primary} />
-              </TouchableOpacity>
-            )}
-
-            {/* 2. Starting Location (Origin) */}
-            <LocationSearchInput
-              label="Starting Location (Origin) *"
-              placeholder="Search origin in Nepal (e.g. Kalanki, Butwal)..."
-              value={origin.text}
-              onChangeText={handleOriginChange}
-              suggestions={originSuggestions}
-              onSelectSuggestion={selectOriginSuggestion}
-              isSearching={isSearchingOrigin}
-              showNotFound={showOriginNotFound}
-              onOpenPinPicker={() => openPinPicker('origin')}
-              iconName="disc-outline"
-              iconColor="#16A34A"
-              useGpsButton={true}
-              isFetchingGPS={isFetchingOriginGPS}
-              onUseGpsLocation={useCurrentLocationForOrigin}
-            />
-
-            {/* 3. Destination Location */}
-            <LocationSearchInput
-              label="Destination Location *"
-              placeholder="Search destination in Nepal (e.g. Bhairahawa, Koteshwor)..."
-              value={destination.text}
-              onChangeText={handleDestChange}
-              suggestions={destSuggestions}
-              onSelectSuggestion={selectDestSuggestion}
-              isSearching={isSearchingDest}
-              showNotFound={showDestNotFound}
-              onOpenPinPicker={() => openPinPicker('destination')}
-              iconName="location-sharp"
-              iconColor="#DC2626"
-            />
-
-            {/* 4 & 5. Available Seats (Read-only) & Price per Seat */}
-            <View style={styles.rowInputs}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Available Seats</Text>
-                <View style={[styles.inputContainer, { backgroundColor: '#F1F5F9' }]}>
-                  <Ionicons name="person" size={18} color={Colors.textMuted} style={styles.inputIcon} />
-                  <Text style={[styles.input, { paddingTop: 14, color: Colors.textMuted, fontWeight: '700' }]}>
-                    Seats: 1
-                  </Text>
-                </View>
-              </View>
-
-              <View style={{ flex: 1 }}>
-                <Text style={styles.inputLabel}>Price / Seat (NPR) *</Text>
-                <View style={styles.inputContainer}>
-                  <Text style={styles.currencyPrefix}>Rs.</Text>
-                  <TextInput
-                    style={styles.input}
-                    placeholder="180"
-                    placeholderTextColor={Colors.textMuted}
-                    value={price}
-                    onChangeText={setPrice}
-                    keyboardType="numeric"
-                  />
-                </View>
-              </View>
-            </View>
-
-            {/* 6. Departure Time */}
-            <Text style={styles.inputLabel}>Departure Time *</Text>
-            <View style={styles.inputContainer}>
-              <Ionicons name="time-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="e.g. Leaving in 15 mins"
-                placeholderTextColor={Colors.textMuted}
-                value={departureTime}
-                onChangeText={setDepartureTime}
+              {/* 2. Starting Location */}
+              <LocationSearchInput
+                label="Starting Location (Origin) *"
+                placeholder="Where are you starting from? (e.g. Kalanki)"
+                value={origin.text}
+                onChangeText={handleOriginChange}
+                suggestions={originSuggestions}
+                onSelectSuggestion={selectOriginSuggestion}
+                isSearching={isSearchingOrigin}
+                showNotFound={showOriginNotFound}
+                onOpenPinPicker={() => openPinPicker('origin')}
+                iconName="disc-outline"
+                iconColor="#16A34A"
+                useGpsButton={true}
+                isFetchingGPS={isFetchingOriginGPS}
+                onUseGpsLocation={useCurrentLocationForOrigin}
               />
+
+              {/* 3. Destination Location */}
+              <LocationSearchInput
+                label="Destination Location *"
+                placeholder="Where are you going? (e.g. Butwal)"
+                value={destination.text}
+                onChangeText={handleDestChange}
+                suggestions={destSuggestions}
+                onSelectSuggestion={selectDestSuggestion}
+                isSearching={isSearchingDest}
+                showNotFound={showDestNotFound}
+                onOpenPinPicker={() => openPinPicker('destination')}
+                iconName="location-sharp"
+                iconColor="#DC2626"
+              />
+
+              {/* 4 & 5. Available Seats & Price */}
+              <View style={styles.rowInputs}>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Seats Available</Text>
+                  <View style={[styles.inputContainer, { backgroundColor: '#F8FAFC' }]}>
+                    <Ionicons name="person" size={18} color={Colors.primary} style={styles.inputIcon} />
+                    <TextInput
+                      style={styles.input}
+                      placeholder="1"
+                      placeholderTextColor={Colors.textMuted}
+                      value={seatsLeft}
+                      onChangeText={setSeatsLeft}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.inputLabel}>Price / Seat (NPR) *</Text>
+                  <View style={styles.inputContainer}>
+                    <Text style={styles.currencyPrefix}>Rs.</Text>
+                    <TextInput
+                      style={styles.input}
+                      placeholder="180"
+                      placeholderTextColor={Colors.textMuted}
+                      value={price}
+                      onChangeText={setPrice}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                </View>
+              </View>
+
+              {/* 6. Departure Time */}
+              <Text style={styles.inputLabel}>Departure Time *</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons name="time-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="e.g. Leaving in 15 mins (09:30 AM)"
+                  placeholderTextColor={Colors.textMuted}
+                  value={departureTime}
+                  onChangeText={setDepartureTime}
+                />
+              </View>
+
+              {/* 7. Publish Button */}
+              {(() => {
+                const isValid = Boolean(
+                  selectedVehicle &&
+                  origin.coords &&
+                  destination.coords &&
+                  price.trim() &&
+                  departureTime.trim()
+                );
+                return (
+                  <TouchableOpacity
+                    style={[
+                      styles.createButton,
+                      (!isValid || isCalculatingRoute) && { backgroundColor: '#94A3B8', opacity: 0.75 },
+                    ]}
+                    onPress={handleCreateOffer}
+                    disabled={!isValid || isCalculatingRoute}
+                    activeOpacity={0.9}
+                  >
+                    {isCalculatingRoute ? (
+                      <Text style={styles.createText}>Calculating Route...</Text>
+                    ) : (
+                      <>
+                        <Text style={styles.createText}>Publish Route Offer</Text>
+                        <Ionicons name="paper-plane" size={18} color="#FFF" />
+                      </>
+                    )}
+                  </TouchableOpacity>
+                );
+              })()}
             </View>
 
-            {/* 7. Confirm & Publish Button */}
+            {/* Most Recent Offered Ride Card ONLY */}
             {(() => {
-              const isValid = Boolean(
-                selectedVehicle &&
-                origin.coords &&
-                destination.coords &&
-                price.trim() &&
-                departureTime.trim()
-              );
-              return (
-                <TouchableOpacity
-                  style={[
-                    styles.createButton,
-                    (!isValid || isCalculatingRoute) && { backgroundColor: '#94A3B8', opacity: 0.75 },
-                  ]}
-                  onPress={handleCreateOffer}
-                  disabled={!isValid || isCalculatingRoute}
-                  activeOpacity={0.9}
-                >
-                  {isCalculatingRoute ? (
-                    <Text style={styles.createText}>Calculating Route Directions...</Text>
-                  ) : (
-                    <>
-                      <Text style={styles.createText}>Publish Route Offer</Text>
-                      <Ionicons name="paper-plane" size={18} color="#FFF" />
-                    </>
-                  )}
-                </TouchableOpacity>
-              );
-            })()}
+              const myAllOffers = rides.filter(r => r.riderName === user?.name || r.phone === user?.phone);
+              const latestOffer = myAllOffers.length > 0 ? myAllOffers[0] : null;
 
-            {/* Active Offered Rides List */}
-            {rides.filter(r => r.riderName === user?.name || r.phone === user?.phone).length > 0 && (
-              <View style={styles.myOffersSection}>
-                <Text style={styles.myOffersHeading}>Your Active Ride Offers</Text>
-                {rides.filter(r => r.riderName === user?.name || r.phone === user?.phone).map(ride => (
-                  <View key={ride.id} style={styles.myOfferCard}>
+              if (!latestOffer) return null;
+
+              return (
+                <View style={styles.myOffersSection}>
+                  <Text style={styles.myOffersHeading}>Most Recent Active Offer</Text>
+                  <View key={latestOffer.id} style={styles.myOfferCard}>
                     <View style={styles.myOfferHeader}>
                       <View style={{ flex: 1 }}>
                         <Text style={styles.myOfferRoute} numberOfLines={1}>
-                          {ride.route.join(' → ')}
+                          {latestOffer.route.join(' → ')}
                         </Text>
                         <Text style={styles.myOfferSub}>
-                          {ride.vehicleName} • {ride.seatsLeft} seat(s) • NPR {ride.price}/seat
+                          {latestOffer.vehicleName} • {latestOffer.seatsLeft} seat(s) • NPR {latestOffer.price}/seat
                         </Text>
-                        <Text style={styles.myOfferTime}>{ride.departureTime}</Text>
+                        <Text style={styles.myOfferTime}>{latestOffer.departureTime}</Text>
                       </View>
                     </View>
                     <View style={styles.myOfferActions}>
                       <TouchableOpacity
                         style={styles.editOfferBtn}
-                        onPress={() => handleOpenEditRide(ride)}
+                        onPress={() => handleOpenEditRide(latestOffer)}
                       >
                         <Ionicons name="create-outline" size={16} color={Colors.primary} />
                         <Text style={styles.editOfferBtnText}>Edit</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.deleteOfferBtn}
-                        onPress={() => handleDeleteRide(ride.id)}
+                        onPress={() => handleDeleteRide(latestOffer.id)}
                       >
                         <Ionicons name="trash-outline" size={16} color="#DC2626" />
                         <Text style={styles.deleteOfferBtnText}>Delete</Text>
                       </TouchableOpacity>
                     </View>
                   </View>
-                ))}
-              </View>
-            )}
+                </View>
+              );
+            })()}
 
             <View style={{ height: 100 }} />
           </ScrollView>
@@ -1026,6 +995,37 @@ const styles = StyleSheet.create({
     backgroundColor: '#FFFFFF',
     borderBottomWidth: 1,
     borderBottomColor: '#E2E8F0',
+  },
+  cleanPostHeader: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  cleanPostTitle: {
+    fontSize: 20,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+  },
+  cleanPostSub: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    marginTop: 2,
+  },
+  cleanFormCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    marginBottom: 20,
+    shadowColor: '#0F172A',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.05,
+    shadowRadius: 12,
+    elevation: 3,
   },
   driverBadgePill: {
     flexDirection: 'row',

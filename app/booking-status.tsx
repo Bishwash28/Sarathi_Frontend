@@ -7,7 +7,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
-import { getBookingByIdApi } from '../services/bookingService';
 
 export default function BookingStatusScreen() {
   const { rideId } = useLocalSearchParams();
@@ -15,26 +14,6 @@ export default function BookingStatusScreen() {
 
   const ride = rides.find(r => r.id === rideId);
   const currentBooking = bookings.find(b => b.rideId === rideId && (b.status === 'pending' || b.status === 'accepted'));
-
-  // Poll the backend every 5 seconds to get the latest booking status
-  const pollRef = useRef<ReturnType<typeof setInterval> | null>(null);
-  useEffect(() => {
-    if (!currentBooking?.id) return;
-    const pollStatus = async () => {
-      try {
-        const token =
-          (await AsyncStorage.getItem('@sarathi_token')) ||
-          (await AsyncStorage.getItem('@sarathi_auth_token'));
-        await getBookingByIdApi(currentBooking.id, token ?? undefined);
-        // The state update happens in AppContext via setBookings if we wire it;
-        // for now, the poll fires to detect status changes via the currentBooking reactive check.
-      } catch { /* ignore poll errors */ }
-    };
-    pollRef.current = setInterval(pollStatus, 5000);
-    return () => {
-      if (pollRef.current) clearInterval(pollRef.current);
-    };
-  }, [currentBooking?.id]);
 
   useEffect(() => {
     // If the booking gets accepted, redirect to active trip

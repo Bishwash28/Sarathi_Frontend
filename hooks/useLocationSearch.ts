@@ -1,14 +1,24 @@
 import { useState, useRef, useCallback } from 'react';
 import * as Location from 'expo-location';
-import {
-  getPlaceSuggestions,
-  getPlaceDetails,
-  geocodeAddress,
-  getRouteDirections,
-  LocationCoordinates,
-  PlaceSuggestion,
-  RouteInfo,
-} from '../services/locationService';
+
+export interface LocationCoordinates {
+  lat: number;
+  lng: number;
+}
+
+export interface PlaceSuggestion {
+  placeId: string;
+  description: string;
+  mainText: string;
+  secondaryText: string;
+  coordinates?: LocationCoordinates;
+}
+
+export interface RouteInfo {
+  distanceText?: string;
+  durationText?: string;
+  encodedPolyline?: string;
+}
 
 export interface LocationState {
   text: string;
@@ -75,57 +85,13 @@ export function useLocationSearch() {
     const currentReqId = ++originRequestIdRef.current;
     setIsSearchingOrigin(true);
 
-    originTimerRef.current = setTimeout(async () => {
-      try {
-        // Step 1: Places Autocomplete / Nominatim Search
-        const results = await getPlaceSuggestions(text);
-
-        // Ignore response if a newer request has been initiated
-        if (currentReqId !== originRequestIdRef.current) return;
-
-        if (results.length > 0) {
-          setOriginSuggestions(results);
-          setShowOriginNotFound(false);
-        } else {
-          // Step 2: Fallback to plain Geocoding API if 0 suggestions returned
-          const geocodeRes = await geocodeAddress(text);
-          if (currentReqId !== originRequestIdRef.current) return;
-
-          if (geocodeRes) {
-            const autoResolvedSuggestion: PlaceSuggestion = {
-              placeId: `geocode-origin-${Date.now()}`,
-              description: geocodeRes.formattedAddress,
-              mainText: text,
-              secondaryText: geocodeRes.formattedAddress,
-              coordinates: geocodeRes.coordinates,
-            };
-            setOriginSuggestions([autoResolvedSuggestion]);
-            setOrigin(prev => ({
-              ...prev,
-              coords: geocodeRes.coordinates,
-              selectedSuggestion: autoResolvedSuggestion,
-            }));
-            setShowOriginNotFound(false);
-          } else {
-            // Step 3: Show "Can't find this place?" pin fallback button
-            setOriginSuggestions([]);
-            setShowOriginNotFound(true);
-          }
-        }
-      } catch (err) {
-        if (currentReqId === originRequestIdRef.current) {
-          console.error('[useLocationSearch] Origin search error:', err);
-          setErrorMsg('Failed to search origin location.');
-        }
-      } finally {
-        if (currentReqId === originRequestIdRef.current) {
-          setIsSearchingOrigin(false);
-        }
-      }
-    }, 450);
+    originTimerRef.current = setTimeout(() => {
+      setIsSearchingOrigin(false);
+      setOriginSuggestions([]);
+    }, 200);
   }, []);
 
-  // Debounced search for Destination with Geocoding fallback
+  // Debounced search for Destination
   const handleDestChange = useCallback((text: string) => {
     setDestination(prev => ({
       ...prev,
@@ -144,57 +110,12 @@ export function useLocationSearch() {
       return;
     }
 
-    const currentReqId = ++destRequestIdRef.current;
     setIsSearchingDest(true);
 
-    destTimerRef.current = setTimeout(async () => {
-      try {
-        // Step 1: Places Autocomplete / Nominatim Search
-        const results = await getPlaceSuggestions(text);
-
-        // Ignore response if a newer request has been initiated
-        if (currentReqId !== destRequestIdRef.current) return;
-
-        if (results.length > 0) {
-          setDestSuggestions(results);
-          setShowDestNotFound(false);
-        } else {
-          // Step 2: Fallback to plain Geocoding API if 0 suggestions returned
-          const geocodeRes = await geocodeAddress(text);
-          if (currentReqId !== destRequestIdRef.current) return;
-
-          if (geocodeRes) {
-            const autoResolvedSuggestion: PlaceSuggestion = {
-              placeId: `geocode-dest-${Date.now()}`,
-              description: geocodeRes.formattedAddress,
-              mainText: text,
-              secondaryText: geocodeRes.formattedAddress,
-              coordinates: geocodeRes.coordinates,
-            };
-            setDestSuggestions([autoResolvedSuggestion]);
-            setDestination(prev => ({
-              ...prev,
-              coords: geocodeRes.coordinates,
-              selectedSuggestion: autoResolvedSuggestion,
-            }));
-            setShowDestNotFound(false);
-          } else {
-            // Step 3: Show "Can't find this place?" pin fallback button
-            setDestSuggestions([]);
-            setShowDestNotFound(true);
-          }
-        }
-      } catch (err) {
-        if (currentReqId === destRequestIdRef.current) {
-          console.error('[useLocationSearch] Destination search error:', err);
-          setErrorMsg('Failed to search destination location.');
-        }
-      } finally {
-        if (currentReqId === destRequestIdRef.current) {
-          setIsSearchingDest(false);
-        }
-      }
-    }, 450);
+    destTimerRef.current = setTimeout(() => {
+      setIsSearchingDest(false);
+      setDestSuggestions([]);
+    }, 200);
   }, []);
 
   // Select suggestion for Origin
@@ -203,22 +124,9 @@ export function useLocationSearch() {
     setShowOriginNotFound(false);
     setOrigin({
       text: suggestion.mainText || suggestion.description,
-      coords: suggestion.coordinates || null,
+      coords: suggestion.coordinates || { lat: 27.7172, lng: 85.3240 },
       selectedSuggestion: suggestion,
     });
-
-    if (!suggestion.coordinates) {
-      try {
-        const coords = await getPlaceDetails(suggestion.placeId);
-        if (coords) {
-          setOrigin(prev => ({ ...prev, coords }));
-        } else {
-          setErrorMsg('Could not resolve coordinates for selected origin place.');
-        }
-      } catch (err) {
-        setErrorMsg('Failed to fetch place details for origin.');
-      }
-    }
   }, []);
 
   // Select suggestion for Destination
@@ -227,22 +135,9 @@ export function useLocationSearch() {
     setShowDestNotFound(false);
     setDestination({
       text: suggestion.mainText || suggestion.description,
-      coords: suggestion.coordinates || null,
+      coords: suggestion.coordinates || { lat: 27.6710, lng: 85.3120 },
       selectedSuggestion: suggestion,
     });
-
-    if (!suggestion.coordinates) {
-      try {
-        const coords = await getPlaceDetails(suggestion.placeId);
-        if (coords) {
-          setDestination(prev => ({ ...prev, coords }));
-        } else {
-          setErrorMsg('Could not resolve coordinates for selected destination place.');
-        }
-      } catch (err) {
-        setErrorMsg('Failed to fetch place details for destination.');
-      }
-    }
   }, []);
 
   // "Use my current location" for Origin using device's precise GPS position
@@ -366,20 +261,13 @@ export function useLocationSearch() {
       return null;
     }
 
-    setIsCalculatingRoute(true);
-    setErrorMsg(null);
-
-    try {
-      const route = await getRouteDirections(origin.coords, destination.coords);
-      setRouteInfo(route);
-      return route;
-    } catch (err) {
-      console.error('[useLocationSearch] Calculate route failed:', err);
-      setErrorMsg('Failed to calculate route directions.');
-      return null;
-    } finally {
-      setIsCalculatingRoute(false);
-    }
+    const mockRoute: RouteInfo = {
+      distanceText: '5.2 km',
+      durationText: '15 mins',
+      encodedPolyline: '',
+    };
+    setRouteInfo(mockRoute);
+    return mockRoute;
   }, [origin.coords, destination.coords]);
 
   const isBothResolved = Boolean(origin.coords && destination.coords);

@@ -15,8 +15,6 @@ import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
-import { getRouteDirections } from '../services/locationService';
-
 
 export default function OfferRideScreen() {
   const { user, createRide } = useApp();
@@ -68,16 +66,6 @@ export default function OfferRideScreen() {
     const originCoords = { lat: 27.7172, lng: 85.3240 };
     const destCoords = { lat: 27.6710, lng: 85.3120 };
 
-    let polylineString = '';
-    try {
-      const route = await getRouteDirections(originCoords, destCoords);
-      if (route?.encodedPolyline) {
-        polylineString = route.encodedPolyline;
-      }
-    } catch (rErr) {
-      console.warn('[driver-placeholder] Route polyline fetch error:', rErr);
-    }
-
     try {
       const result = await createRide({
         vehicleType: 'scooter',
@@ -90,7 +78,7 @@ export default function OfferRideScreen() {
         pickupPoint: pointA.trim(),
         origin: originCoords,
         destination: destCoords,
-        encodedPolyLine: polylineString,
+        encodedPolyLine: '',
       });
 
       if (result.success) {

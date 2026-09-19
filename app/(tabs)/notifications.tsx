@@ -8,8 +8,8 @@ import {
 } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
-import { Colors } from '../constants/Colors';
-import { useApp, DriverNotificationItem } from '../context/AppContext';
+import { Colors } from '../../constants/Colors';
+import { useApp, DriverNotificationItem } from '../../context/AppContext';
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function NotificationsScreen() {
@@ -87,11 +87,8 @@ export default function NotificationsScreen() {
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
       {/* Header */}
       <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-          <Ionicons name="arrow-back" size={24} color={Colors.primary} />
-        </TouchableOpacity>
         <View style={styles.titleContainer}>
-          <Text style={styles.headerTitle}>Driver Notifications</Text>
+          <Text style={styles.headerTitle}>Notifications</Text>
           {unreadDriverNotifCount > 0 && (
             <View style={styles.unreadCountBadge}>
               <Text style={styles.unreadCountText}>{unreadDriverNotifCount} New</Text>

@@ -20,7 +20,6 @@ import {
 } from 'react-native';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
-import { BackendUser, getUser } from '../../services/userService';
 
 // ── Facebook-style top left-to-right animated loading bar ────────────────────
 const TopFacebookLoadingBar = () => {
@@ -51,43 +50,35 @@ const TopFacebookLoadingBar = () => {
 };
 
 export default function ProfileScreen() {
-  const { user, completeProfile, updateEmergencyContact, logout, updateUserProfile, deleteAccount, switchUserRole } = useApp();
+  const { user, completeProfile, updateEmergencyContact, logout, updateUserProfile, deleteAccount, switchUserRole, changePassword, adminApproveKyc, adminRejectKyc } = useApp();
 
-  // ── Live backend data ────────────────────────────────────────────────────────
-  const [backendUser, setBackendUser] = useState<BackendUser | null>(null);
-  const [isFetchingProfile, setIsFetchingProfile] = useState(true);
+  const [isFetchingProfile, setIsFetchingProfile] = useState(false);
 
-  // Re-fetch whenever user context changes (e.g. right after login)
   useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        setIsFetchingProfile(true);
-        const uid = await AsyncStorage.getItem('@sarathi_user_id');
-        const token = await AsyncStorage.getItem('@sarathi_token');
-        if (!uid) { if (!cancelled) setIsFetchingProfile(false); return; }
-        const res = await getUser(uid, token ?? undefined);
-        if (!cancelled && res.success && res.data) setBackendUser(res.data as BackendUser);
-      } catch (e) {
-        console.warn('[profile] Failed to fetch user from backend:', e);
-      } finally {
-        if (!cancelled) setIsFetchingProfile(false);
-      }
-    })();
-    return () => { cancelled = true; };
+    setIsFetchingProfile(false);
   }, [user?.email]);
 
-  // Use backend data when available, fall back to local context
-  const displayName = backendUser?.name || user?.name || 'User';
-  const displayEmail = backendUser?.email || user?.email || '—';
-  const displayPhone = backendUser?.phone || user?.phone || '—';
-  const displayAvatar = backendUser?.avatarUrl || user?.photo || 'https://encrypted-tbn0.gstatic.com/images?q=tbn:ANd9GcRrrBvl0wGQfV6SSYHn4MDl1Dx5h7ReyxWPaHhUynJVGQ&s=10';
-  const displayKyc = backendUser?.kycVerified ?? user?.kycVerified;
-  const displayRole = backendUser?.activeRole?.toLowerCase() === 'driver' ? 'driver' : (user?.role ?? 'passenger');
-  const memberSince = backendUser?.createdAt ? new Date(backendUser.createdAt).toLocaleDateString('en-US', { month: 'short', year: 'numeric' }) : null;
+  const defaultAvatar = 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80';
+  const displayAvatar = user?.photo && user.photo.trim().length > 0 ? user.photo : defaultAvatar;
+  const [avatarUri, setAvatarUri] = useState(displayAvatar);
+
+  useEffect(() => {
+    if (user?.photo) {
+      setAvatarUri(user.photo);
+    }
+  }, [user?.photo]);
+
+  const displayName = user?.name || 'User';
+  const displayEmail = user?.email || '—';
+  const displayPhone = user?.phone || '—';
+  const displayRole = user?.role ?? 'passenger';
+  const memberSince = null;
 
   // ── Edit Profile modal ───────────────────────────────────────────────────────
   const [editModalVisible, setEditModalVisible] = useState(false);
+  const [changePasswordModalVisible, setChangePasswordModalVisible] = useState(false);
+  const [newPassword, setNewPassword] = useState('');
+  const [isChangingPassword, setIsChangingPassword] = useState(false);
   const [manageAccountExpanded, setManageAccountExpanded] = useState(true);
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
@@ -99,6 +90,25 @@ export default function ProfileScreen() {
     setEditEmail(displayEmail);
     setEditPhone(displayPhone);
     setEditModalVisible(true);
+  };
+
+  const handleChangePasswordSubmit = async () => {
+    if (!newPassword || newPassword.length < 6) {
+      Alert.alert('Validation Error', 'Password must be at least 6 characters long.');
+      return;
+    }
+
+    setIsChangingPassword(true);
+    const result = await changePassword(newPassword);
+    setIsChangingPassword(false);
+
+    if (result.success) {
+      setChangePasswordModalVisible(false);
+      setNewPassword('');
+      Alert.alert('Success', 'Your password has been changed successfully.');
+    } else {
+      Alert.alert('Error', result.error || 'Failed to update password.');
+    }
   };
 
   // ── Image Picker Handler ──────────────────────────────────────────────────
@@ -147,13 +157,6 @@ export default function ProfileScreen() {
       Alert.alert('Error', result.error || 'Failed to update profile.');
       return;
     }
-    // Refresh backend data
-    const uid = await AsyncStorage.getItem('@sarathi_user_id');
-    const token = (await AsyncStorage.getItem('@sarathi_token')) || (await AsyncStorage.getItem('@sarathi_auth_token'));
-    if (uid) {
-      const res = await getUser(uid, token ?? undefined);
-      if (res.success && res.data) setBackendUser(res.data);
-    }
     setEditModalVisible(false);
     Alert.alert('Success', 'Profile updated successfully.');
   };
@@ -189,52 +192,35 @@ export default function ProfileScreen() {
 
   const handleSwitchMode = async () => {
     const targetRole = displayRole === 'driver' ? 'PASSENGER' : 'DRIVER';
+    const targetLabel = targetRole === 'DRIVER' ? 'Driver' : 'Passenger';
 
-    if (targetRole === 'DRIVER' && displayKyc !== true) {
-      Alert.alert(
-        'KYC Verification Required',
-        'You must complete driver KYC verification before offering rides.',
-        [
-          { text: 'Cancel', style: 'cancel' },
-          { text: 'Verify KYC Now', onPress: () => router.push('/kyc') },
-        ],
-      );
+    setIsFetchingProfile(true);
+    const res = await switchUserRole(targetRole);
+    setIsFetchingProfile(false);
+
+    if (res.success) {
+      Alert.alert('Role Switched', `You are now in ${targetLabel} mode.`);
       return;
     }
 
-    const targetLabel = targetRole === 'DRIVER' ? 'Driver' : 'Rider';
-    const currentLabel = displayRole === 'driver' ? 'Driver' : 'Rider';
-
-    Alert.alert(
-      `Switch to ${targetLabel}?`,
-      `You are currently in ${currentLabel} mode. Are you sure you want to switch to ${targetLabel} mode?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: `Switch to ${targetLabel}`,
-          style: 'default',
-          onPress: async () => {
-            setIsFetchingProfile(true);
-            const res = await switchUserRole(targetRole);
-
-            // Refresh local backendUser state from storage / API
-            const uid = await AsyncStorage.getItem('@sarathi_user_id');
-            const token = (await AsyncStorage.getItem('@sarathi_token')) || (await AsyncStorage.getItem('@sarathi_auth_token'));
-            if (uid) {
-              const refreshed = await getUser(uid, token ?? undefined);
-              if (refreshed.success && refreshed.data) {
-                setBackendUser(refreshed.data);
-              }
-            }
-            setIsFetchingProfile(false);
-
-            if (!res.success) {
-              Alert.alert('Role Switch Failed', res.error || 'Unable to switch role at this time.');
-            }
-          },
-        },
-      ],
-    );
+    if (res.error === 'KYC_NOT_SUBMITTED') {
+      Alert.alert(
+        'KYC Verification Required',
+        res.message || 'You must submit your KYC verification before offering rides as a Driver.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Verify KYC Now', onPress: () => router.push('/kyc') },
+        ]
+      );
+    } else if (res.error === 'KYC_PENDING') {
+      Alert.alert(
+        'KYC Review Pending',
+        res.message || 'Your KYC verification has been submitted and is awaiting Admin review.',
+        [{ text: 'OK', style: 'default' }]
+      );
+    } else {
+      Alert.alert('Role Switch Failed', res.message || res.error || 'Unable to switch role at this time.');
+    }
   };
 
   return (
@@ -252,7 +238,11 @@ export default function ProfileScreen() {
             {/* Horizontal Facebook-style Profile Info */}
             <View style={styles.horizontalProfileRow}>
               <View style={styles.avatarContainer}>
-                <Image source={{ uri: displayAvatar }} style={styles.avatar} />
+                <Image
+                  source={{ uri: avatarUri }}
+                  style={styles.avatar}
+                  onError={() => setAvatarUri(defaultAvatar)}
+                />
                 <TouchableOpacity style={styles.avatarEditButton} onPress={handlePickAvatar} activeOpacity={0.8}>
                   <Ionicons name="camera" size={14} color="#FFF" />
                 </TouchableOpacity>
@@ -273,7 +263,7 @@ export default function ProfileScreen() {
                       color="#FFF"
                     />
                     <Text style={styles.roleText}>
-                      {displayRole === 'driver' ? 'Driver' : 'Rider'}
+                      {displayRole === 'driver' ? 'Rider / Driver' : 'Passenger'}
                     </Text>
                   </View>
                   <View style={styles.ratingBadge}>
@@ -296,7 +286,7 @@ export default function ProfileScreen() {
                 color={Colors.primary}
               />
               <Text style={styles.cardBottomRoleSwitchText}>
-                Switch to {displayRole === 'driver' ? 'Rider' : 'Driver'}
+                Switch to {displayRole === 'driver' ? 'Passenger Mode' : 'Rider / Driver Mode'}
               </Text>
             </TouchableOpacity>
           </View>
@@ -330,13 +320,42 @@ export default function ProfileScreen() {
               <View style={styles.detailTextContainer}>
                 <Text style={styles.detailLabel}>KYC Status</Text>
                 {(() => {
-                  const isVerified = displayKyc === true || backendUser?.kycStatus === 'VERIFIED' || user?.kycStatus === 'VERIFIED';
-                  const isPending = !isVerified && (backendUser?.kycStatus === 'PENDING' || user?.kycStatus === 'PENDING');
-                  
+                  const isVerified = user?.kycVerified === true || user?.kycStatus === 'VERIFIED';
+                  const isPending = !isVerified && user?.kycStatus === 'PENDING';
+
                   if (isVerified) {
-                    return <Text style={[styles.detailValue, { color: Colors.success }]}>Verified</Text>;
+                    return <Text style={[styles.detailValue, { color: Colors.success }]}>Verified ✓</Text>;
                   } else if (isPending) {
-                    return <Text style={[styles.detailValue, { color: '#F59E0B' }]}>Pending Verification</Text>;
+                    return (
+                      <View style={{ marginTop: 4 }}>
+                        <Text style={[styles.detailValue, { color: '#F59E0B' }]}>Pending Admin Review</Text>
+                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                          <TouchableOpacity
+                            style={{ backgroundColor: Colors.success, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}
+                            onPress={async () => {
+                              setIsFetchingProfile(true);
+                              const res = await adminApproveKyc();
+                              setIsFetchingProfile(false);
+                              if (res.success) Alert.alert('Dev Admin', 'KYC Approved successfully!');
+                            }}
+                          >
+                            <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>[Dev] Approve KYC</Text>
+                          </TouchableOpacity>
+
+                          <TouchableOpacity
+                            style={{ backgroundColor: Colors.error, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}
+                            onPress={async () => {
+                              setIsFetchingProfile(true);
+                              const res = await adminRejectKyc();
+                              setIsFetchingProfile(false);
+                              if (res.success) Alert.alert('Dev Admin', 'KYC Rejected.');
+                            }}
+                          >
+                            <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>[Dev] Reject</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    );
                   } else {
                     return (
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
@@ -402,7 +421,16 @@ export default function ProfileScreen() {
 
                 <View style={styles.subDivider} />
 
-                {/* 2. Delete Account */}
+                {/* 2. Change Password */}
+                <TouchableOpacity style={styles.subSettingRow} onPress={() => setChangePasswordModalVisible(true)} activeOpacity={0.7}>
+                  <Ionicons name="key-outline" size={18} color={Colors.primary} />
+                  <Text style={styles.subSettingRowText}>Change Password</Text>
+                  <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                </TouchableOpacity>
+
+                <View style={styles.subDivider} />
+
+                {/* 3. Delete Account */}
                 <TouchableOpacity style={styles.subSettingRow} onPress={handleDeleteAccount} activeOpacity={0.7}>
                   <Ionicons name="trash-outline" size={18} color="#DC2626" />
                   <Text style={[styles.subSettingRowText, { color: '#DC2626' }]}>Delete Account</Text>
@@ -454,8 +482,6 @@ export default function ProfileScreen() {
               <TextInput style={styles.fieldInput} value={editPhone} onChangeText={setEditPhone} placeholder="Your phone" placeholderTextColor={Colors.textMuted} keyboardType="phone-pad" />
             </View>
 
-
-
             <TouchableOpacity
               style={[styles.saveProfileBtn, isSavingProfile && { opacity: 0.65 }]}
               onPress={handleSaveProfile}
@@ -464,6 +490,43 @@ export default function ProfileScreen() {
               {isSavingProfile
                 ? <ActivityIndicator size="small" color="#FFF" />
                 : <Text style={styles.saveProfileBtnText}>Save Changes</Text>}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      {/* ── Change Password Modal ────────────────────────────────────────────── */}
+      <Modal visible={changePasswordModalVisible} animationType="slide" transparent onRequestClose={() => setChangePasswordModalVisible(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>Change Password</Text>
+              <TouchableOpacity onPress={() => setChangePasswordModalVisible(false)}>
+                <Ionicons name="close" size={24} color={Colors.textPrimary} />
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.fieldLabel}>New Password</Text>
+            <View style={styles.fieldRow}>
+              <Ionicons name="lock-closed-outline" size={18} color={Colors.primary} style={styles.fieldIcon} />
+              <TextInput
+                style={styles.fieldInput}
+                value={newPassword}
+                onChangeText={setNewPassword}
+                placeholder="Enter new password (min 6 chars)"
+                placeholderTextColor={Colors.textMuted}
+                secureTextEntry
+              />
+            </View>
+
+            <TouchableOpacity
+              style={[styles.saveProfileBtn, isChangingPassword && { opacity: 0.65 }]}
+              onPress={handleChangePasswordSubmit}
+              disabled={isChangingPassword}
+            >
+              {isChangingPassword
+                ? <ActivityIndicator size="small" color="#FFF" />
+                : <Text style={styles.saveProfileBtnText}>Update Password</Text>}
             </TouchableOpacity>
           </View>
         </View>

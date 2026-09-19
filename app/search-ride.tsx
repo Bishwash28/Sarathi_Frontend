@@ -17,21 +17,19 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
-import { useApp } from '../context/AppContext';
+import { useApp, Ride } from '../context/AppContext';
+import { supabase } from '../lib/supabase';
 
 import { useLocationSearch } from '../hooks/useLocationSearch';
 import { LocationPinPickerMap } from '../components/LocationPinPickerMap';
 import { LocationSearchInput } from '../components/LocationSearchInput';
-import { getRouteDirections } from '../services/locationService';
-import { searchRidesApi, searchResultToLocal, SearchRideResult } from '../services/rideService';
-import type { RideData } from '../services/rideService';
 
 export default function SearchRideScreen() {
   const { rides, deviceLocation, addRecentSearch, recentSearches, savedPlaces, requestBooking } = useApp();
   const params = useLocalSearchParams();
 
   // Search state
-  const [candidateRides, setCandidateRides] = useState<RideData[]>([]);
+  const [candidateRides, setCandidateRides] = useState<Ride[]>([]);
   const [isSearching, setIsSearching] = useState(false);
   const [hasSearched, setHasSearched] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
@@ -114,58 +112,59 @@ export default function SearchRideScreen() {
   // candidateRides — populated via backend search below
 
   const handleSearchRides = async () => {
-    if (!origin.coords || !destination.coords) {
+    if (!origin.text && !destination.text) {
       Alert.alert('Missing Location', 'Please select both origin and destination.');
       return;
     }
     setIsSearching(true);
     setHasSearched(true);
     setSearchError(null);
-    console.log('=== [DEBUG] searchRidesApi CALLED ===', {
-      originCoords: origin.coords,
-      destCoords: destination.coords,
-      originText: origin.text,
-      destText: destination.text,
-    });
-    try {
-      const storedToken =
-        (await AsyncStorage.getItem('@sarathi_token')) ||
-        (await AsyncStorage.getItem('@sarathi_auth_token'));
 
-      let polylineString = routeInfo?.encodedPolyline || '';
-      if (!polylineString) {
-        try {
-          const route = await getRouteDirections(origin.coords, destination.coords);
-          if (route?.encodedPolyline) {
-            polylineString = route.encodedPolyline;
-          }
-        } catch (rErr) {
-          console.warn('[search-ride] Directions polyline fetch error:', rErr);
-        }
+    try {
+      const origLat = origin.coords?.lat || 27.7172;
+      const origLng = origin.coords?.lng || 85.3240;
+      const destLat = destination.coords?.lat || 27.7006;
+      const destLng = destination.coords?.lng || 83.4484;
+
+      const { data, error } = await supabase.rpc('search_matching_rides', {
+        p_origin_lat: origLat,
+        p_origin_lng: origLng,
+        p_dest_lat: destLat,
+        p_dest_lng: destLng,
+        p_seats_needed: 1,
+        p_buffer_meters: 800.0,
+      });
+
+      setIsSearching(false);
+
+      if (error) {
+        setSearchError(error.message);
+        return;
       }
 
-      const payload = {
-        origin: origin.coords,
-        destination: destination.coords,
-        encodedPolyLine: polylineString,
-        seatsNeeded: 1,
-      };
-      console.log('=== [DEBUG] searchRidesApi Sending payload ===', payload);
-      const result = await searchRidesApi(payload, storedToken ?? undefined);
-      console.log('=== [DEBUG] searchRidesApi Raw Result ===', result);
-
-      if (result.success && Array.isArray(result.data)) {
-        setCandidateRides(result.data.map(searchResultToLocal));
+      if (data && data.length > 0) {
+        const mappedRides: Ride[] = data.map((item: any) => ({
+          id: item.ride_id,
+          riderName: item.rider_name || 'Rider',
+          riderPhoto: item.rider_photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+          rating: 5.0,
+          vehicleType: 'scooter',
+          vehicleName: item.vehicle_name || 'Vehicle',
+          vehicleNumber: item.number_plate || '',
+          departureTime: item.departure_time ? new Date(item.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Leaving soon',
+          seatsLeft: item.available_seats || 1,
+          price: Number(item.price_per_seat) || 0,
+          route: [item.origin_name, item.destination_name],
+          pickupPoint: item.origin_name,
+          encodedPolyLine: item.encoded_polyline,
+        }));
+        setCandidateRides(mappedRides);
       } else {
-        setSearchError(result.error || 'No rides found.');
         setCandidateRides([]);
       }
     } catch (err: any) {
-      console.error('=== [DEBUG] searchRidesApi EXCEPTION ===', err);
-      setSearchError('Failed to search rides. Please try again.');
-      setCandidateRides([]);
-    } finally {
       setIsSearching(false);
+      setSearchError(err.message || 'Search failed');
     }
   };
 

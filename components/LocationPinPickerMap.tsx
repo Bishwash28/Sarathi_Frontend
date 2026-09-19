@@ -13,7 +13,6 @@ import { WebView } from 'react-native-webview';
 import MapView, { Marker } from 'react-native-maps';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../constants/Colors';
-import { reverseGeocode } from '../services/locationService';
 
 export interface PinLocation {
   lat: number;
@@ -52,26 +51,10 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
   const [resolvedPlaceName, setResolvedPlaceName] = useState<string>('');
   const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
   const [isFetchingGPS, setIsFetchingGPS] = useState<boolean>(false);
-  const reverseGeocodeTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Perform debounced reverse geocoding on gesture end
+  // Perform place name formatting on gesture end
   const fetchPlaceName = useCallback((lat: number, lng: number) => {
-    if (reverseGeocodeTimer.current) {
-      clearTimeout(reverseGeocodeTimer.current);
-    }
-
-    setIsGeocoding(true);
-    reverseGeocodeTimer.current = setTimeout(async () => {
-      try {
-        const placeName = await reverseGeocode(lat, lng);
-        setResolvedPlaceName(placeName);
-      } catch (err) {
-        console.warn('[LocationPinPickerMap] reverseGeocode error:', err);
-        setResolvedPlaceName(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
-      } finally {
-        setIsGeocoding(false);
-      }
-    }, 400); // 400ms debounce
+    setResolvedPlaceName(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
   }, []);
 
   // Center map on user's current GPS location
@@ -112,21 +95,8 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
         );
       }
 
-      // 2. Perform reverse geocoding to obtain and store place name
-      setIsGeocoding(true);
-      let fetchedName = '';
-      try {
-        fetchedName = await reverseGeocode(gpsCoords.lat, gpsCoords.lng);
-        setResolvedPlaceName(fetchedName);
-      } catch (gErr) {
-        console.warn('[LocationPinPickerMap] GPS reverseGeocode failed:', gErr);
-        fetchedName = `${gpsCoords.lat.toFixed(4)}, ${gpsCoords.lng.toFixed(4)}`;
-        setResolvedPlaceName(fetchedName);
-      } finally {
-        setIsGeocoding(false);
-      }
-
-      // 3. Notify parent callback with exact GPS coordinates AND resolved place name
+      const fetchedName = `${gpsCoords.lat.toFixed(4)}, ${gpsCoords.lng.toFixed(4)}`;
+      setResolvedPlaceName(fetchedName);
       onConfirmPin(gpsCoords, fetchedName);
     } catch (err) {
       console.warn('[LocationPinPickerMap] GPS locate error:', err);

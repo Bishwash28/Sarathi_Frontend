@@ -19,22 +19,22 @@ import {
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
-import {
-  VehicleData,
-  deleteVehicle,
-  getUserVehicles,
-  getVehicle,
-  registerVehicle,
-  updateVehicle,
-} from '../services/vehicleService';
+import { supabase } from '../lib/supabase';
+export interface VehicleData {
+  id: string;
+  userId?: string;
+  vehicleNumber: string;
+  vehicleModelName: string;
+  images?: string[];
+  vehicleType?: 'bike' | 'scooter';
+  createdAt?: string;
+}
 
 export default function VehiclesScreen() {
   const { user } = useApp();
   const [token, setToken] = useState<string | null>(null);
   const [vehicles, setVehicles] = useState<VehicleData[]>([]);
   const [isLoading, setIsLoading] = useState(true);
-
-  // Form Modal State (Add / Edit)
   const [modalVisible, setModalVisible] = useState(false);
   const [editingVehicle, setEditingVehicle] = useState<VehicleData | null>(null);
   const [vehicleNumber, setVehicleNumber] = useState('');
@@ -47,29 +47,9 @@ export default function VehiclesScreen() {
   const [selectedVehicle, setSelectedVehicle] = useState<VehicleData | null>(null);
   const [isFetchingDetail, setIsFetchingDetail] = useState(false);
 
-  // Fetch user vehicles from backend on mount
   useEffect(() => {
-    (async () => {
-      try {
-        setIsLoading(true);
-        const storedToken =
-          (await AsyncStorage.getItem('@sarathi_token')) ||
-          (await AsyncStorage.getItem('@sarathi_auth_token'));
-        setToken(storedToken);
-
-        const res = await getUserVehicles(storedToken ?? undefined);
-        if (res.success && Array.isArray(res.data)) {
-          setVehicles(res.data);
-        } else if (res.success && res.data && typeof res.data === 'object' && !Array.isArray(res.data)) {
-          // In case single vehicle object returned
-          setVehicles([res.data as unknown as VehicleData]);
-        }
-      } catch (err) {
-        console.warn('[vehicles] Failed to fetch vehicles from backend:', err);
-      } finally {
-        setIsLoading(false);
-      }
-    })();
+    setVehicles([]);
+    setIsLoading(false);
   }, []);
 
   const handleBack = () => {
@@ -92,17 +72,9 @@ export default function VehiclesScreen() {
     setModalVisible(true);
   };
 
-  const openViewModal = async (v: VehicleData) => {
+  const openViewModal = (v: VehicleData) => {
     setSelectedVehicle(v);
     setViewModalVisible(true);
-    if (v.id) {
-      setIsFetchingDetail(true);
-      const res = await getVehicle(v.id, token ?? undefined);
-      setIsFetchingDetail(false);
-      if (res.success && res.data) {
-        setSelectedVehicle(res.data);
-      }
-    }
   };
 
   // Image Picker for vehicle photos (Gallery)
@@ -164,51 +136,45 @@ export default function VehiclesScreen() {
       return;
     }
 
-    setIsSubmitting(true);
-
-    const payload = {
-      vehicleNumber: vehicleNumber.trim(),
-      vehicleModelName: vehicleModelName.trim(),
-      images: vehicleImages,
-    };
-
-    if (editingVehicle) {
-      // UPDATE: PUT /api/vehicle/{id}
-      const res = await updateVehicle(editingVehicle.id, payload, token ?? undefined);
-      setIsSubmitting(false);
-
-      if (!res.success) {
-        Alert.alert('Error', res.error || 'Failed to update vehicle.');
-        return;
-      }
-
-      setVehicles(prev =>
-        prev.map(v => (v.id === editingVehicle.id ? (res.data as VehicleData) : v))
-      );
-      Alert.alert('Success', 'Vehicle details updated successfully.');
-    } else {
-      // CREATE: POST /api/vehicle
-      const res = await registerVehicle(payload, token ?? undefined);
-      setIsSubmitting(false);
-
-      if (!res.success) {
-        Alert.alert('Error', res.error || 'Failed to register vehicle.');
-        return;
-      }
-
-      const newVehicle: VehicleData = res.data || {
-        id: `veh-${Date.now()}`,
-        userId: user?.id || 'user',
-        vehicleNumber: payload.vehicleNumber,
-        vehicleModelName: payload.vehicleModelName,
-        images: payload.images,
-      };
-
-      setVehicles(prev => [newVehicle, ...prev]);
-      Alert.alert('Success', 'Vehicle registered successfully.');
+    if (!user?.id) {
+      Alert.alert('Auth Error', 'You must be logged in to register a vehicle.');
+      return;
     }
 
-    setModalVisible(false);
+    setIsSubmitting(true);
+
+    try {
+      const { data, error } = await supabase.from('vehicles').insert({
+        user_id: user.id,
+        vehicle_name: vehicleModelName.trim(),
+        vehicle_type: 'car',
+        number_plate: vehicleNumber.trim().toUpperCase(),
+        vehicle_image: vehicleImages[0] || null,
+        seats_available: 4,
+        status: 'active',
+      }).select().single();
+
+      setIsSubmitting(false);
+
+      if (error) {
+        Alert.alert('Registration Error', error.message);
+        return;
+      }
+
+      setVehicles(prev => [{
+        id: data.id,
+        userId: user.id,
+        vehicleNumber: data.number_plate,
+        vehicleModelName: data.vehicle_name,
+        images: data.vehicle_image ? [data.vehicle_image] : [],
+      }, ...prev]);
+
+      Alert.alert('Success', 'Vehicle registered successfully.');
+      setModalVisible(false);
+    } catch (err: any) {
+      setIsSubmitting(false);
+      Alert.alert('Error', err.message || 'Failed to save vehicle.');
+    }
   };
 
   const handleDeleteVehicle = (id: string, name: string) => {
@@ -220,12 +186,7 @@ export default function VehiclesScreen() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: async () => {
-            const res = await deleteVehicle(id, token ?? undefined);
-            if (!res.success) {
-              Alert.alert('Error', res.error || 'Failed to delete vehicle.');
-              return;
-            }
+          onPress: () => {
             setVehicles(prev => prev.filter(v => v.id !== id));
             if (selectedVehicle?.id === id) setViewModalVisible(false);
             Alert.alert('Deleted', 'Vehicle removed successfully.');

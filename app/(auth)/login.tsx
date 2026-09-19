@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground, StatusBar, ActivityIndicator } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground, StatusBar, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/Colors';
@@ -8,13 +8,36 @@ import { validateEmail, hasScriptTags, sanitizeInput } from '../../utils/validat
 import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function LoginScreen() {
-  const { login, loginWithGoogle } = useApp();
+  const { login, loginWithGoogle, resetPassword } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   /** Holds the email address that needs verification; non-null triggers the banner. */
   const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
+
+  const handleForgotPassword = async () => {
+    const cleanEmail = sanitizeInput(email);
+    if (!cleanEmail) {
+      Alert.alert('Forgot Password', 'Please enter your email address in the field above first.');
+      return;
+    }
+    const emailCheck = validateEmail(cleanEmail);
+    if (!emailCheck.isValid) {
+      Alert.alert('Invalid Email', emailCheck.message);
+      return;
+    }
+
+    setIsLoading(true);
+    const result = await resetPassword(cleanEmail);
+    setIsLoading(false);
+
+    if (result.success) {
+      Alert.alert('Check Your Email', `A password reset link has been sent to ${cleanEmail}.`);
+    } else {
+      Alert.alert('Password Reset Error', result.error || 'Failed to send password reset email.');
+    }
+  };
 
   const handleLogin = async () => {
     if (isLoading) return;
@@ -157,7 +180,7 @@ export default function LoginScreen() {
                 </TouchableOpacity>
               </View>
 
-              <TouchableOpacity style={styles.forgotPasswordContainer}>
+              <TouchableOpacity style={styles.forgotPasswordContainer} onPress={handleForgotPassword}>
                 <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
               </TouchableOpacity>
 
