@@ -7,27 +7,37 @@ import { Colors } from '../constants/Colors';
 import { useApp, DriverMessage } from '../context/AppContext';
 
 import { makePhoneCall } from '../utils/phoneUtils';
+import { renderFormattedText } from '../utils/textUtils';
 
 export default function ChatRoomScreen() {
   const { rideId } = useLocalSearchParams<{ rideId?: string }>();
-  const { rides, driverMessages, sendDriverMessage, startRiderChat } = useApp();
+  const { rides, driverMessages, sendDriverMessage, user, bookings } = useApp();
   const [inputText, setInputText] = useState('');
 
   const ride = rides.find(r => r.id === rideId);
+  const booking = bookings.find(b => b.rideId === rideId);
   const messages = rideId ? (driverMessages[rideId] || []) : [];
 
-  if (!ride) {
-    return (
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Driver chat not found</Text>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Text style={styles.backButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const isDriverRole = user?.role === 'driver';
+
+  const passengerMsg = messages.find(m => (m.sender === 'user' || m.passengerId) && m.senderId !== user?.id && m.senderName !== user?.name);
+  const riderMsg = messages.find(m => (m.sender === 'driver' || m.riderId) && m.senderId !== user?.id && m.senderName !== user?.name);
+
+  const chatTitle = isDriverRole
+    ? (booking?.passengerName || passengerMsg?.senderName || 'Passenger Inquirer')
+    : (ride?.riderName || riderMsg?.senderName || 'Sarathi Rider');
+
+  const chatSub = isDriverRole
+    ? (booking?.passengerPhone || passengerMsg?.senderPhone || 'Sarathi Trip Passenger')
+    : (ride ? `${ride.vehicleName} • ${ride.vehicleNumber}` : (riderMsg?.senderPhone || 'Sarathi Rider'));
+
+  const chatAvatar = isDriverRole
+    ? (booking?.passengerPhoto || passengerMsg?.senderPhoto || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80')
+    : (ride?.riderPhoto || riderMsg?.senderPhoto || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80');
+
+  const phoneToCall = isDriverRole
+    ? (booking?.passengerPhone || passengerMsg?.senderPhone || '+9779841234567')
+    : (ride?.phone || riderMsg?.senderPhone || '+9779841234567');
 
   const handleSend = () => {
     if (!inputText.trim()) return;
@@ -38,26 +48,39 @@ export default function ChatRoomScreen() {
   };
 
   const handleCall = () => {
-    makePhoneCall(ride.phone || '+9779841234567');
+    makePhoneCall(phoneToCall);
   };
 
   const renderMessageItem = (item: DriverMessage) => {
-    const isUser = item.sender === 'user';
+    const isMe = (item.senderId && user?.id && item.senderId === user.id) ||
+                 (item.senderName && user?.name && item.senderName === user.name) ||
+                 (isDriverRole ? item.sender === 'driver' : item.sender === 'user');
+
     return (
-      <View key={item.id} style={[styles.messageRow, isUser ? styles.userRow : styles.driverRow]}>
-        {!isUser && (
-          <Image source={{ uri: ride.riderPhoto }} style={styles.driverPhoto} />
+      <View key={item.id} style={[styles.messageRow, isMe ? styles.userRow : styles.driverRow]}>
+        {!isMe && (
+          <Image source={{ uri: chatAvatar }} style={styles.driverPhoto} />
         )}
-        <View style={[styles.bubble, isUser ? styles.userBubble : styles.driverBubble]}>
-          <Text style={[styles.messageText, isUser ? styles.userMessageText : styles.driverMessageText]}>
-            {item.text}
-          </Text>
+        <View style={[styles.bubble, isMe ? styles.userBubble : styles.driverBubble]}>
+          {renderFormattedText(
+            item.text,
+            [styles.messageText, isMe ? styles.userMessageText : styles.driverMessageText],
+            { fontWeight: 'bold' }
+          )}
           <Text style={styles.timestampText}>
             {new Date(item.timestamp).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
           </Text>
         </View>
       </View>
     );
+  };
+
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)/inbox');
+    }
   };
 
   return (
@@ -68,15 +91,15 @@ export default function ChatRoomScreen() {
       >
         {/* Custom Header Bar */}
         <View style={styles.header}>
-          <TouchableOpacity style={styles.iconButton} onPress={() => router.back()}>
+          <TouchableOpacity style={styles.iconButton} onPress={handleBack}>
             <Ionicons name="arrow-back" size={22} color={Colors.textPrimary} />
           </TouchableOpacity>
 
-          <Image source={{ uri: ride.riderPhoto }} style={styles.headerAvatar} />
+          <Image source={{ uri: chatAvatar }} style={styles.headerAvatar} />
 
           <View style={styles.headerInfo}>
-            <Text style={styles.headerName}>{ride.riderName}</Text>
-            <Text style={styles.headerSub}>{ride.vehicleName} • {ride.vehicleNumber}</Text>
+            <Text style={styles.headerName}>{chatTitle}</Text>
+            <Text style={styles.headerSub}>{chatSub}</Text>
           </View>
 
           <TouchableOpacity style={styles.callButton} onPress={handleCall}>
@@ -88,17 +111,25 @@ export default function ChatRoomScreen() {
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           <View style={styles.encryptionNotice}>
             <Ionicons name="lock-closed" size={12} color={Colors.textMuted} />
-            <Text style={styles.encryptionText}>End-to-end encrypted chat with your rider</Text>
+            <Text style={styles.encryptionText}>End-to-end encrypted chat</Text>
           </View>
 
-          {messages.map(renderMessageItem)}
+          {messages.length === 0 ? (
+            <View style={{ padding: 20, alignItems: 'center' }}>
+              <Text style={{ fontSize: 13, color: Colors.textMuted, textAlign: 'center' }}>
+                Start a conversation with {chatTitle.split(' ')[0]}. Say hello or coordinate pickup details!
+              </Text>
+            </View>
+          ) : (
+            messages.map(renderMessageItem)
+          )}
         </ScrollView>
 
         {/* Bottom Message Input Field */}
         <View style={styles.inputContainer}>
           <TextInput
             style={styles.inputField}
-            placeholder={`Message ${ride.riderName.split(' ')[0]}...`}
+            placeholder={`Message ${chatTitle.split(' ')[0]}...`}
             placeholderTextColor={Colors.textMuted}
             value={inputText}
             onChangeText={setInputText}

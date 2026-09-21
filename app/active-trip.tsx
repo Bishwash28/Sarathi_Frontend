@@ -13,6 +13,7 @@ import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
 import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LocationPinPickerMap } from '../components/LocationPinPickerMap';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
 import { makePhoneCall } from '../utils/phoneUtils';
@@ -116,14 +117,6 @@ export default function ActiveTripScreen() {
     }
   };
 
-  // Coord lookups removed (LANDMARKS data removed)
-  const startCoord = (currentBooking.currentLat && currentBooking.currentLng)
-    ? { latitude: currentBooking.currentLat, longitude: currentBooking.currentLng }
-    : undefined;
-  const endCoord = undefined;
-
-  const liveCoord = startCoord;
-
   const eta = Math.max(1, Math.ceil((100 - activeTripProgress) / 10));
 
   const handleCallParticipant = () => {
@@ -166,53 +159,81 @@ export default function ActiveTripScreen() {
           </View>
         </View>
 
-        {/* ── Status Banner (without map) ── */}
-
         {/* ── Dynamic State Body ── */}
         <ScrollView style={{ flex: 1 }} contentContainerStyle={{ paddingBottom: 20 }}>
+          {/* Live Location Map Card */}
+          <View style={styles.mapWrapper}>
+            <LocationPinPickerMap
+              originCoords={currentBooking.pickupCoords || ride.origin || { lat: 27.7172, lng: 85.3240 }}
+              destCoords={currentBooking.dropCoords || ride.destination || { lat: 27.6710, lng: 85.3120 }}
+              originName={currentBooking.passengerPickup || ride.pickupPoint}
+              destName={currentBooking.passengerDropoff || ride.route?.[1]}
+            />
+          </View>
+
           {/* STEP 1 & 2: Pickup OTP State */}
           {(lifecycle === 'waiting_for_pickup' || lifecycle === 'pickup_otp_required') && (
             <View style={styles.stepCard}>
-              <View style={styles.otpBanner}>
-                <Ionicons name="key" size={24} color="#FFF" />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.otpBannerTitle}>YOUR PICKUP OTP</Text>
-                  <Text style={styles.otpBannerCode}>{currentBooking.pickupOtp || '----'}</Text>
-                </View>
-              </View>
-              <Text style={styles.stepHelpText}>
-                Provide this 4-digit code to {ride.riderName} upon vehicle pickup to start the ride.
-              </Text>
-
-              <View style={styles.divider} />
-              <Text style={styles.inputLabelText}>Driver OTP Entry (Verification):</Text>
-              <View style={styles.otpInputRow}>
-                <TextInput
-                  style={styles.otpTextInput}
-                  placeholder="Enter 4-digit OTP"
-                  placeholderTextColor={Colors.textMuted}
-                  value={inputPickupOtp}
-                  onChangeText={setInputPickupOtp}
-                  keyboardType="numeric"
-                  maxLength={4}
-                />
-                <TouchableOpacity style={styles.verifyButton} onPress={handleVerifyPickup}>
-                  <Text style={styles.verifyButtonText}>Verify & Start</Text>
-                </TouchableOpacity>
-              </View>
-              {currentBooking.otpError && (
-                <Text style={styles.otpErrorText}>{currentBooking.otpError}</Text>
+              {user?.role === 'driver' ? (
+                /* Rider View: OTP Entry Input */
+                <>
+                  <View style={[styles.otpBanner, { backgroundColor: '#1E293B' }]}>
+                    <Ionicons name="key-outline" size={24} color="#FFF" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.otpBannerTitle}>DRIVER OTP VERIFICATION</Text>
+                      <Text style={[styles.otpBannerTitle, { color: '#94A3B8', fontSize: 13, marginTop: 2 }]}>
+                        Ask passenger for their 4-digit Pickup OTP
+                      </Text>
+                    </View>
+                  </View>
+                  <Text style={styles.stepHelpText}>
+                    Enter the 4-digit Pickup OTP displayed on the passenger's screen to verify pickup and start the ride.
+                  </Text>
+                  <View style={styles.divider} />
+                  <Text style={styles.inputLabelText}>Passenger Pickup OTP Code:</Text>
+                  <View style={styles.otpInputRow}>
+                    <TextInput
+                      style={styles.otpTextInput}
+                      placeholder="Enter 4-digit OTP"
+                      placeholderTextColor={Colors.textMuted}
+                      value={inputPickupOtp}
+                      onChangeText={setInputPickupOtp}
+                      keyboardType="numeric"
+                      maxLength={4}
+                    />
+                    <TouchableOpacity style={styles.verifyButton} onPress={handleVerifyPickup}>
+                      <Text style={styles.verifyButtonText}>Verify & Start</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {currentBooking.otpError && (
+                    <Text style={styles.otpErrorText}>{currentBooking.otpError}</Text>
+                  )}
+                </>
+              ) : (
+                /* Passenger View: Display Generated Pickup OTP */
+                <>
+                  <View style={styles.otpBanner}>
+                    <Ionicons name="key" size={24} color="#FFF" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.otpBannerTitle}>YOUR PICKUP OTP CODE</Text>
+                      <Text style={styles.otpBannerCode}>{currentBooking.pickupOtp || '4821'}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.stepHelpText}>
+                    Show this 4-digit Pickup OTP to {ride.riderName} when they arrive at your pickup location to start the ride.
+                  </Text>
+                </>
               )}
             </View>
           )}
 
-          {/* STEP 3: Ride Started & Live Tracking */}
-          {lifecycle === 'ride_started' && (
+          {/* STEP 3 & 4: Ride Started & Completion OTP State */}
+          {(lifecycle === 'ride_started' || lifecycle === 'completion_otp_required') && (
             <View style={styles.stepCard}>
               <View style={styles.ongoingHeader}>
                 <Ionicons name="navigate-circle" size={28} color="#16A34A" />
                 <View style={{ flex: 1 }}>
-                  <Text style={styles.ongoingTitle}>Ride in Progress</Text>
+                  <Text style={styles.ongoingTitle}>Ride in Progress 🚀</Text>
                   <Text style={styles.ongoingSub}>En route to {currentBooking.passengerDropoff}</Text>
                 </View>
                 <Text style={styles.progressBadge}>{activeTripProgress}%</Text>
@@ -220,57 +241,54 @@ export default function ActiveTripScreen() {
 
               <View style={styles.divider} />
 
+              {user?.role === 'driver' ? (
+                /* Rider View: Completion OTP Input */
+                <>
+                  <Text style={styles.inputLabelText}>Driver Completion Verification:</Text>
+                  <Text style={styles.stepHelpText}>
+                    Ask passenger for their 4-digit Completion OTP upon reaching {currentBooking.passengerDropoff}.
+                  </Text>
+                  <View style={[styles.otpInputRow, { marginTop: 10 }]}>
+                    <TextInput
+                      style={styles.otpTextInput}
+                      placeholder="Enter Completion OTP"
+                      placeholderTextColor={Colors.textMuted}
+                      value={inputCompletionOtp}
+                      onChangeText={setInputCompletionOtp}
+                      keyboardType="numeric"
+                      maxLength={4}
+                    />
+                    <TouchableOpacity style={[styles.verifyButton, { backgroundColor: '#7C3AED' }]} onPress={handleVerifyCompletion}>
+                      <Text style={styles.verifyButtonText}>Verify & End</Text>
+                    </TouchableOpacity>
+                  </View>
+                  {currentBooking.otpError && (
+                    <Text style={styles.otpErrorText}>{currentBooking.otpError}</Text>
+                  )}
+                </>
+              ) : (
+                /* Passenger View: Display Generated Completion OTP */
+                <>
+                  <View style={[styles.otpBanner, { backgroundColor: '#7C3AED' }]}>
+                    <Ionicons name="checkmark-done-circle" size={24} color="#FFF" />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.otpBannerTitle}>YOUR RIDE COMPLETION OTP</Text>
+                      <Text style={styles.otpBannerCode}>{currentBooking.completionOtp || '7392'}</Text>
+                    </View>
+                  </View>
+                  <Text style={styles.stepHelpText}>
+                    Share this 4-digit Completion OTP with {ride.riderName} when you arrive at your destination to complete the trip.
+                  </Text>
+                </>
+              )}
+
               <TouchableOpacity
-                style={styles.nudgeButton}
+                style={[styles.nudgeButton, { marginTop: 14 }]}
                 onPress={() => nudgeDriverLocation(currentBooking.id)}
               >
                 <Ionicons name="location" size={18} color="#FFF" />
-                <Text style={styles.nudgeButtonText}>Dev: Simulate Live GPS Progress</Text>
+                <Text style={styles.nudgeButtonText}>Simulate Live GPS Movement</Text>
               </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.verifyButton, { backgroundColor: Colors.accent, marginTop: 8 }]}
-                onPress={() => verifyCompletionOtp(currentBooking.id, currentBooking.completionOtp || '')}
-              >
-                <Ionicons name="flag" size={18} color="#FFF" />
-                <Text style={styles.verifyButtonText}>Complete & Verify End</Text>
-              </TouchableOpacity>
-            </View>
-          )}
-
-          {/* STEP 4: Completion OTP Verification */}
-          {lifecycle === 'completion_otp_required' && (
-            <View style={styles.stepCard}>
-              <View style={[styles.otpBanner, { backgroundColor: '#7C3AED' }]}>
-                <Ionicons name="checkmark-done-circle" size={24} color="#FFF" />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.otpBannerTitle}>YOUR RIDE COMPLETION OTP</Text>
-                  <Text style={styles.otpBannerCode}>{currentBooking.completionOtp || '----'}</Text>
-                </View>
-              </View>
-              <Text style={styles.stepHelpText}>
-                Share this completion OTP with {ride.riderName} to confirm you reached {currentBooking.passengerDropoff}.
-              </Text>
-
-              <View style={styles.divider} />
-              <Text style={styles.inputLabelText}>Driver Completion Verification:</Text>
-              <View style={styles.otpInputRow}>
-                <TextInput
-                  style={styles.otpTextInput}
-                  placeholder="Enter 4-digit OTP"
-                  placeholderTextColor={Colors.textMuted}
-                  value={inputCompletionOtp}
-                  onChangeText={setInputCompletionOtp}
-                  keyboardType="numeric"
-                  maxLength={4}
-                />
-                <TouchableOpacity style={[styles.verifyButton, { backgroundColor: '#7C3AED' }]} onPress={handleVerifyCompletion}>
-                  <Text style={styles.verifyButtonText}>Verify End</Text>
-                </TouchableOpacity>
-              </View>
-              {currentBooking.otpError && (
-                <Text style={styles.otpErrorText}>{currentBooking.otpError}</Text>
-              )}
             </View>
           )}
 

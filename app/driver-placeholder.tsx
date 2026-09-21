@@ -32,7 +32,11 @@ export default function OfferRideScreen() {
   const [isMapExpanded, setIsMapExpanded] = useState(false);
 
   const handleBack = () => {
-    router.back();
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
   };
 
   // Simple origin → destination corridor (landmark auto-detection removed)
@@ -83,10 +87,13 @@ export default function OfferRideScreen() {
 
       if (result.success) {
         Alert.alert('Offer Created! 🎉', 'Your ride offer has been published.', [
-          { text: 'OK', onPress: () => router.back() },
+          { text: 'OK', onPress: handleBack },
         ]);
       } else {
-        Alert.alert('Failed to Create Offer', result.error || 'Please check your inputs and try again.');
+        const errorMsg = result.error?.includes('ACTIVE_RIDE_EXISTS')
+          ? 'You already have an active ride offer or ongoing trip. Please complete or cancel your existing ride before offering a new one.'
+          : (result.error || 'Please check your inputs and try again.');
+        Alert.alert('Cannot Publish Offer', errorMsg);
       }
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to connect to server.');

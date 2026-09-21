@@ -3,7 +3,7 @@ import { BottomTabBarProps } from '@react-navigation/bottom-tabs';
 import { Tabs, router } from 'expo-router';
 import React, { useEffect, useRef } from 'react';
 import { Animated, Platform, StyleSheet, Text, TouchableOpacity, View } from 'react-native';
-import { SafeAreaView } from 'react-native-safe-area-context';
+import { SafeAreaView, useSafeAreaInsets } from 'react-native-safe-area-context';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
 
@@ -61,6 +61,9 @@ export default function TabLayout() {
 }
 
 const FloatingTabBar: React.FC<CustomTabProps> = ({ state, descriptors, navigation, isDriver, kycVerified }) => {
+  const insets = useSafeAreaInsets();
+  const bottomOffset = Math.max(insets.bottom, Platform.OS === 'ios' ? 16 : 10) + 8;
+
   const homeRouteIndex = state.routes.findIndex(r => r.name === 'index');
   const notifRouteIndex = state.routes.findIndex(r => r.name === 'notifications');
   const activityRouteIndex = state.routes.findIndex(r => r.name === 'activity');
@@ -135,7 +138,7 @@ const FloatingTabBar: React.FC<CustomTabProps> = ({ state, descriptors, navigati
   // Passenger UI: 5 Tabs (Home, Alerts, Activity, Inbox, Profile)
   if (!isDriver) {
     return (
-      <View style={styles.floatingContainer}>
+      <View style={[styles.floatingContainer, { bottom: bottomOffset }]}>
         <View style={styles.floatingBar}>
           {renderTabItem(homeRouteIndex)}
           {renderTabItem(notifRouteIndex)}
@@ -149,7 +152,7 @@ const FloatingTabBar: React.FC<CustomTabProps> = ({ state, descriptors, navigati
 
   // Rider UI: Activity | Alerts | Center Big Red (+) POST Button | Chats | Profile
   return (
-    <View style={styles.floatingContainer}>
+    <View style={[styles.floatingContainer, { bottom: bottomOffset }]}>
       <View style={styles.floatingBar}>
         {/* Left Tab 1: Activity */}
         {renderTabItem(activityRouteIndex)}

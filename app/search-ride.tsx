@@ -1,17 +1,17 @@
 import { Ionicons } from '@expo/vector-icons';
-import AsyncStorage from '@react-native-async-storage/async-storage';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useState } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   ActivityIndicator,
   Alert,
+  Animated,
+  Dimensions,
   KeyboardAvoidingView,
-  Modal,
+  PanResponder,
   Platform,
   ScrollView,
   StyleSheet,
   Text,
-  TextInput,
   TouchableOpacity,
   View,
 } from 'react-native';
@@ -24,8 +24,13 @@ import { useLocationSearch } from '../hooks/useLocationSearch';
 import { LocationPinPickerMap } from '../components/LocationPinPickerMap';
 import { LocationSearchInput } from '../components/LocationSearchInput';
 
+const SCREEN_HEIGHT = Dimensions.get('window').height;
+const MIN_SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.22); // Map is Full screen (~78%)
+const MED_SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.48); // Medium view (~52%)
+const MAX_SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.80); // Small map (~20%)
+
 export default function SearchRideScreen() {
-  const { rides, deviceLocation, addRecentSearch, recentSearches, savedPlaces, requestBooking } = useApp();
+  const { rides, addRecentSearch, recentSearches, savedPlaces } = useApp();
   const params = useLocalSearchParams();
 
   // Search state
@@ -34,65 +39,100 @@ export default function SearchRideScreen() {
   const [hasSearched, setHasSearched] = useState(false);
   const [searchError, setSearchError] = useState<string | null>(null);
 
+  // UI state: 3-stage map expansion ('small' | 'medium' | 'full') & Active focused input field
+  const [mapSize, setMapSize] = useState<'small' | 'medium' | 'full'>('medium');
+  const [activeField, setActiveField] = useState<'origin' | 'destination'>('origin');
+
+  // Animated Draggable Sheet Height
+  const sheetHeightAnim = useRef(new Animated.Value(MED_SHEET_HEIGHT)).current;
+  const lastSheetHeight = useRef(MED_SHEET_HEIGHT);
+
   const {
     origin,
     originSuggestions,
     isSearchingOrigin,
-    showOriginNotFound,
-    isFetchingOriginGPS,
     handleOriginChange,
     selectOriginSuggestion,
-    useCurrentLocationForOrigin,
     setOriginDirect,
 
     destination,
     destSuggestions,
     isSearchingDest,
-    showDestNotFound,
     handleDestChange,
     selectDestSuggestion,
     setDestDirect,
-
-    pinPickerModalOpen,
-    pinPickerTargetType,
-    openPinPicker,
-    closePinPicker,
-    confirmPinLocation,
-
-    routeInfo,
   } = useLocationSearch();
 
   const [activeTab, setActiveTab] = useState<'recent' | 'saved'>('recent');
 
-  // Dragged pin coords for modal
-  const [draggedPinCoords, setDraggedPinCoords] = useState<{ lat: number; lng: number } | null>(null);
-
-  React.useEffect(() => {
-    if (pinPickerModalOpen) {
-      if (pinPickerTargetType === 'origin' && origin.coords) {
-        setDraggedPinCoords(origin.coords);
-      } else if (pinPickerTargetType === 'destination' && destination.coords) {
-        setDraggedPinCoords(destination.coords);
-      } else {
-        setDraggedPinCoords({ lat: 27.7172, lng: 85.3240 });
-      }
-    }
-  }, [pinPickerModalOpen, pinPickerTargetType]);
-
   // Initialize prefilled locations on mount
-  React.useEffect(() => {
-    if (params.prefillFrom) {
+  useEffect(() => {
+    if (params.prefillFrom && typeof params.prefillFrom === 'string' && !params.prefillFrom.includes('+')) {
       handleOriginChange(params.prefillFrom as string);
-    } else if (deviceLocation) {
-      handleOriginChange(deviceLocation);
     }
-    if (params.prefillTo) {
+    if (params.prefillTo && typeof params.prefillTo === 'string' && !params.prefillTo.includes('+')) {
       handleDestChange(params.prefillTo as string);
     }
-  }, [params.prefillFrom, params.prefillTo, deviceLocation]);
+  }, [params.prefillFrom, params.prefillTo]);
+
+  // Smoothly snap sheet to specific height target
+  const snapToHeight = (targetHeight: number) => {
+    lastSheetHeight.current = targetHeight;
+    Animated.spring(sheetHeightAnim, {
+      toValue: targetHeight,
+      useNativeDriver: false,
+      bounciness: 4,
+      speed: 14,
+    }).start();
+
+    if (targetHeight === MIN_SHEET_HEIGHT) setMapSize('full');
+    else if (targetHeight === MED_SHEET_HEIGHT) setMapSize('medium');
+    else setMapSize('small');
+  };
+
+  // Setup PanResponder for intuitive vertical drag gesture on handle bar
+  const panResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) => Math.abs(gestureState.dy) > 3,
+      onPanResponderGrant: () => {
+        sheetHeightAnim.stopAnimation();
+      },
+      onPanResponderMove: (_, gestureState) => {
+        const newHeight = lastSheetHeight.current - gestureState.dy;
+        const clampedHeight = Math.max(MIN_SHEET_HEIGHT, Math.min(MAX_SHEET_HEIGHT, newHeight));
+        sheetHeightAnim.setValue(clampedHeight);
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const currentHeight = lastSheetHeight.current - gestureState.dy;
+
+        // Fast swipe flicks
+        if (gestureState.vy < -0.4) {
+          if (lastSheetHeight.current === MIN_SHEET_HEIGHT) snapToHeight(MED_SHEET_HEIGHT);
+          else snapToHeight(MAX_SHEET_HEIGHT);
+        } else if (gestureState.vy > 0.4) {
+          if (lastSheetHeight.current === MAX_SHEET_HEIGHT) snapToHeight(MED_SHEET_HEIGHT);
+          else snapToHeight(MIN_SHEET_HEIGHT);
+        } else {
+          // Snap to nearest anchor
+          const distMin = Math.abs(currentHeight - MIN_SHEET_HEIGHT);
+          const distMed = Math.abs(currentHeight - MED_SHEET_HEIGHT);
+          const distMax = Math.abs(currentHeight - MAX_SHEET_HEIGHT);
+
+          if (distMin <= distMed && distMin <= distMax) snapToHeight(MIN_SHEET_HEIGHT);
+          else if (distMax <= distMed && distMax <= distMin) snapToHeight(MAX_SHEET_HEIGHT);
+          else snapToHeight(MED_SHEET_HEIGHT);
+        }
+      },
+    })
+  ).current;
 
   const handleBack = () => {
-    router.back();
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
   };
 
   const handleSelectRecent = (placeName: string) => {
@@ -100,7 +140,6 @@ export default function SearchRideScreen() {
     addRecentSearch(origin.text || 'Current Location', placeName);
   };
 
-  // Click on a saved location to fill the inputs
   const handleSelectSaved = (name: string) => {
     if (!origin.text) {
       handleOriginChange(name);
@@ -109,7 +148,120 @@ export default function SearchRideScreen() {
     }
   };
 
-  // candidateRides — populated via backend search below
+  // Cycle through map size stages: small -> medium -> full -> small
+  const cycleMapSize = () => {
+    if (mapSize === 'small') snapToHeight(MED_SHEET_HEIGHT);
+    else if (mapSize === 'medium') snapToHeight(MIN_SHEET_HEIGHT);
+    else snapToHeight(MAX_SHEET_HEIGHT);
+  };
+
+  // Handle direct map selection (tap or drag on the unified map)
+  const handleMapSelectCoords = (coords: { lat: number; lng: number }) => {
+    const placeName = `${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`;
+    if (activeField === 'origin') {
+      setOriginDirect(placeName, coords);
+    } else {
+      setDestDirect(placeName, coords);
+    }
+  };
+
+  const isRideMatching = (
+    r: Ride,
+    origQuery: string,
+    destQuery: string,
+    origCoords?: { lat: number; lng: number } | null,
+    destCoords?: { lat: number; lng: number } | null
+  ): boolean => {
+    if (r.seatsLeft <= 0) return false;
+
+    // Build normalized list of stop names along the rider's route
+    const rStops = [
+      r.pickupPoint || '',
+      ...(r.route || []),
+    ].filter(Boolean);
+
+    const findStopIndex = (query: string): number => {
+      if (!query) return -1;
+      const q = query.toLowerCase().trim();
+      if (!q) return -1;
+      return rStops.findIndex(stop => {
+        const s = stop.toLowerCase().trim();
+        if (!s) return false;
+        return s.includes(q) || q.includes(s);
+      });
+    };
+
+    const origIdx = findStopIndex(origQuery);
+    const destIdx = findStopIndex(destQuery);
+
+    // 1. Text-based route corridor matching
+    if (origQuery && destQuery) {
+      if (origIdx >= 0 && destIdx >= 0) {
+        // Both stops present on rider's route. Pickup MUST be before dropoff (forward direction)
+        return origIdx < destIdx;
+      }
+
+      if (origIdx >= 0 && destIdx === -1) {
+        // Pickup found, but dropoff is not on rider's route -> DO NOT MATCH!
+        return false;
+      }
+
+      if (origIdx === -1 && destIdx >= 0) {
+        // Dropoff found, but pickup is not on rider's route -> DO NOT MATCH!
+        return false;
+      }
+    }
+
+    // 2. Coordinate geometry matching (if coordinates exist for both passenger and rider)
+    if (origCoords && destCoords && r.origin && r.destination) {
+      const A = r.origin;
+      const B = r.destination;
+      const P = origCoords;
+      const Q = destCoords;
+
+      const dLat = B.lat - A.lat;
+      const dLng = B.lng - A.lng;
+      const lenSq = dLat * dLat + dLng * dLng;
+
+      if (lenSq > 0.00001) {
+        const t_P = ((P.lat - A.lat) * dLat + (P.lng - A.lng) * dLng) / lenSq;
+        const t_Q = ((Q.lat - A.lat) * dLat + (Q.lng - A.lng) * dLng) / lenSq;
+
+        const perp_P = Math.abs((P.lat - A.lat) * dLng - (P.lng - A.lng) * dLat) / Math.sqrt(lenSq);
+        const perp_Q = Math.abs((Q.lat - A.lat) * dLng - (Q.lng - A.lng) * dLat) / Math.sqrt(lenSq);
+
+        // Must be within ~15km (0.15 deg) off route corridor, and P must precede Q (forward direction)
+        const isPOnCorridor = perp_P <= 0.15 && t_P >= -0.1 && t_P <= 1.1;
+        const isQOnCorridor = perp_Q <= 0.15 && t_Q >= -0.1 && t_Q <= 1.1;
+        const isForwardDirection = t_P < t_Q;
+
+        if (isPOnCorridor && isQOnCorridor && isForwardDirection) {
+          return true;
+        }
+      }
+    }
+
+    // 3. Single location search (if passenger specified ONLY pickup OR ONLY destination)
+    if (origQuery && !destQuery) {
+      if (origIdx >= 0) return true;
+      if (origCoords && r.origin) {
+        const dist = Math.hypot(origCoords.lat - r.origin.lat, origCoords.lng - r.origin.lng);
+        if (dist <= 0.15) return true;
+      }
+      return false;
+    }
+
+    if (!origQuery && destQuery) {
+      if (destIdx >= 0) return true;
+      if (destCoords && r.destination) {
+        const dist = Math.hypot(destCoords.lat - r.destination.lat, destCoords.lng - r.destination.lng);
+        if (dist <= 0.15) return true;
+      }
+      return false;
+    }
+
+    return false;
+  };
 
   const handleSearchRides = async () => {
     if (!origin.text && !destination.text) {
@@ -121,380 +273,354 @@ export default function SearchRideScreen() {
     setSearchError(null);
 
     try {
-      const origLat = origin.coords?.lat || 27.7172;
-      const origLng = origin.coords?.lng || 85.3240;
-      const destLat = destination.coords?.lat || 27.7006;
-      const destLng = destination.coords?.lng || 83.4484;
+      let rpcRides: Ride[] = [];
 
-      const { data, error } = await supabase.rpc('search_matching_rides', {
-        p_origin_lat: origLat,
-        p_origin_lng: origLng,
-        p_dest_lat: destLat,
-        p_dest_lng: destLng,
-        p_seats_needed: 1,
-        p_buffer_meters: 800.0,
-      });
+      // 1. Primary Search: PostGIS Corridor Buffer if valid non-zero coordinates exist
+      if (origin.coords && destination.coords) {
+        const { data, error } = await supabase.rpc('search_matching_rides', {
+          p_origin_lat: origin.coords.lat,
+          p_origin_lng: origin.coords.lng,
+          p_dest_lat: destination.coords.lat,
+          p_dest_lng: destination.coords.lng,
+          p_seats_needed: 1,
+          p_buffer_meters: 10000.0,
+        });
 
-      setIsSearching(false);
+        if (!error && data && data.length > 0) {
+          rpcRides = data.map((item: any) => ({
+            id: item.ride_id,
+            riderName: item.rider_name || 'Rider',
+            riderPhoto: item.rider_photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+            rating: 5.0,
+            vehicleType: 'scooter',
+            vehicleName: item.vehicle_name || 'Vehicle',
+            vehicleNumber: item.number_plate || '',
+            departureTime: item.departure_time ? new Date(item.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Leaving soon',
+            seatsLeft: item.available_seats || 1,
+            price: Number(item.price_per_seat) || 0,
+            route: [item.origin_name, item.destination_name],
+            pickupPoint: item.origin_name,
+            encodedPolyLine: item.encoded_polyline,
+            origin: { lat: Number(item.origin_lat), lng: Number(item.origin_lng) },
+            destination: { lat: Number(item.destination_lat), lng: Number(item.destination_lng) },
+          }));
+        }
+      }
 
-      if (error) {
-        setSearchError(error.message);
+      if (rpcRides.length > 0) {
+        setCandidateRides(rpcRides);
+        setIsSearching(false);
+        snapToHeight(MAX_SHEET_HEIGHT);
         return;
       }
 
-      if (data && data.length > 0) {
-        const mappedRides: Ride[] = data.map((item: any) => ({
-          id: item.ride_id,
-          riderName: item.rider_name || 'Rider',
-          riderPhoto: item.rider_photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
-          rating: 5.0,
-          vehicleType: 'scooter',
-          vehicleName: item.vehicle_name || 'Vehicle',
-          vehicleNumber: item.number_plate || '',
-          departureTime: item.departure_time ? new Date(item.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Leaving soon',
-          seatsLeft: item.available_seats || 1,
-          price: Number(item.price_per_seat) || 0,
-          route: [item.origin_name, item.destination_name],
-          pickupPoint: item.origin_name,
-          encodedPolyLine: item.encoded_polyline,
-        }));
-        setCandidateRides(mappedRides);
-      } else {
-        setCandidateRides([]);
-      }
+      // 2. Fallback Search: Strict corridor & direction filter matching
+      const origQuery = (origin.text || '').toLowerCase().trim();
+      const destQuery = (destination.text || '').toLowerCase().trim();
+
+      const matchedFallback = rides.filter(r => {
+        return isRideMatching(r, origQuery, destQuery, origin.coords, destination.coords);
+      });
+
+      setCandidateRides(matchedFallback);
+      setIsSearching(false);
+      snapToHeight(MAX_SHEET_HEIGHT);
     } catch (err: any) {
       setIsSearching(false);
-      setSearchError(err.message || 'Search failed');
+      setCandidateRides([]);
+      setSearchError(null);
+      snapToHeight(MAX_SHEET_HEIGHT);
     }
   };
 
-
   return (
-    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
-      {/* ── Header ── */}
-      <View style={styles.header}>
-        <TouchableOpacity style={styles.backButton} onPress={handleBack}>
-          <Ionicons name="arrow-back" size={24} color={Colors.primary} />
-        </TouchableOpacity>
-        <Text style={styles.headerTitle}>Find a Ride</Text>
-      </View>
-
-      <KeyboardAvoidingView
-        style={styles.keyboardView}
-        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      >
-        {/* ── Input Fields Card with Autocomplete ── */}
-        <View style={styles.inputCard}>
-          {/* Pickup Input */}
-          <LocationSearchInput
-            label="Pickup Location"
-            placeholder="Start location..."
-            value={origin.text}
-            onChangeText={handleOriginChange}
-            suggestions={originSuggestions}
-            onSelectSuggestion={selectOriginSuggestion}
-            isSearching={isSearchingOrigin}
-            showNotFound={showOriginNotFound}
-            onOpenPinPicker={() => openPinPicker('origin')}
-            iconName="disc-outline"
-            iconColor={Colors.textMuted}
-            useGpsButton={true}
-            isFetchingGPS={isFetchingOriginGPS}
-            onUseGpsLocation={useCurrentLocationForOrigin}
-          />
-
-          <View style={styles.inputDivider} />
-
-          {/* Destination Input */}
-          <LocationSearchInput
-            label="Destination"
-            placeholder="Where to? Enter landmark or location"
-            value={destination.text}
-            onChangeText={handleDestChange}
-            suggestions={destSuggestions}
-            onSelectSuggestion={selectDestSuggestion}
-            isSearching={isSearchingDest}
-            showNotFound={showDestNotFound}
-            onOpenPinPicker={() => openPinPicker('destination')}
-            iconName="location-sharp"
-            iconColor={Colors.accent}
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <View style={styles.mainContainer}>
+        {/* ── 🗺️ FULL SCREEN BACKGROUND INTERACTIVE MAP ── */}
+        <View style={styles.fullScreenMapContainer}>
+          <LocationPinPickerMap
+            originCoords={origin.coords}
+            destCoords={destination.coords}
+            originName={origin.text}
+            destName={destination.text}
+            activeTarget={activeField}
+            onSelectCoords={handleMapSelectCoords}
           />
         </View>
 
-        {/* ── Search Rides Button ── */}
-        {origin.coords && destination.coords && (
+        {/* ── 🔍 COMPACT FLOATING HEADER BAR ── */}
+        <View style={styles.transparentHeader}>
+          <TouchableOpacity style={styles.floatingHeaderPill} onPress={handleBack} activeOpacity={0.85}>
+            <Ionicons name="arrow-back" size={20} color={Colors.primary} />
+            <Text style={styles.headerTitleText}>Find a Ride</Text>
+          </TouchableOpacity>
+
           <TouchableOpacity
-            style={[styles.searchBtn, isSearching && { opacity: 0.7 }]}
-            onPress={handleSearchRides}
-            disabled={isSearching}
+            style={styles.floatingAiPill}
+            onPress={() => router.push('/ai-assistant')}
             activeOpacity={0.85}
           >
-            {isSearching ? (
-              <ActivityIndicator size="small" color="#fff" />
-            ) : (
-              <Ionicons name="search" size={18} color="#fff" />
-            )}
-            <Text style={styles.searchBtnText}>
-              {isSearching ? 'Searching...' : 'Search Rides'}
-            </Text>
+            <Ionicons name="sparkles" size={16} color="#7C3AED" />
+            <Text style={styles.floatingAiText}>Ask AI</Text>
           </TouchableOpacity>
-        )}
-
-
-        <ScrollView
-          style={styles.scroll}
-          contentContainerStyle={styles.scrollContent}
-          showsVerticalScrollIndicator={false}
-        >
-          {destination.text ? (
-            <View style={styles.resultsContainer}>
-              <Text style={styles.resultsHeading}>Matched Rides to "{destination.text}"</Text>
-              {isSearching ? (
-                <View style={styles.noResultsCard}>
-                  <ActivityIndicator size="large" color={Colors.primary} />
-                  <Text style={{ marginTop: 12, color: Colors.textMuted, fontSize: 14 }}>Searching for rides...</Text>
-                </View>
-              ) : searchError ? (
-                <View style={styles.noResultsCard}>
-                  <Ionicons name="alert-circle-outline" size={48} color={Colors.error} />
-                  <Text style={styles.noResultsText}>Search error</Text>
-                  <Text style={styles.noResultsSubtext}>{searchError}</Text>
-                </View>
-              ) : !hasSearched ? (
-                <View style={styles.noResultsCard}>
-                  <Ionicons name="search-outline" size={48} color={Colors.textMuted} />
-                  <Text style={styles.noResultsText}>Tap "Search Rides" above</Text>
-                  <Text style={styles.noResultsSubtext}>Enter both locations, then tap Search Rides to find available drivers.</Text>
-                </View>
-              ) : candidateRides.length === 0 ? (
-                <View style={styles.noResultsCard}>
-                  <Ionicons name="car-outline" size={48} color={Colors.textMuted} />
-                  <Text style={styles.noResultsText}>No rides found on this route</Text>
-                  <Text style={styles.noResultsSubtext}>No drivers are currently heading along this route.</Text>
-                </View>
-              ) : (
-                candidateRides.map(ride => (
-                  <TouchableOpacity
-                    key={ride.id}
-                    style={styles.rideCard}
-                    onPress={() => {
-                      addRecentSearch(origin.text || 'Origin', destination.text);
-                      router.push({
-                        pathname: '/ride-detail',
-                        params: {
-                          id: ride.id,
-                          selectedPickup: origin.text,
-                          selectedDest: destination.text,
-                          pickupLat: origin.coords?.lat ?? 0,
-                          pickupLng: origin.coords?.lng ?? 0,
-                          dropLat: destination.coords?.lat ?? 0,
-                          dropLng: destination.coords?.lng ?? 0,
-                          riderName: ride.riderName,
-                          vehicleName: ride.vehicleName,
-                          vehicleNumber: ride.vehicleNumber,
-                          price: ride.price,
-                          seatsLeft: ride.seatsLeft,
-                          departureTime: ride.departureTime,
-                          rating: ride.rating ?? 5,
-                        },
-                      });
-                    }}
-                    activeOpacity={0.9}
-                  >
-                    <View style={styles.rideCardHeader}>
-                      <View style={styles.driverMeta}>
-                        <Text style={styles.driverNameText}>{ride.riderName}</Text>
-                        <View style={styles.ratingBadge}>
-                          <Ionicons name="star" size={12} color="#F59E0B" />
-                          <Text style={styles.ratingText}>{(ride.rating ?? 5).toFixed(1)}</Text>
-                        </View>
-                      </View>
-                      <Text style={styles.priceText}>NPR {ride.price}</Text>
-                    </View>
-
-                    <View style={styles.vehicleInfoRow}>
-                      <Ionicons name="speedometer-outline" size={14} color={Colors.textMuted} />
-                      <Text style={styles.vehicleNameText}>{ride.vehicleName} • {ride.vehicleNumber}</Text>
-                    </View>
-
-                    <View style={styles.cardFooter}>
-                      <Text style={styles.departureText}>{ride.departureTime}</Text>
-                      <View style={styles.seatsBadge}>
-                        <Text style={styles.seatsText}>{ride.seatsLeft} seat{ride.seatsLeft > 1 ? 's' : ''} left</Text>
-                      </View>
-
-                    </View>
-                  </TouchableOpacity>
-                ))
-              )}
-            </View>
-          ) : (
-            <>
-              {/* ── Tabs Toggle ── */}
-              <View style={styles.tabsContainer}>
-                <TouchableOpacity
-                  style={[styles.tabButton, activeTab === 'recent' && styles.activeTabButton]}
-                  onPress={() => setActiveTab('recent')}
-                >
-                  <Text style={[styles.tabButtonText, activeTab === 'recent' && styles.activeTabButtonText]}>
-                    Recent
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.tabButton, activeTab === 'saved' && styles.activeTabButton]}
-                  onPress={() => setActiveTab('saved')}
-                >
-                  <Text style={[styles.tabButtonText, activeTab === 'saved' && styles.activeTabButtonText]}>
-                    Saved
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {/* ── Conditional Tab Content ── */}
-              {activeTab === 'recent' ? (
-                <View style={styles.listSection}>
-                  {recentSearches.length === 0 ? (
-                    <View style={{ padding: 20, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 13, color: Colors.textMuted }}>No recent search history.</Text>
-                    </View>
-                  ) : (
-                    recentSearches.map(item => (
-                      <TouchableOpacity 
-                        key={item.id}
-                        style={styles.listItemRow} 
-                        onPress={() => handleSelectRecent(item.to)}
-                      >
-                        <View style={styles.listIconCircle}>
-                          <Ionicons name="time-outline" size={20} color={Colors.textMuted} />
-                        </View>
-                        <View style={styles.listItemTextContainer}>
-                          <Text style={styles.listItemTitle} numberOfLines={1}>
-                            {item.from} → {item.to}
-                          </Text>
-                        </View>
-                        <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-                      </TouchableOpacity>
-                    ))
-                  )}
-                </View>
-              ) : (
-                <View style={styles.listSection}>
-                  {savedPlaces.length === 0 ? (
-                    <View style={{ padding: 20, alignItems: 'center' }}>
-                      <Text style={{ fontSize: 13, color: Colors.textMuted }}>No saved places yet.</Text>
-                    </View>
-                  ) : (
-                    savedPlaces.map((place) => (
-                      <TouchableOpacity 
-                        key={place.id} 
-                        style={styles.listItemRow}
-                        onPress={() => handleSelectSaved(place.landmark)}
-                        activeOpacity={0.7}
-                      >
-                        <View style={[styles.listIconCircle, styles.savedIconBackground]}>
-                          <Ionicons name="location" size={18} color={Colors.primary} />
-                        </View>
-                        <View style={styles.listItemTextContainer}>
-                          <Text style={styles.savedItemText}>{place.name}</Text>
-                          <Text style={{ fontSize: 11, color: Colors.textMuted }}>{place.landmark}</Text>
-                        </View>
-                        <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
-                      </TouchableOpacity>
-                    ))
-                  )}
-                </View>
-              )}
-            </>
-          )}
-        </ScrollView>
-      </KeyboardAvoidingView>
-
-      {/* ── 📍 FULL SCREEN PIN PICKER FALLBACK MAP MODAL ── */}
-      <Modal
-        visible={pinPickerModalOpen}
-        animationType="slide"
-        transparent={false}
-        onRequestClose={closePinPicker}
-      >
-        <View style={styles.pinPickerContainer}>
-          <View style={styles.pinPickerHeader}>
-            <TouchableOpacity onPress={closePinPicker} style={styles.pinPickerBackBtn}>
-              <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
-            </TouchableOpacity>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.pinPickerTitle}>
-                Set {pinPickerTargetType === 'origin' ? 'Pickup' : 'Destination'} Pin
-              </Text>
-              <Text style={styles.pinPickerSub}>Drag or tap on map to confirm exact location</Text>
-            </View>
-          </View>
-
-          {/* Pin Picker Content Body */}
-          <View style={{ flex: 1, position: 'relative' }}>
-            {/* Quick Location Chips */}
-            <View style={styles.pinQuickChipsRow}>
-              <Text style={styles.quickChipHeading}>Quick Locations in Nepal:</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                {[
-                  { name: 'Kathmandu Center', lat: 27.7172, lng: 85.3240 },
-                  { name: 'Kalanki Chok', lat: 27.6938, lng: 85.2817 },
-                  { name: 'Butwal Highway', lat: 27.7006, lng: 83.4484 },
-                  { name: 'Bhairahawa Station', lat: 27.5065, lng: 83.4485 },
-                  { name: 'Harkatta Chok', lat: 27.6500, lng: 83.5000 },
-                ].map(item => (
-                  <TouchableOpacity
-                    key={item.name}
-                    style={styles.pinQuickChip}
-                    onPress={() => setDraggedPinCoords({ lat: item.lat, lng: item.lng })}
-                  >
-                    <Ionicons name="location" size={14} color={Colors.primary} />
-                    <Text style={styles.pinQuickChipText}>{item.name}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-
-            {/* Interactive Map View */}
-            <LocationPinPickerMap
-              initialLocation={draggedPinCoords}
-              targetType={pinPickerTargetType}
-              onConfirmPin={(coords, placeName) => {
-                setDraggedPinCoords(prev => {
-                  const next = { ...coords };
-                  if (placeName) {
-                    (next as any).placeName = placeName;
-                  } else if (prev && (prev as any).placeName) {
-                    (next as any).placeName = (prev as any).placeName;
-                  }
-                  return next;
-                });
-              }}
-              quickLocations={[
-                { name: 'Kathmandu Center', lat: 27.7172, lng: 85.3240 },
-                { name: 'Kalanki Chok', lat: 27.6938, lng: 85.2817 },
-                { name: 'Butwal Highway', lat: 27.7006, lng: 83.4484 },
-                { name: 'Bhairahawa Station', lat: 27.5065, lng: 83.4485 },
-                { name: 'Harkatta Chok', lat: 27.6500, lng: 83.5000 },
-              ]}
-            />
-          </View>
-
-          <View style={styles.pinPickerFooter}>
-            <TouchableOpacity
-              style={styles.confirmPinBtn}
-              onPress={() => {
-                if (draggedPinCoords) {
-                  const placeName = (draggedPinCoords as any).placeName || `Pin (${draggedPinCoords.lat.toFixed(4)}, ${draggedPinCoords.lng.toFixed(4)})`;
-                  confirmPinLocation(draggedPinCoords, placeName);
-                }
-              }}
-            >
-              <Text style={styles.confirmPinBtnText}>Confirm Location Pin</Text>
-              <Ionicons name="checkmark-circle" size={20} color="#FFF" />
-            </TouchableOpacity>
-          </View>
         </View>
-      </Modal>
+
+        {/* ── 📱 SMOOTH DRAGGABLE BOTTOM SHEET WINDOW ── */}
+        <KeyboardAvoidingView
+          style={styles.keyboardView}
+          behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        >
+          <Animated.View style={[styles.bottomSheetCard, { height: sheetHeightAnim }]}>
+            {/* Draggable Handle Bar Touch Area */}
+            <View style={styles.handleBarContainer} {...panResponder.panHandlers}>
+              <View style={styles.handlePill} />
+              <View style={styles.handleLabelRow}>
+                <Ionicons
+                  name={mapSize === 'full' ? 'chevron-down-circle-outline' : mapSize === 'medium' ? 'swap-vertical-outline' : 'chevron-up-circle-outline'}
+                  size={14}
+                  color={Colors.primary}
+                />
+                <Text style={styles.handleLabel}>
+                  Drag up or down to resize (<Text style={{ fontWeight: '800', color: Colors.primary }}>{mapSize.toUpperCase()} MAP</Text>)
+                </Text>
+              </View>
+            </View>
+
+            {/* ── Input Fields Card ── */}
+            <View style={styles.inputCard}>
+              {/* Pickup Location Input */}
+              <LocationSearchInput
+                label="Pickup Location"
+                placeholder="Start location..."
+                value={origin.text}
+                onChangeText={handleOriginChange}
+                suggestions={originSuggestions}
+                onSelectSuggestion={(s) => {
+                  selectOriginSuggestion(s);
+                  setActiveField('origin');
+                }}
+                isSearching={isSearchingOrigin}
+                onFocus={() => {
+                  setActiveField('origin');
+                  if (mapSize === 'full') snapToHeight(MED_SHEET_HEIGHT);
+                }}
+                iconName="disc-outline"
+                iconColor="#16A34A"
+              />
+
+              <View style={styles.inputDivider} />
+
+              {/* Destination Location Input */}
+              <LocationSearchInput
+                label="Destination"
+                placeholder="Where to? Enter location"
+                value={destination.text}
+                onChangeText={handleDestChange}
+                suggestions={destSuggestions}
+                onSelectSuggestion={(s) => {
+                  selectDestSuggestion(s);
+                  setActiveField('destination');
+                }}
+                isSearching={isSearchingDest}
+                onFocus={() => {
+                  setActiveField('destination');
+                  if (mapSize === 'full') snapToHeight(MED_SHEET_HEIGHT);
+                }}
+                iconName="location-sharp"
+                iconColor="#DC2626"
+              />
+            </View>
+
+            {/* ── Search Rides Button ── */}
+            {(Boolean(origin.text.trim()) || Boolean(destination.text.trim())) && (
+              <TouchableOpacity
+                style={[styles.searchBtn, isSearching && { opacity: 0.7 }]}
+                onPress={handleSearchRides}
+                disabled={isSearching}
+                activeOpacity={0.85}
+              >
+                {isSearching ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Ionicons name="search" size={18} color="#fff" />
+                )}
+                <Text style={styles.searchBtnText}>
+                  {isSearching ? 'Searching...' : 'Search Rides'}
+                </Text>
+              </TouchableOpacity>
+            )}
+
+            {/* ── Results / Tabs Section (visible in Medium & Small map modes) ── */}
+            {mapSize !== 'full' && (
+              <ScrollView
+                style={styles.scroll}
+                contentContainerStyle={styles.scrollContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {destination.text ? (
+                  <View style={styles.resultsContainer}>
+                    <Text style={styles.resultsHeading}>Matched Rides to "{destination.text}"</Text>
+                    {isSearching ? (
+                      <View style={styles.noResultsCard}>
+                        <ActivityIndicator size="large" color={Colors.primary} />
+                        <Text style={{ marginTop: 12, color: Colors.textMuted, fontSize: 14 }}>Searching for rides...</Text>
+                      </View>
+                    ) : searchError ? (
+                      <View style={styles.noResultsCard}>
+                        <Ionicons name="alert-circle-outline" size={48} color={Colors.error} />
+                        <Text style={styles.noResultsText}>Search error</Text>
+                        <Text style={styles.noResultsSubtext}>{searchError}</Text>
+                      </View>
+                    ) : !hasSearched ? (
+                      <View style={styles.noResultsCard}>
+                        <Ionicons name="search-outline" size={48} color={Colors.textMuted} />
+                        <Text style={styles.noResultsText}>Tap "Search Rides" above</Text>
+                        <Text style={styles.noResultsSubtext}>Enter both locations, then tap Search Rides to find available drivers.</Text>
+                      </View>
+                    ) : candidateRides.length === 0 ? (
+                      <View style={styles.noResultsCard}>
+                        <Ionicons name="car-outline" size={48} color={Colors.textMuted} />
+                        <Text style={styles.noResultsText}>No rides found on this route</Text>
+                        <Text style={styles.noResultsSubtext}>No drivers are currently heading along this route.</Text>
+                      </View>
+                    ) : (
+                      candidateRides.map(ride => (
+                        <TouchableOpacity
+                          key={ride.id}
+                          style={styles.rideCard}
+                          onPress={() => {
+                            addRecentSearch(origin.text || 'Origin', destination.text);
+                            router.push({
+                              pathname: '/ride-detail',
+                              params: {
+                                id: ride.id,
+                                selectedPickup: origin.text,
+                                selectedDest: destination.text,
+                                pickupLat: origin.coords?.lat ?? 0,
+                                pickupLng: origin.coords?.lng ?? 0,
+                                dropLat: destination.coords?.lat ?? 0,
+                                dropLng: destination.coords?.lng ?? 0,
+                                riderName: ride.riderName,
+                                vehicleName: ride.vehicleName,
+                                vehicleNumber: ride.vehicleNumber,
+                                price: ride.price,
+                                seatsLeft: ride.seatsLeft,
+                                departureTime: ride.departureTime,
+                                rating: ride.rating ?? 5,
+                              },
+                            });
+                          }}
+                          activeOpacity={0.9}
+                        >
+                          <View style={styles.rideCardHeader}>
+                            <View style={styles.driverMeta}>
+                              <Text style={styles.driverNameText}>{ride.riderName}</Text>
+                              <View style={styles.ratingBadge}>
+                                <Ionicons name="star" size={12} color="#F59E0B" />
+                                <Text style={styles.ratingText}>{(ride.rating ?? 5).toFixed(1)}</Text>
+                              </View>
+                            </View>
+                            <Text style={styles.priceText}>NPR {ride.price}</Text>
+                          </View>
+
+                          <View style={styles.vehicleInfoRow}>
+                            <Ionicons name="speedometer-outline" size={14} color={Colors.textMuted} />
+                            <Text style={styles.vehicleNameText}>{ride.vehicleName} • {ride.vehicleNumber}</Text>
+                          </View>
+
+                          <View style={styles.cardFooter}>
+                            <Text style={styles.departureText}>{ride.departureTime}</Text>
+                            <View style={styles.seatsBadge}>
+                              <Text style={styles.seatsText}>{ride.seatsLeft} seat{ride.seatsLeft > 1 ? 's' : ''} left</Text>
+                            </View>
+                          </View>
+                        </TouchableOpacity>
+                      ))
+                    )}
+                  </View>
+                ) : (
+                  <>
+                    {/* Tabs Toggle */}
+                    <View style={styles.tabsContainer}>
+                      <TouchableOpacity
+                        style={[styles.tabButton, activeTab === 'recent' && styles.activeTabButton]}
+                        onPress={() => setActiveTab('recent')}
+                      >
+                        <Text style={[styles.tabButtonText, activeTab === 'recent' && styles.activeTabButtonText]}>
+                          Recent
+                        </Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={[styles.tabButton, activeTab === 'saved' && styles.activeTabButton]}
+                        onPress={() => setActiveTab('saved')}
+                      >
+                        <Text style={[styles.tabButtonText, activeTab === 'saved' && styles.activeTabButtonText]}>
+                          Saved
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {/* Conditional Tab Content */}
+                    {activeTab === 'recent' ? (
+                      <View style={styles.listSection}>
+                        {recentSearches.length === 0 ? (
+                          <View style={{ padding: 20, alignItems: 'center' }}>
+                            <Text style={{ fontSize: 13, color: Colors.textMuted }}>No recent search history.</Text>
+                          </View>
+                        ) : (
+                          recentSearches.map(item => (
+                            <TouchableOpacity
+                              key={item.id}
+                              style={styles.listItemRow}
+                              onPress={() => handleSelectRecent(item.to)}
+                            >
+                              <View style={styles.listIconCircle}>
+                                <Ionicons name="time-outline" size={20} color={Colors.textMuted} />
+                              </View>
+                              <View style={styles.listItemTextContainer}>
+                                <Text style={styles.listItemTitle} numberOfLines={1}>
+                                  {item.from} → {item.to}
+                                </Text>
+                              </View>
+                              <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                            </TouchableOpacity>
+                          ))
+                        )}
+                      </View>
+                    ) : (
+                      <View style={styles.listSection}>
+                        {savedPlaces.length === 0 ? (
+                          <View style={{ padding: 20, alignItems: 'center' }}>
+                            <Text style={{ fontSize: 13, color: Colors.textMuted }}>No saved places yet.</Text>
+                          </View>
+                        ) : (
+                          savedPlaces.map((place) => (
+                            <TouchableOpacity
+                              key={place.id}
+                              style={styles.listItemRow}
+                              onPress={() => handleSelectSaved(place.landmark)}
+                              activeOpacity={0.7}
+                            >
+                              <View style={[styles.listIconCircle, styles.savedIconBackground]}>
+                                <Ionicons name="location" size={18} color={Colors.primary} />
+                              </View>
+                              <View style={styles.listItemTextContainer}>
+                                <Text style={styles.savedItemText}>{place.name}</Text>
+                                <Text style={{ fontSize: 11, color: Colors.textMuted }}>{place.landmark}</Text>
+                              </View>
+                              <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
+                            </TouchableOpacity>
+                          ))
+                        )}
+                      </View>
+                    )}
+                  </>
+                )}
+              </ScrollView>
+            )}
+          </Animated.View>
+        </KeyboardAvoidingView>
+      </View>
     </SafeAreaView>
   );
 }
@@ -504,86 +630,140 @@ const styles = StyleSheet.create({
     flex: 1,
     backgroundColor: '#F8FAFC',
   },
-  header: {
+  mainContainer: {
+    flex: 1,
+    position: 'relative',
+  },
+  // Full Screen Background Map
+  fullScreenMapContainer: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 1,
+  },
+  // Compact Transparent Floating Header Bar
+  transparentHeader: {
+    position: 'absolute',
+    top: 10,
+    left: 14,
+    right: 14,
+    zIndex: 20,
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 16,
-    paddingVertical: 12,
-    gap: 12,
+    justifyContent: 'space-between',
   },
-  backButton: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    backgroundColor: '#FFFFFF',
+  floatingHeaderPill: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    elevation: 2,
+    gap: 8,
+    backgroundColor: 'rgba(255, 255, 255, 0.95)',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 22,
+    elevation: 4,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.1,
-    shadowRadius: 2,
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  headerTitle: {
-    fontSize: 18,
+  headerTitleText: {
+    fontSize: 15,
     fontWeight: 'bold',
     color: Colors.textPrimary,
   },
-  keyboardView: {
-    flex: 1,
-  },
-  inputCard: {
-    backgroundColor: '#FFFFFF',
-    borderRadius: 20,
-    padding: 8,
-    marginHorizontal: 16,
-    marginBottom: 12,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    elevation: 2,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 1 },
-    shadowOpacity: 0.05,
-    shadowRadius: 4,
-  },
-  inputRow: {
+  floatingAiPill: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 8,
-    height: 44,
+    gap: 6,
+    backgroundColor: '#F3E8FF',
+    paddingHorizontal: 14,
+    paddingVertical: 9,
+    borderRadius: 22,
+    elevation: 4,
+    shadowColor: '#7C3AED',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.15,
+    shadowRadius: 4,
+    borderWidth: 1,
+    borderColor: '#C084FC',
+  },
+  floatingAiText: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: '#6B21A8',
+  },
+  keyboardView: {
+    ...StyleSheet.absoluteFill,
+    zIndex: 10,
+    justifyContent: 'flex-end',
+    pointerEvents: 'box-none',
+  },
+  // Bottom Sheet Card
+  bottomSheetCard: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    paddingHorizontal: 16,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderColor: '#E2E8F0',
+    elevation: 12,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -6 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    width: '100%',
+  },
+  handleBarContainer: {
+    alignItems: 'center',
+    paddingVertical: 8,
+    gap: 4,
+    backgroundColor: 'transparent',
+  },
+  handlePill: {
+    width: 48,
+    height: 5,
+    borderRadius: 3,
+    backgroundColor: '#CBD5E1',
+  },
+  handleLabelRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginTop: 2,
+  },
+  handleLabel: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.textMuted,
+  },
+  inputCard: {
+    backgroundColor: '#F8FAFC',
+    borderRadius: 16,
+    padding: 8,
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   inputDivider: {
     height: 1,
     backgroundColor: '#E2E8F0',
     marginHorizontal: 8,
   },
-  inputIcon: {
-    marginRight: 10,
-  },
-  input: {
-    flex: 1,
-    fontSize: 14,
-    color: Colors.textPrimary,
-    fontWeight: '600',
-  },
-  clearBtn: {
-    padding: 4,
-  },
   scroll: {
     flex: 1,
   },
   scrollContent: {
-    paddingBottom: 40,
+    paddingBottom: 30,
   },
   tabsContainer: {
     flexDirection: 'row',
-    paddingHorizontal: 16,
     paddingTop: 8,
     gap: 12,
   },
   tabButton: {
-    paddingVertical: 8,
-    paddingHorizontal: 18,
+    paddingVertical: 6,
+    paddingHorizontal: 16,
     borderRadius: 20,
     backgroundColor: '#FFFFFF',
     borderWidth: 1,
@@ -594,7 +774,7 @@ const styles = StyleSheet.create({
     borderColor: Colors.accent + '25',
   },
   tabButtonText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: '700',
     color: Colors.textMuted,
   },
@@ -603,8 +783,7 @@ const styles = StyleSheet.create({
   },
   listSection: {
     backgroundColor: '#FFFFFF',
-    marginHorizontal: 16,
-    marginTop: 16,
+    marginTop: 12,
     borderRadius: 16,
     borderWidth: 1,
     borderColor: '#E2E8F0',
@@ -613,18 +792,18 @@ const styles = StyleSheet.create({
   listItemRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 14,
+    paddingVertical: 12,
     borderBottomWidth: 1,
     borderBottomColor: '#F1F5F9',
   },
   listIconCircle: {
-    width: 36,
-    height: 36,
-    borderRadius: 18,
+    width: 32,
+    height: 32,
+    borderRadius: 16,
     backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
-    marginRight: 12,
+    marginRight: 10,
   },
   savedIconBackground: {
     backgroundColor: Colors.surface,
@@ -642,18 +821,14 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontWeight: '600',
   },
-  moreButton: {
-    padding: 6,
-  },
   resultsContainer: {
-    paddingHorizontal: 16,
-    paddingTop: 16,
+    paddingTop: 12,
   },
   resultsHeading: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 'bold',
     color: Colors.textPrimary,
-    marginBottom: 12,
+    marginBottom: 10,
   },
   searchBtn: {
     flexDirection: 'row',
@@ -662,8 +837,7 @@ const styles = StyleSheet.create({
     gap: 8,
     backgroundColor: Colors.primary,
     borderRadius: 12,
-    paddingVertical: 14,
-    marginHorizontal: 16,
+    paddingVertical: 12,
     marginBottom: 8,
   },
   searchBtnText: {
@@ -676,42 +850,37 @@ const styles = StyleSheet.create({
     borderRadius: 16,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    padding: 30,
+    padding: 24,
     alignItems: 'center',
     justifyContent: 'center',
   },
   noResultsText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: 'bold',
     color: Colors.textPrimary,
-    marginTop: 12,
+    marginTop: 10,
     textAlign: 'center',
   },
   noResultsSubtext: {
-    fontSize: 13,
+    fontSize: 12,
     color: Colors.textMuted,
-    marginTop: 6,
+    marginTop: 4,
     textAlign: 'center',
-    lineHeight: 18,
+    lineHeight: 16,
   },
   rideCard: {
     backgroundColor: '#FFFFFF',
-    borderRadius: 16,
+    borderRadius: 14,
     borderWidth: 1.5,
     borderColor: '#E2E8F0',
-    padding: 16,
-    marginBottom: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.04,
-    shadowRadius: 6,
-    elevation: 2,
+    padding: 14,
+    marginBottom: 10,
   },
   rideCardHeader: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
-    marginBottom: 8,
+    marginBottom: 6,
   },
   driverMeta: {
     flexDirection: 'row',
@@ -719,7 +888,7 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   driverNameText: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 'bold',
     color: Colors.textPrimary,
   },
@@ -738,7 +907,7 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
   },
   priceText: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: '800',
     color: Colors.primary,
   },
@@ -746,27 +915,12 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
-    marginBottom: 8,
+    marginBottom: 6,
   },
   vehicleNameText: {
     fontSize: 12,
     color: Colors.textMuted,
     fontWeight: '500',
-  },
-  routeTrace: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: Colors.surface,
-    padding: 8,
-    borderRadius: 8,
-    gap: 6,
-    marginBottom: 12,
-  },
-  routeTraceText: {
-    fontSize: 12,
-    color: Colors.textPrimary,
-    fontWeight: '600',
-    flex: 1,
   },
   cardFooter: {
     flexDirection: 'row',
@@ -789,221 +943,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: '#475569',
   },
-  autocompleteDropdown: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    marginTop: 4,
-    marginBottom: 8,
-    elevation: 4,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    zIndex: 99,
-  },
-  autocompleteItem: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    padding: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
-    gap: 10,
-  },
-  autocompleteMainText: {
-    fontSize: 13,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-  },
-  autocompleteSubText: {
-    fontSize: 11,
-    color: Colors.textMuted,
-    marginTop: 1,
-  },
-  inputHeaderRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingHorizontal: 8,
-    paddingTop: 6,
-    paddingBottom: 2,
-  },
-  inputLabelSmall: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.textMuted,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  gpsBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 8,
-    paddingVertical: 3,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-  },
-  gpsBtnText: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  searchingText: {
-    fontSize: 11,
-    color: Colors.primary,
-    fontWeight: '700',
-    fontStyle: 'italic',
-    marginRight: 6,
-  },
-  cantFindBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#EFF6FF',
-    paddingVertical: 8,
-    paddingHorizontal: 12,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: '#BFDBFE',
-    marginHorizontal: 8,
-    marginTop: 4,
-    marginBottom: 8,
-  },
-  cantFindText: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.primary,
-  },
-  pinPickerContainer: {
-    flex: 1,
-    backgroundColor: '#F8FAFC',
-  },
-  pinPickerHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-    paddingHorizontal: 16,
-    paddingTop: Platform.OS === 'ios' ? 50 : 20,
-    paddingBottom: 16,
-    backgroundColor: '#FFFFFF',
-    borderBottomWidth: 1,
-    borderBottomColor: '#E2E8F0',
-  },
-  pinPickerBackBtn: {
-    padding: 6,
-    borderRadius: 20,
-    backgroundColor: '#F1F5F9',
-  },
-  pinPickerTitle: {
-    fontSize: 16,
-    fontWeight: 'bold',
-    color: Colors.textPrimary,
-  },
-  pinPickerSub: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    marginTop: 2,
-  },
-  pinPickerMapArea: {
-    flex: 1,
-    position: 'relative',
-    alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: '#E2E8F0',
-  },
-  mapMockBackground: {
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  mapMockTitle: {
-    fontSize: 16,
-    fontWeight: '800',
-    color: '#475569',
-    marginTop: 8,
-  },
-  mapMockCoords: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.primary,
-    marginTop: 4,
-    backgroundColor: '#FFFFFF',
-    paddingHorizontal: 10,
-    paddingVertical: 4,
-    borderRadius: 12,
-  },
-  pinQuickChipsRow: {
-    position: 'absolute',
-    top: 16,
-    left: 16,
-    right: 16,
-    backgroundColor: '#FFFFFF',
-    borderRadius: 14,
-    padding: 12,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.1,
-    shadowRadius: 4,
-    elevation: 3,
-  },
-  quickChipHeading: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: Colors.textMuted,
-    marginBottom: 8,
-  },
-  pinQuickChip: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 4,
-    backgroundColor: '#F1F5F9',
-    paddingHorizontal: 10,
-    paddingVertical: 6,
-    borderRadius: 16,
-    borderWidth: 1,
-    borderColor: '#CBD5E1',
-  },
-  pinQuickChipText: {
-    fontSize: 12,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  floatingCenterPin: {
-    position: 'absolute',
-    top: '44%',
-    alignSelf: 'center',
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 5,
-  },
-  pinPickerFooter: {
-    padding: 16,
-    backgroundColor: '#FFFFFF',
-    borderTopWidth: 1,
-    borderTopColor: '#E2E8F0',
-  },
-  confirmPinBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    gap: 8,
-    backgroundColor: Colors.primary,
-    paddingVertical: 14,
-    borderRadius: 14,
-    shadowColor: Colors.primary,
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.2,
-    shadowRadius: 8,
-    elevation: 4,
-  },
-  confirmPinBtnText: {
-    color: '#FFFFFF',
-    fontSize: 15,
-    fontWeight: 'bold',
-  },
 });
-

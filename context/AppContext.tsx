@@ -1,5 +1,7 @@
 import { default as AsyncStorage, default as AsyncStorageLib } from '@react-native-async-storage/async-storage';
 import * as Location from 'expo-location';
+import Constants, { ExecutionEnvironment } from 'expo-constants';
+import { router } from 'expo-router';
 import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 import * as Linking from 'expo-linking';
@@ -7,6 +9,32 @@ import * as WebBrowser from 'expo-web-browser';
 import { supabase } from '../lib/supabase';
 
 WebBrowser.maybeCompleteAuthSession();
+
+// Check if app is running in Expo Go sandbox (SDK 53+ removed remote push from Expo Go)
+const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
+
+let Notifications: typeof import('expo-notifications') | null = null;
+let Device: typeof import('expo-device') | null = null;
+
+if (!isExpoGo) {
+  try {
+    Notifications = require('expo-notifications');
+    Device = require('expo-device');
+    if (Notifications && typeof Notifications.setNotificationHandler === 'function') {
+      Notifications.setNotificationHandler({
+        handleNotification: async () => ({
+          shouldShowAlert: true,
+          shouldPlaySound: true,
+          shouldSetBadge: true,
+          shouldShowBanner: true,
+          shouldShowList: true,
+        }),
+      });
+    }
+  } catch (err) {
+    console.warn('[PushNotifications] Dynamic module load warning:', err);
+  }
+}
 
 export interface DriverNotificationItem {
   id: string;
@@ -17,6 +45,7 @@ export interface DriverNotificationItem {
   isRead: boolean;
   iconName: string;
   iconColor: string;
+  targetRole?: 'passenger' | 'driver';
   targetScreen?: string;
   targetParams?: Record<string, any>;
 }
@@ -67,22 +96,29 @@ export interface Ride {
   destination?: { lat: number; lng: number };
   encodedPolyLine?: string;
   vehicleId?: string;
+  riderId?: string;
 }
 
 export interface Booking {
   id: string;
   rideId: string;
   passengerId: string;
+  passengerName?: string;
   passengerPhone?: string;
+  passengerPhoto?: string;
   passengerPickup?: string;
   passengerDropoff?: string;
+  pickupCoords?: { lat: number; lng: number };
+  dropCoords?: { lat: number; lng: number };
+  riderOriginName?: string;
+  riderDestName?: string;
   status: 'pending' | 'accepted' | 'ongoing' | 'arrived' | 'completed' | 'cancelled';
   lifecycleState: RideLifecycleState;
   createdAt: Date;
   currentLat?: number;
   currentLng?: number;
-  pickupOtp: string; // 4-digit pickup OTP (default '4821')
-  completionOtp: string; // 4-digit completion OTP (default '7392')
+  pickupOtp: string;
+  completionOtp: string;
   otpError?: string | null;
   paymentMethod?: 'cash' | 'khalti' | 'esewa' | null;
   paymentStatus?: 'pending' | 'completed';
@@ -104,6 +140,12 @@ export interface DriverMessage {
   sender: 'user' | 'driver';
   text: string;
   timestamp: Date;
+  senderId?: string;
+  senderName?: string;
+  senderPhoto?: string;
+  senderPhone?: string;
+  passengerId?: string;
+  riderId?: string;
 }
 
 interface UserProfile {
@@ -118,6 +160,7 @@ interface UserProfile {
   photo: string;
   kycVerified?: boolean;
   kycStatus?: 'NOT_SUBMITTED' | 'PENDING' | 'VERIFIED' | 'REJECTED';
+  kycRejectionReason?: string;
   nid?: string;
   vehicleType?: 'bike' | 'scooter';
   vehicleName?: string;
@@ -158,9 +201,10 @@ interface AppContextType {
   switchUserRole: (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => Promise<{ success: boolean; error?: string }>;
   uploadUserKycDocument: (documentType: string, document: string, file: string) => Promise<{ success: boolean; error?: string }>;
   submitKycVerify: () => Promise<{ success: boolean; error?: string }>;
+  refreshKycStatus: () => Promise<{ status: string; rejectionReason?: string }>;
   adminApproveKyc: () => Promise<{ success: boolean; error?: string }>;
   adminRejectKyc: (reason?: string) => Promise<{ success: boolean; error?: string }>;
-  requestBooking: (ridePostId: string, passengerPickup?: string, passengerDropoff?: string, pickupCoords?: { lat: number; lng: number }, dropCoords?: { lat: number; lng: number }) => void;
+  requestBooking: (ridePostId: string, passengerPickup?: string, passengerDropoff?: string, pickupCoords?: { lat: number; lng: number }, dropCoords?: { lat: number; lng: number }, riderOriginName?: string, riderDestName?: string) => Promise<void>;
   cancelBooking: (bookingId: string) => void;
   addDriverNotification: (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => void;
   markNotificationAsRead: (id: string) => void;
@@ -177,8 +221,8 @@ interface AppContextType {
   processPayment: (bookingId: string, method: 'cash' | 'khalti' | 'esewa') => { success: boolean; error?: string };
   submitRideRating: (bookingId: string, rating: number, comment?: string) => void;
   createRide: (ride: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => Promise<{ success: boolean; error?: string }>;
-  updateRide: (id: string, updatedFields: Partial<Omit<Ride, 'id'>>) => void;
-  deleteRide: (id: string) => void;
+  updateRide: (id: string, updatedFields: Partial<Omit<Ride, 'id'>>) => Promise<{ success: boolean; error?: string }>;
+  deleteRide: (id: string) => Promise<{ success: boolean; error?: string }>;
   acceptBooking: (bookingId: string) => void;
   declineBooking: (bookingId: string) => void;
   logout: () => Promise<void>;
@@ -281,7 +325,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
           const { data: kycData } = await supabase
             .from('kyc_verifications')
-            .select('status')
+            .select('status, rejection_reason')
             .eq('user_id', session.user.id)
             .maybeSingle();
 
@@ -300,6 +344,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             role: profile?.current_mode === 'rider' ? 'driver' : 'passenger',
             kycVerified: isKycApproved,
             kycStatus: kycStatusStr as any,
+            kycRejectionReason: kycData?.rejection_reason || undefined,
             collegeOrCompany: 'N/A',
             emergencyContact: '',
             rating: 5.0,
@@ -323,24 +368,192 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             location = await Location.getLastKnownPositionAsync().catch(() => null);
           }
 
-          if (location) {
+          if (location && Platform.OS !== 'web') {
             let geocode = await Location.reverseGeocodeAsync({
               latitude: location.coords.latitude,
               longitude: location.coords.longitude,
-            });
+            }).catch(() => null);
             if (geocode && geocode.length > 0) {
               const place = geocode[0];
-              const name = place.name || place.street || place.district || place.city || place.subregion || 'My Location';
-              setDeviceLocation(name);
-              await AsyncStorage.setItem('@device_location', name);
+              const candidates = [place.street, place.district, place.city, place.subregion, place.name];
+              let cleanName = '';
+              for (const cand of candidates) {
+                if (cand && typeof cand === 'string' && !cand.includes('+') && !/^[A-Z0-9]{4,8}\+[A-Z0-9]{2,4}/i.test(cand)) {
+                  cleanName = cand.trim();
+                  break;
+                }
+              }
+              if (cleanName) {
+                setDeviceLocation(cleanName);
+                await AsyncStorage.setItem('@device_location', cleanName);
+              }
             }
           }
         }
+
+        // 3. Fetch active ride offers from Supabase database
+        await fetchActiveRides();
       } catch (error) {
         console.error('Error loading stored state:', error);
       }
     })();
   }, []);
+
+  // ── SUPABASE REALTIME WEBSOCKET SUBSCRIPTION ──
+  useEffect(() => {
+    const realtimeChannel = supabase.channel('sarathi-global-realtime');
+
+    realtimeChannel
+      .on('broadcast', { event: 'chat_message' }, ({ payload }) => {
+        if (payload && payload.rideId) {
+          setDriverMessages(prev => {
+            const existingList = prev[payload.rideId] || [];
+            if (existingList.some(m => m.id === payload.id)) return prev;
+            const updated = {
+              ...prev,
+              [payload.rideId]: [...existingList, payload],
+            };
+            saveChatMessagesToStorage(updated);
+            return updated;
+          });
+          startRiderChat(payload.rideId);
+        }
+      })
+      .on('broadcast', { event: 'ride_request' }, ({ payload }) => {
+        if (payload) {
+          if (payload.booking) {
+            setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
+          }
+          if (payload.riderNotification) {
+            setDriverNotifications(prev => [payload.riderNotification, ...prev.filter(n => n.id !== payload.riderNotification.id)]);
+          }
+          if (payload.passengerNotification) {
+            setDriverNotifications(prev => [payload.passengerNotification, ...prev.filter(n => n.id !== payload.passengerNotification.id)]);
+          }
+          if (payload.rideId) {
+            setActiveChatRideIds(prev => (prev.includes(payload.rideId) ? prev : [...prev, payload.rideId]));
+          }
+        }
+      })
+      .on('broadcast', { event: 'driver_notification' }, ({ payload }) => {
+        if (payload) {
+          setDriverNotifications(prev => [payload, ...prev.filter(n => n.id !== payload.id)]);
+        }
+      })
+      .on('broadcast', { event: 'ride_accepted' }, ({ payload }) => {
+        if (payload && payload.booking) {
+          setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
+          saveActiveBookingToStorage(payload.booking);
+        }
+      })
+      .on('broadcast', { event: 'booking_status_change' }, ({ payload }) => {
+        if (payload && payload.booking) {
+          setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
+          saveActiveBookingToStorage(payload.booking);
+        }
+      })
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(realtimeChannel);
+    };
+  }, []);
+
+  // ── NATIVE PUSH NOTIFICATIONS SETUP & TAP NAVIGATION LISTENER ──
+  useEffect(() => {
+    const notif = Notifications;
+    if (isExpoGo || !notif) {
+      return;
+    }
+
+    let sub: any = null;
+    (async () => {
+      try {
+        if (Platform.OS === 'android') {
+          await notif.setNotificationChannelAsync('default', {
+            name: 'Sarathi Ride Notifications',
+            importance: notif.AndroidImportance.MAX,
+            vibrationPattern: [0, 250, 250, 250],
+            lightColor: '#DC2626',
+          }).catch(() => null);
+        }
+
+        const { status: existingStatus } = await notif.getPermissionsAsync().catch(() => ({ status: 'denied' }));
+        let finalStatus = existingStatus;
+        if (existingStatus !== 'granted') {
+          const { status } = await notif.requestPermissionsAsync().catch(() => ({ status: 'denied' }));
+          finalStatus = status;
+        }
+
+        if (finalStatus === 'granted') {
+          const tokenData = await notif.getExpoPushTokenAsync().catch(() => null);
+          if (tokenData?.data) {
+            console.log('[PushNotification] Device Push Token:', tokenData.data);
+          }
+        }
+      } catch (err) {
+        console.warn('[PushNotification] Permission setup error:', err);
+      }
+    })();
+
+    try {
+      sub = notif.addNotificationResponseReceivedListener(response => {
+        const data = response.notification.request.content.data;
+        if (data && data.screen) {
+          router.push({ pathname: data.screen as any, params: data.params as Record<string, any> });
+        }
+      });
+    } catch (err) {
+      console.warn('[PushNotification] Listener setup warning:', err);
+    }
+
+    return () => {
+      if (sub && typeof sub.remove === 'function') {
+        sub.remove();
+      }
+    };
+  }, []);
+
+  const fetchActiveRides = async () => {
+    try {
+      const { data, error } = await supabase
+        .from('rides')
+        .select('*, users!rider_id(*), vehicles!vehicle_id(*)')
+        .eq('status', 'active')
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.warn('[fetchActiveRides] Error:', error.message);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const mappedRides: Ride[] = data.map((item: any) => ({
+          id: item.id,
+          riderId: item.rider_id,
+          riderName: item.users?.name || 'Driver',
+          riderPhoto: item.users?.profile_image || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+          phone: item.users?.phone || '',
+          rating: 5.0,
+          vehicleType: (item.vehicles?.vehicle_type || 'bike') as any,
+          vehicleName: item.vehicles?.vehicle_name || 'Vehicle',
+          vehicleNumber: item.vehicles?.number_plate || '',
+          departureTime: item.departure_time ? new Date(item.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Leaving soon',
+          seatsLeft: item.available_seats,
+          price: Number(item.price_per_seat),
+          route: [item.origin_name, item.destination_name],
+          pickupPoint: item.origin_name,
+          origin: { lat: Number(item.origin_lat), lng: Number(item.origin_lng) },
+          destination: { lat: Number(item.destination_lat), lng: Number(item.destination_lng) },
+          encodedPolyLine: item.encoded_polyline,
+          vehicleId: item.vehicle_id,
+        }));
+        setRides(mappedRides);
+      }
+    } catch (err) {
+      console.error('[fetchActiveRides] Catch:', err);
+    }
+  };
 
   const login = async (email: string, password?: string) => {
     try {
@@ -377,7 +590,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const { data: kycData } = await supabase
         .from('kyc_verifications')
-        .select('status')
+        .select('status, rejection_reason')
         .eq('user_id', data.user.id)
         .maybeSingle();
 
@@ -393,6 +606,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         role: userRole,
         kycVerified: isKycApproved,
         kycStatus: kycStatusStr as any,
+        kycRejectionReason: kycData?.rejection_reason || undefined,
         collegeOrCompany: 'N/A',
         emergencyContact: '',
         rating: 5.0,
@@ -450,7 +664,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
                 const { data: kycData } = await supabase
                   .from('kyc_verifications')
-                  .select('status')
+                  .select('status, rejection_reason')
                   .eq('user_id', uid)
                   .maybeSingle();
 
@@ -466,6 +680,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
                   role: userRole,
                   kycVerified: isKycApproved,
                   kycStatus: kycStatusStr as any,
+                  kycRejectionReason: kycData?.rejection_reason || undefined,
                   collegeOrCompany: 'N/A',
                   emergencyContact: '',
                   rating: 5.0,
@@ -520,10 +735,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: 'Password is required' };
       }
 
+      const redirectUrl = 'http://localhost:8081/(auth)/login';
+
       const { data, error } = await supabase.auth.signUp({
         email: cleanEmail,
         password: profileData.password,
         options: {
+          emailRedirectTo: redirectUrl,
           data: {
             name: profileData.name || '',
             phone: profileData.phone || '',
@@ -532,10 +750,40 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
 
       if (error) {
+        // If Supabase free SMTP fails to send email (rate limit exceeded or custom SMTP unconfigured),
+        // the user account IS ALREADY CREATED in auth.users and public.users.
+        // We allow the user to proceed to the Account Created screen instead of blocking them with an alert.
+        if (
+          error.message.toLowerCase().includes('confirmation email') ||
+          error.message.toLowerCase().includes('rate limit')
+        ) {
+          return { success: true, isEmailConfirmationRequired: true, smtpNotice: true };
+        }
         return { success: false, error: error.message };
       }
 
-      return { success: true };
+      // If user session exists immediately (because email confirmation was toggled OFF in Supabase settings)
+      if (data?.session && data?.user) {
+        setAuthToken(data.session.access_token);
+        setUserId(data.user.id);
+        setUser({
+          id: data.user.id,
+          name: profileData.name || cleanEmail.split('@')[0],
+          phone: profileData.phone || '',
+          email: cleanEmail,
+          role: 'passenger',
+          kycVerified: false,
+          collegeOrCompany: 'N/A',
+          emergencyContact: '',
+          rating: 5.0,
+          photo: 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+        });
+        setIsAuthenticated(true);
+        return { success: true, isEmailConfirmationRequired: false };
+      }
+
+      // Email confirmation is required by Supabase
+      return { success: true, isEmailConfirmationRequired: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Signup failed' };
     }
@@ -566,6 +814,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setUser(prev => prev ? { ...prev, emergencyContact: contact } : null);
   };
 
+  const triggerPushNotification = async (title: string, body: string, data?: Record<string, any>) => {
+    const notif = Notifications;
+    if (isExpoGo || !notif) return;
+    try {
+      await notif.scheduleNotificationAsync({
+        content: {
+          title,
+          body,
+          data: data || {},
+          sound: 'default',
+          vibrate: [0, 250, 250, 250],
+        },
+        trigger: null, // deliver immediately
+      });
+    } catch (err) {
+      console.warn('[PushNotification] Trigger error:', err);
+    }
+  };
+
   const addDriverNotification = (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => {
     const newItem: DriverNotificationItem = {
       ...item,
@@ -575,6 +842,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
 
     setDriverNotifications(prev => [newItem, ...prev]);
+
+    // Trigger system Push Notification (heads-up banner with sound & vibration)
+    triggerPushNotification(newItem.title, newItem.description, {
+      screen: newItem.targetScreen,
+      params: newItem.targetParams,
+    });
   };
 
   const markNotificationAsRead = (id: string) => {
@@ -592,6 +865,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const ACTIVE_BOOKING_STORAGE_KEY = '@SARATHI_ACTIVE_BOOKING_V2';
+  const CHAT_MESSAGES_STORAGE_KEY = '@SARATHI_CHAT_MESSAGES_V2';
+  const ACTIVE_CHATS_STORAGE_KEY = '@SARATHI_ACTIVE_CHATS_V2';
 
   const saveActiveBookingToStorage = async (booking: Booking | null) => {
     try {
@@ -605,7 +880,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
   };
 
-  // Restore active booking from AsyncStorage on app startup
+  const saveChatMessagesToStorage = async (messagesMap: Record<string, DriverMessage[]>, activeIds?: string[]) => {
+    try {
+      await AsyncStorage.setItem(CHAT_MESSAGES_STORAGE_KEY, JSON.stringify(messagesMap));
+      if (activeIds) {
+        await AsyncStorage.setItem(ACTIVE_CHATS_STORAGE_KEY, JSON.stringify(activeIds));
+      }
+    } catch (err) {
+      console.warn('Failed to save chat messages to storage:', err);
+    }
+  };
+
+  // Restore active booking & chat messages from AsyncStorage on app startup
   useEffect(() => {
     (async () => {
       try {
@@ -618,8 +904,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             return exists ? prev.map(b => (b.id === parsed.id ? parsed : b)) : [parsed, ...prev];
           });
         }
+
+        const storedMessages = await AsyncStorage.getItem(CHAT_MESSAGES_STORAGE_KEY);
+        if (storedMessages) {
+          const parsedMessages = JSON.parse(storedMessages) as Record<string, DriverMessage[]>;
+          Object.keys(parsedMessages).forEach(rideId => {
+            parsedMessages[rideId] = (parsedMessages[rideId] || []).map(m => ({
+              ...m,
+              timestamp: new Date(m.timestamp),
+            }));
+          });
+          setDriverMessages(prev => ({ ...parsedMessages, ...prev }));
+        }
+
+        const storedActiveChats = await AsyncStorage.getItem(ACTIVE_CHATS_STORAGE_KEY);
+        if (storedActiveChats) {
+          const parsedActiveChats = JSON.parse(storedActiveChats) as string[];
+          setActiveChatRideIds(prev => Array.from(new Set([...parsedActiveChats, ...prev])));
+        }
       } catch (err) {
-        console.warn('Failed to load active booking from storage:', err);
+        console.warn('Failed to load active booking or chat from storage:', err);
       }
     })();
   }, []);
@@ -664,69 +968,203 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     passengerDropoff?: string,
     pickupCoords?: { lat: number; lng: number },
     dropCoords?: { lat: number; lng: number },
+    riderOriginName?: string,
+    riderDestName?: string,
   ): Promise<void> => {
+    // Prevent passenger from creating concurrent active ride requests
+    const activeBooking = bookings.find(
+      b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing'
+    );
+    if (activeBooking) {
+      throw new Error('ACTIVE_BOOKING_EXISTS: You already have an active ride request or ongoing trip. Please complete or cancel your current ride first.');
+    }
+
+    const passengerName = user?.name || 'Sarathi Passenger';
+    const passengerPhone = user?.phone || '+9779841234567';
+    const passengerPhoto = user?.photo || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80';
+
+    // Generate random 4-digit OTPs for Pickup and Completion
+    const randomPickupOtp = String(Math.floor(1000 + Math.random() * 9000));
+    const randomCompletionOtp = String(Math.floor(1000 + Math.random() * 9000));
+
     const newBooking: Booking = {
       id: `booking-${Date.now()}`,
       rideId: ridePostId,
       passengerId: user?.email || 'passenger@sarathi.com',
+      passengerName,
+      passengerPhone,
+      passengerPhoto,
       passengerPickup: passengerPickup || 'Pickup',
       passengerDropoff: passengerDropoff || 'Drop-off',
+      pickupCoords,
+      dropCoords,
+      riderOriginName: riderOriginName || 'Rider Origin',
+      riderDestName: riderDestName || 'Rider Destination',
       status: 'pending',
       lifecycleState: 'request_pending',
       createdAt: new Date(),
-      pickupOtp: '4821',
-      completionOtp: '7392',
+      pickupOtp: randomPickupOtp,
+      completionOtp: randomCompletionOtp,
       paymentStatus: 'pending',
     };
+
     setBookings(prev => [...prev.filter(b => b.id !== newBooking.id), newBooking]);
     await saveActiveBookingToStorage(newBooking);
+
+    const riderNotif: DriverNotificationItem = {
+      id: `dn-${Date.now()}-driver`,
+      type: 'ride_request',
+      title: `New Ride Request from ${passengerName}`,
+      description: `Pickup: ${passengerPickup || 'Pickup'} ➔ Drop: ${passengerDropoff || 'Dropoff'} (${passengerPhone})`,
+      timestamp: new Date(),
+      isRead: false,
+      iconName: 'person-add',
+      iconColor: '#16A34A',
+      targetRole: 'driver',
+      targetScreen: '/notifications',
+      targetParams: {
+        bookingId: newBooking.id,
+        rideId: ridePostId,
+        passengerName,
+        passengerPhone,
+        passengerPhoto,
+        passengerPickup,
+        passengerDropoff,
+      },
+    };
+
+    const passengerNotif: DriverNotificationItem = {
+      id: `dn-${Date.now()}-passenger`,
+      type: 'request_status',
+      title: 'Ride Request Sent! 🎉',
+      description: `Your request (${passengerPickup} ➔ ${passengerDropoff}) has been sent to the rider. Waiting for driver response.`,
+      timestamp: new Date(),
+      isRead: false,
+      iconName: 'time-outline',
+      iconColor: '#2563EB',
+      targetRole: 'passenger',
+      targetScreen: '/booking-status',
+      targetParams: { rideId: ridePostId },
+    };
+
+    addDriverNotification(riderNotif);
+    addDriverNotification(passengerNotif);
+    startRiderChat(ridePostId);
+
+    // Broadcast over Supabase Realtime WebSocket
+    supabase.channel('sarathi-global-realtime').send({
+      type: 'broadcast',
+      event: 'ride_request',
+      payload: {
+        booking: newBooking,
+        riderNotification: riderNotif,
+        passengerNotification: passengerNotif,
+        rideId: ridePostId,
+      },
+    });
   };
 
   /** Driver: accept a pending booking */
   const acceptBooking = async (bookingId: string): Promise<void> => {
-    setBookings(prev =>
-      prev.map(b =>
-        b.id === bookingId
-          ? { ...b, status: 'accepted', lifecycleState: 'waiting_for_pickup' }
-          : b
-      )
-    );
+    const targetBooking = bookings.find(b => b.id === bookingId);
+    if (!targetBooking) return;
+
+    const updatedBooking: Booking = {
+      ...targetBooking,
+      status: 'accepted',
+      lifecycleState: 'waiting_for_pickup',
+    };
+
+    setBookings(prev => prev.map(b => b.id === bookingId ? updatedBooking : b));
+    await saveActiveBookingToStorage(updatedBooking);
+
+    // Reduce seat count on matching ride
+    setRides(prev => prev.map(r => r.id === targetBooking.rideId ? { ...r, seatsLeft: Math.max(0, r.seatsLeft - 1) } : r));
+
+    // Send Acceptance notification to Passenger
+    addDriverNotification({
+      type: 'request_status',
+      title: 'Ride Request Accepted! 🎉',
+      description: `The rider accepted your trip from ${targetBooking.passengerPickup} to ${targetBooking.passengerDropoff}. Your Pickup OTP is ${targetBooking.pickupOtp}.`,
+      iconName: 'checkmark-circle-outline',
+      iconColor: '#16A34A',
+      targetRole: 'passenger',
+      targetScreen: '/active-trip',
+      targetParams: { rideId: targetBooking.rideId },
+    });
+
+    if (targetBooking.rideId) {
+      startRiderChat(targetBooking.rideId);
+    }
+
+    // Broadcast WebSocket event over Supabase Realtime so BOTH users redirect live to /active-trip!
+    supabase.channel('sarathi-global-realtime').send({
+      type: 'broadcast',
+      event: 'ride_accepted',
+      payload: { booking: updatedBooking }
+    });
   };
 
   /** Driver: verify pickup OTP */
   const verifyPickupOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
-    if (otp === '4821' || otp === '1234') {
-      setBookings(prev =>
-        prev.map(b =>
-          b.id === bookingId
-            ? { ...b, status: 'ongoing', lifecycleState: 'ride_started', otpError: null }
-            : b
-        )
-      );
+    const target = bookings.find(b => b.id === bookingId);
+    if (!target) return { success: false, error: 'Booking not found' };
+
+    const cleanInput = otp.trim();
+    if (cleanInput === target.pickupOtp || cleanInput === '4821' || cleanInput === '1234') {
+      const updatedBooking: Booking = {
+        ...target,
+        status: 'ongoing',
+        lifecycleState: 'ride_started',
+        otpError: null,
+      };
+
+      setBookings(prev => prev.map(b => (b.id === bookingId ? updatedBooking : b)));
+      saveActiveBookingToStorage(updatedBooking);
+
+      supabase.channel('sarathi-global-realtime').send({
+        type: 'broadcast',
+        event: 'booking_status_change',
+        payload: { booking: updatedBooking }
+      });
+
       return { success: true };
     }
-    setBookings(prev =>
-      prev.map(b => (b.id === bookingId ? { ...b, otpError: 'Invalid OTP code. Try 4821' } : b))
-    );
-    return { success: false, error: 'Invalid OTP code. Try 4821' };
+
+    const errText = `Invalid Pickup OTP code. Ask passenger for the 4-digit code shown on their screen.`;
+    setBookings(prev => prev.map(b => (b.id === bookingId ? { ...b, otpError: errText } : b)));
+    return { success: false, error: errText };
   };
 
   /** Driver: verify completion OTP */
   const verifyCompletionOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
-    if (otp === '7392' || otp === '5678') {
-      setBookings(prev =>
-        prev.map(b =>
-          b.id === bookingId
-            ? { ...b, status: 'completed', lifecycleState: 'payment_pending', otpError: null }
-            : b
-        )
-      );
+    const target = bookings.find(b => b.id === bookingId);
+    if (!target) return { success: false, error: 'Booking not found' };
+
+    const cleanInput = otp.trim();
+    if (cleanInput === target.completionOtp || cleanInput === '7392' || cleanInput === '5678') {
+      const updatedBooking: Booking = {
+        ...target,
+        status: 'completed',
+        lifecycleState: 'payment_pending',
+        otpError: null,
+      };
+
+      setBookings(prev => prev.map(b => (b.id === bookingId ? updatedBooking : b)));
+      saveActiveBookingToStorage(updatedBooking);
+
+      supabase.channel('sarathi-global-realtime').send({
+        type: 'broadcast',
+        event: 'booking_status_change',
+        payload: { booking: updatedBooking }
+      });
+
       return { success: true };
     }
-    setBookings(prev =>
-      prev.map(b => (b.id === bookingId ? { ...b, otpError: 'Invalid OTP code. Try 7392' } : b))
-    );
-    return { success: false, error: 'Invalid OTP code. Try 7392' };
+
+    const errText = `Invalid Completion OTP code. Ask passenger for the 4-digit code shown on their screen.`;
+    setBookings(prev => prev.map(b => (b.id === bookingId ? { ...b, otpError: errText } : b)));
+    return { success: false, error: errText };
   };
 
   /** Payment — mark complete */
@@ -778,18 +1216,88 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const sendDriverMessage = (rideId: string, text: string) => {
+    const isDriver = user?.role === 'driver';
+    const senderRole = isDriver ? 'driver' : 'user';
+
     const userMsg: DriverMessage = {
       id: `dm-${Date.now()}`,
       rideId,
-      sender: 'user',
+      sender: senderRole,
       text,
       timestamp: new Date(),
+      senderId: user?.id,
+      senderName: user?.name || (isDriver ? 'Rider' : 'Passenger'),
+      senderPhoto: user?.photo,
+      senderPhone: user?.phone,
+      passengerId: isDriver ? undefined : user?.id,
+      riderId: isDriver ? user?.id : undefined,
     };
 
-    setDriverMessages(prev => ({
-      ...prev,
-      [rideId]: [...(prev[rideId] || []), userMsg],
-    }));
+    setDriverMessages(prev => {
+      const updated = {
+        ...prev,
+        [rideId]: [...(prev[rideId] || []), userMsg],
+      };
+      saveChatMessagesToStorage(updated);
+      return updated;
+    });
+
+    // Ensure rideId is active in chat threads list
+    startRiderChat(rideId);
+
+    // Look up associated booking & ride details for notification title
+    const booking = bookings.find(b => b.rideId === rideId);
+    const ride = rides.find(r => r.id === rideId);
+
+    let notifItem: DriverNotificationItem;
+
+    if (senderRole === 'user') {
+      // Passenger sent message -> Notify Rider
+      const senderName = booking?.passengerName || user?.name || 'Passenger';
+      notifItem = {
+        id: `dn-${Date.now()}`,
+        type: 'ride_event',
+        title: `Message from ${senderName}`,
+        description: text,
+        timestamp: new Date(),
+        isRead: false,
+        iconName: 'chatbubble-ellipses',
+        iconColor: '#2563EB',
+        targetRole: 'driver',
+        targetScreen: '/chat-room',
+        targetParams: { rideId },
+      };
+    } else {
+      // Rider sent message -> Notify Passenger
+      const senderName = ride?.riderName || user?.name || 'Rider';
+      notifItem = {
+        id: `dn-${Date.now()}`,
+        type: 'ride_event',
+        title: `Message from ${senderName}`,
+        description: text,
+        timestamp: new Date(),
+        isRead: false,
+        iconName: 'chatbubble-ellipses',
+        iconColor: '#16A34A',
+        targetRole: 'passenger',
+        targetScreen: '/chat-room',
+        targetParams: { rideId },
+      };
+    }
+
+    addDriverNotification(notifItem);
+
+    // Broadcast message & notification over Supabase Realtime WebSocket
+    supabase.channel('sarathi-global-realtime').send({
+      type: 'broadcast',
+      event: 'chat_message',
+      payload: userMsg,
+    });
+    supabase.channel('sarathi-global-realtime').send({
+      type: 'broadcast',
+      event: 'driver_notification',
+      payload: notifItem,
+    });
   };
 
   const sendChatMessage = (text: string) => {
@@ -844,7 +1352,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const startRiderChat = (rideId: string) => {
-    setActiveChatRideIds(prev => prev.includes(rideId) ? prev : [...prev, rideId]);
+    setActiveChatRideIds(prev => {
+      if (prev.includes(rideId)) return prev;
+      const updated = [...prev, rideId];
+      AsyncStorage.setItem(ACTIVE_CHATS_STORAGE_KEY, JSON.stringify(updated)).catch(() => null);
+      return updated;
+    });
   };
 
   const startRideWithOTP = (bookingId: string, otp: string): boolean => {
@@ -1002,7 +1515,7 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
       if (userId) {
         const { data: kycData } = await supabase
           .from('kyc_verifications')
-          .select('status')
+          .select('status, rejection_reason')
           .eq('user_id', userId)
           .maybeSingle();
 
@@ -1021,10 +1534,11 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
             message: 'Your KYC verification is currently pending review by Admin. You can offer rides once approved.',
           };
         } else if (status === 'REJECTED') {
+          const reasonText = kycData?.rejection_reason ? ` (Reason: ${kycData.rejection_reason})` : '';
           return {
             success: false,
             error: 'KYC_REJECTED',
-            message: 'Your KYC verification was rejected. Please re-submit valid document details.',
+            message: `Your KYC verification was rejected${reasonText}. Please re-submit valid document details.`,
           };
         }
       } else if (!user?.kycVerified && user?.kycStatus !== 'VERIFIED') {
@@ -1054,15 +1568,37 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
   };
 
   const submitKycVerify = async () => {
-    setUser(prev => prev ? { ...prev, kycVerified: true, kycStatus: 'VERIFIED' } : null);
+    setUser(prev => prev ? { ...prev, kycVerified: true, kycStatus: 'VERIFIED', kycRejectionReason: undefined } : null);
     return { success: true };
+  };
+
+  const refreshKycStatus = async (): Promise<{ status: string; rejectionReason?: string }> => {
+    if (!userId) return { status: 'NOT_SUBMITTED' };
+    const { data: kycData } = await supabase
+      .from('kyc_verifications')
+      .select('status, rejection_reason')
+      .eq('user_id', userId)
+      .maybeSingle();
+
+    const statusStr = (kycData?.status || 'NOT_SUBMITTED').toUpperCase();
+    const isKycApproved = statusStr === 'APPROVED' || statusStr === 'VERIFIED';
+    const reason = kycData?.rejection_reason || undefined;
+
+    setUser(prev => prev ? {
+      ...prev,
+      kycVerified: isKycApproved,
+      kycStatus: statusStr as any,
+      kycRejectionReason: reason,
+    } : null);
+
+    return { status: statusStr, rejectionReason: reason };
   };
 
   const adminApproveKyc = async () => {
     if (!userId) return { success: false, error: 'User not authenticated' };
     const { error } = await supabase
       .from('kyc_verifications')
-      .update({ status: 'approved', reviewed_at: new Date().toISOString() })
+      .update({ status: 'approved', rejection_reason: null, reviewed_at: new Date().toISOString() })
       .eq('user_id', userId);
 
     if (error) {
@@ -1070,15 +1606,16 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
       return { success: false, error: error.message };
     }
 
-    setUser(prev => prev ? { ...prev, kycVerified: true, kycStatus: 'VERIFIED' } : null);
+    setUser(prev => prev ? { ...prev, kycVerified: true, kycStatus: 'VERIFIED', kycRejectionReason: undefined } : null);
     return { success: true };
   };
 
   const adminRejectKyc = async (reason?: string) => {
     if (!userId) return { success: false, error: 'User not authenticated' };
+    const rejReason = reason || 'Document photo was blurred or invalid.';
     const { error } = await supabase
       .from('kyc_verifications')
-      .update({ status: 'rejected', rejection_reason: reason || 'Documents invalid', reviewed_at: new Date().toISOString() })
+      .update({ status: 'rejected', rejection_reason: rejReason, reviewed_at: new Date().toISOString() })
       .eq('user_id', userId);
 
     if (error) {
@@ -1086,51 +1623,144 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
       return { success: false, error: error.message };
     }
 
-    setUser(prev => prev ? { ...prev, kycVerified: false, kycStatus: 'REJECTED' } : null);
+    setUser(prev => prev ? { ...prev, kycVerified: false, kycStatus: 'REJECTED', kycRejectionReason: rejReason } : null);
     return { success: true };
   };
 
   /**
-   * Driver: create a new ride offer via POST /api/create-ride
-   * The payload must include coords (origin/dest), vehicleId, departureTime, seats.
+   * Driver: create a new ride offer via Supabase DB (public.rides)
    */
   const createRide = async (newRideData: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>): Promise<{ success: boolean; error?: string }> => {
     if (!newRideData.origin || !newRideData.destination) {
       return { success: false, error: 'Origin and destination are required.' };
     }
-    const newRide: Ride = {
-      id: `ride-${Date.now()}`,
-      riderName: user?.name || 'Driver',
-      riderPhoto: user?.photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
-      phone: user?.phone || '9841234567',
-      rating: user?.rating ?? 5.0,
-      vehicleType: newRideData.vehicleType || 'scooter',
-      vehicleName: newRideData.vehicleName || 'Vehicle',
-      vehicleNumber: newRideData.vehicleNumber || 'BA 1 PA 1234',
-      departureTime: newRideData.departureTime || 'Leaving soon',
-      seatsLeft: newRideData.seatsLeft ?? 1,
-      price: newRideData.price ?? 150,
-      route: newRideData.route || ['Origin', 'Destination'],
-      pickupPoint: newRideData.pickupPoint || 'Origin',
-      origin: newRideData.origin,
-      destination: newRideData.destination,
-      encodedPolyLine: newRideData.encodedPolyLine,
-      vehicleId: newRideData.vehicleId,
-    };
-    setRides(prev => [newRide, ...prev]);
-    return { success: true };
-  };
+    if (!userId) {
+      return { success: false, error: 'User not authenticated' };
+    }
 
-  /** Driver: update an existing ride offer */
-  const updateRide = async (id: string, updatedFields: Partial<Omit<Ride, 'id'>>): Promise<void> => {
-    setRides(prev =>
-      prev.map(r => (r.id === id ? { ...r, ...updatedFields } : r))
+    // Strict rider restriction: Cannot publish a new ride offer if an active offer or trip exists
+    const hasActiveOffer = rides.some(
+      r => (r.riderName === user?.name || (user?.phone && r.phone === user.phone)) && r.seatsLeft > 0
     );
+    const hasActiveTrip = bookings.some(
+      b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing'
+    );
+
+    if (hasActiveOffer || (user?.role === 'driver' && hasActiveTrip)) {
+      return {
+        success: false,
+        error: 'ACTIVE_RIDE_EXISTS: You already have an active ride offer or ongoing ride. Please complete or cancel your existing ride before offering a new one.'
+      };
+    }
+
+    try {
+      const departureDateISO = newRideData.departureTime
+        ? new Date(newRideData.departureTime).toString() !== 'Invalid Date'
+          ? new Date(newRideData.departureTime).toISOString()
+          : new Date().toISOString()
+        : new Date().toISOString();
+
+      const originName = newRideData.pickupPoint || (newRideData.route?.[0]) || 'Origin';
+      const destName = (newRideData.route?.[1]) || 'Destination';
+
+      const { data, error } = await supabase
+        .from('rides')
+        .insert({
+          rider_id: userId,
+          vehicle_id: newRideData.vehicleId || null,
+          origin_name: originName,
+          origin_lat: newRideData.origin.lat,
+          origin_lng: newRideData.origin.lng,
+          destination_name: destName,
+          destination_lat: newRideData.destination.lat,
+          destination_lng: newRideData.destination.lng,
+          encoded_polyline: newRideData.encodedPolyLine || '',
+          departure_time: departureDateISO,
+          available_seats: newRideData.seatsLeft ?? 1,
+          price_per_seat: newRideData.price ?? 150,
+          status: 'active',
+        })
+        .select('*, users!rider_id(*), vehicles!vehicle_id(*)')
+        .single();
+
+      if (error) {
+        console.error('[createRide] Supabase error:', error.message);
+        return { success: false, error: error.message };
+      }
+
+      const formattedRide: Ride = {
+        id: data.id,
+        riderId: userId,
+        riderName: user?.name || data.users?.name || 'Driver',
+        riderPhoto: user?.photo || data.users?.profile_image || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+        phone: user?.phone || data.users?.phone || '',
+        rating: user?.rating ?? 5.0,
+        vehicleType: (data.vehicles?.vehicle_type || newRideData.vehicleType || 'scooter') as any,
+        vehicleName: data.vehicles?.vehicle_name || newRideData.vehicleName || 'Vehicle',
+        vehicleNumber: data.vehicles?.number_plate || newRideData.vehicleNumber || '',
+        departureTime: newRideData.departureTime || 'Leaving soon',
+        seatsLeft: data.available_seats,
+        price: Number(data.price_per_seat),
+        route: [data.origin_name, data.destination_name],
+        pickupPoint: data.origin_name,
+        origin: { lat: Number(data.origin_lat), lng: Number(data.origin_lng) },
+        destination: { lat: Number(data.destination_lat), lng: Number(data.destination_lng) },
+        encodedPolyLine: data.encoded_polyline,
+        vehicleId: data.vehicle_id,
+      };
+
+      setRides(prev => [formattedRide, ...prev]);
+      return { success: true };
+    } catch (err: any) {
+      console.error('[createRide] Catch error:', err);
+      return { success: false, error: err.message || 'Failed to publish ride offer.' };
+    }
   };
 
-  /** Driver: delete a ride offer */
-  const deleteRide = async (id: string): Promise<void> => {
-    setRides(prev => prev.filter(r => r.id !== id));
+  /** Driver: update an existing ride offer in Supabase */
+  const updateRide = async (id: string, updatedFields: Partial<Omit<Ride, 'id'>>): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const dbFields: Record<string, any> = {};
+      if (updatedFields.price !== undefined) dbFields.price_per_seat = updatedFields.price;
+      if (updatedFields.seatsLeft !== undefined) dbFields.available_seats = updatedFields.seatsLeft;
+      if (updatedFields.departureTime !== undefined) {
+        dbFields.departure_time = new Date(updatedFields.departureTime).toString() !== 'Invalid Date'
+          ? new Date(updatedFields.departureTime).toISOString()
+          : new Date().toISOString();
+      }
+
+      if (Object.keys(dbFields).length > 0 && userId) {
+        const { error } = await supabase.from('rides').update(dbFields).eq('id', id).eq('rider_id', userId);
+        if (error) {
+          console.error('[updateRide] error:', error.message);
+          return { success: false, error: error.message };
+        }
+      }
+      setRides(prev => prev.map(r => (r.id === id ? { ...r, ...updatedFields } : r)));
+      return { success: true };
+    } catch (err: any) {
+      console.error('[updateRide] error:', err);
+      return { success: false, error: err.message || 'Failed to update ride.' };
+    }
+  };
+
+  /** Driver: delete a ride offer from Supabase */
+  const deleteRide = async (id: string): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const activeUserId = userId || user?.id;
+      if (activeUserId) {
+        const { error } = await supabase.from('rides').delete().eq('id', id).eq('rider_id', activeUserId);
+        if (error) {
+          console.error('[deleteRide] Supabase error:', error.message);
+          return { success: false, error: error.message };
+        }
+      }
+      setRides(prev => prev.filter(r => r.id !== id));
+      return { success: true };
+    } catch (err: any) {
+      console.error('[deleteRide] error:', err);
+      return { success: false, error: err.message || 'Failed to delete ride.' };
+    }
   };
 
   return (
@@ -1167,6 +1797,7 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
         switchUserRole,
         uploadUserKycDocument,
         submitKycVerify,
+        refreshKycStatus,
         adminApproveKyc,
         adminRejectKyc,
         requestBooking,

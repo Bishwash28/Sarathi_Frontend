@@ -1,6 +1,9 @@
 import React, { useState } from 'react';
 import {
+  Alert,
   FlatList,
+  Image,
+  Linking,
   StyleSheet,
   Text,
   TouchableOpacity,
@@ -19,11 +22,24 @@ export default function NotificationsScreen() {
     markNotificationAsRead,
     markAllNotificationsAsRead,
     clearNotification,
+    acceptBooking,
+    user,
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'requests' | 'updates'>('all');
 
+  const isDriverMode = user?.role === 'driver' || user?.kycVerified === true;
+  const currentRole = isDriverMode ? 'driver' : 'passenger';
+
   const filteredNotifications = driverNotifications.filter((n) => {
+    if (n.targetRole && n.targetRole !== currentRole) {
+      // Allow ride_request notifications to be visible to riders even if active mode is passenger
+      if (n.type === 'ride_request' && isDriverMode) {
+        // Allow through
+      } else {
+        return false;
+      }
+    }
     if (activeFilter === 'unread') return !n.isRead;
     if (activeFilter === 'requests') return n.type === 'ride_request' || n.type === 'request_status';
     if (activeFilter === 'updates') return n.type === 'kyc' || n.type === 'announcement' || n.type === 'payment';
@@ -40,6 +56,24 @@ export default function NotificationsScreen() {
     }
   };
 
+  const handleAcceptRequest = (bookingId?: string, notifId?: string) => {
+    if (bookingId) {
+      acceptBooking(bookingId);
+    }
+    if (notifId) {
+      markNotificationAsRead(notifId);
+    }
+    Alert.alert('Ride Request Accepted! 🎉', 'You have accepted the passenger request. Navigate to Active Trip to view status.');
+  };
+
+  const handleCallPassenger = (phone?: string) => {
+    if (phone) {
+      Linking.openURL(`tel:${phone}`);
+    } else {
+      Alert.alert('No Phone', 'Passenger phone number is unavailable.');
+    }
+  };
+
   const formatTimeAgo = (date: Date) => {
     const seconds = Math.floor((new Date().getTime() - new Date(date).getTime()) / 1000);
     if (seconds < 60) return 'Just now';
@@ -51,37 +85,91 @@ export default function NotificationsScreen() {
     return `${days} days ago`;
   };
 
-  const renderItem = ({ item }: { item: DriverNotificationItem }) => (
-    <TouchableOpacity
-      style={[styles.notifCard, !item.isRead && styles.unreadNotifCard]}
-      onPress={() => handleNotificationPress(item)}
-      activeOpacity={0.8}
-    >
-      {!item.isRead && <View style={styles.unreadBlueBadge} />}
+  const renderItem = ({ item }: { item: DriverNotificationItem }) => {
+    const isRideReq = item.type === 'ride_request';
+    const params = item.targetParams || {};
 
-      <View style={[styles.iconContainer, { backgroundColor: `${item.iconColor}15` }]}>
-        <Ionicons name={item.iconName as any} size={22} color={item.iconColor} />
-      </View>
+    return (
+      <View style={[styles.notifCard, !item.isRead && styles.unreadNotifCard]}>
+        {!item.isRead && <View style={styles.unreadBlueBadge} />}
 
-      <View style={styles.textContainer}>
-        <View style={styles.titleRow}>
-          <Text style={[styles.notifTitle, !item.isRead && styles.unreadTitle]}>{item.title}</Text>
-          <Text style={styles.timestampText}>{formatTimeAgo(item.timestamp)}</Text>
+        <View style={styles.cardMainHeader}>
+          <View style={[styles.iconContainer, { backgroundColor: `${item.iconColor}15` }]}>
+            <Ionicons name={item.iconName as any} size={22} color={item.iconColor} />
+          </View>
+
+          <View style={styles.textContainer}>
+            <View style={styles.titleRow}>
+              <Text style={[styles.notifTitle, !item.isRead && styles.unreadTitle]}>{item.title}</Text>
+              <Text style={styles.timestampText}>{formatTimeAgo(item.timestamp)}</Text>
+            </View>
+            <Text style={styles.notifDesc} numberOfLines={3}>
+              {item.description}
+            </Text>
+          </View>
+
+          <TouchableOpacity
+            style={styles.deleteButton}
+            onPress={() => clearNotification(item.id)}
+            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          >
+            <Ionicons name="trash-outline" size={16} color={Colors.textMuted} />
+          </TouchableOpacity>
         </View>
-        <Text style={styles.notifDesc} numberOfLines={2}>
-          {item.description}
-        </Text>
-      </View>
 
-      <TouchableOpacity
-        style={styles.deleteButton}
-        onPress={() => clearNotification(item.id)}
-        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-      >
-        <Ionicons name="trash-outline" size={16} color={Colors.textMuted} />
-      </TouchableOpacity>
-    </TouchableOpacity>
-  );
+        {/* Detailed Passenger Request Card (Shown for ride_request notifications) */}
+        {isRideReq && (
+          <View style={styles.passengerDetailsCard}>
+            <View style={styles.passengerProfileRow}>
+              <Image
+                source={{ uri: params.passengerPhoto || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80' }}
+                style={styles.passengerAvatarImg}
+              />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.passengerNameText}>{params.passengerName || 'Sarathi Passenger'}</Text>
+                <Text style={styles.passengerPhoneText}>{params.passengerPhone || '+977 9841234567'}</Text>
+              </View>
+              <TouchableOpacity
+                style={styles.callPassBtn}
+                onPress={() => handleCallPassenger(params.passengerPhone)}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="call" size={14} color="#16A34A" />
+                <Text style={styles.callPassBtnText}>Call</Text>
+              </TouchableOpacity>
+            </View>
+
+            <View style={styles.routePointsBox}>
+              <Text style={styles.routePointItem}>
+                📍 Pickup: <Text style={{ fontWeight: '800', color: Colors.textPrimary }}>{params.passengerPickup || 'Pickup Point'}</Text>
+              </Text>
+              <Text style={styles.routePointItem}>
+                🏁 Drop-off: <Text style={{ fontWeight: '800', color: Colors.textPrimary }}>{params.passengerDropoff || 'Destination Point'}</Text>
+              </Text>
+            </View>
+
+            <View style={styles.actionButtonsRow}>
+              <TouchableOpacity
+                style={styles.acceptBtn}
+                onPress={() => handleAcceptRequest(params.bookingId, item.id)}
+                activeOpacity={0.85}
+              >
+                <Ionicons name="checkmark-circle" size={16} color="#FFF" />
+                <Text style={styles.acceptBtnText}>Accept Request</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.declineBtn}
+                onPress={() => clearNotification(item.id)}
+                activeOpacity={0.85}
+              >
+                <Text style={styles.declineBtnText}>Decline</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+      </View>
+    );
+  };
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
@@ -238,27 +326,36 @@ const styles = StyleSheet.create({
     gap: 10,
   },
   notifCard: {
-    flexDirection: 'row',
-    alignItems: 'center',
+    flexDirection: 'column',
     backgroundColor: '#FFFFFF',
-    borderRadius: 14,
+    borderRadius: 16,
     padding: 14,
     borderWidth: 1,
     borderColor: '#E2E8F0',
     position: 'relative',
+    elevation: 2,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
+  },
+  cardMainHeader: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    width: '100%',
   },
   unreadNotifCard: {
-    backgroundColor: '#EFF6FF',
-    borderColor: '#BFDBFE',
+    backgroundColor: '#F0F9FF',
+    borderColor: '#BAE6FD',
   },
   unreadBlueBadge: {
     position: 'absolute',
     top: 14,
-    left: 8,
+    left: 6,
     width: 8,
     height: 8,
     borderRadius: 4,
-    backgroundColor: '#2563EB',
+    backgroundColor: Colors.primary,
   },
   iconContainer: {
     width: 42,
@@ -283,8 +380,8 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
   },
   unreadTitle: {
-    fontWeight: 'bold',
-    color: '#1E3A8A',
+    fontWeight: '800',
+    color: Colors.primary,
   },
   timestampText: {
     fontSize: 10,
@@ -299,6 +396,97 @@ const styles = StyleSheet.create({
   deleteButton: {
     padding: 6,
     marginLeft: 6,
+  },
+  passengerDetailsCard: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+    width: '100%',
+  },
+  passengerProfileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    marginBottom: 10,
+  },
+  passengerAvatarImg: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  passengerNameText: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  passengerPhoneText: {
+    fontSize: 12,
+    color: Colors.textMuted,
+    fontWeight: '500',
+  },
+  callPassBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    backgroundColor: '#DCFCE7',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  callPassBtnText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#15803D',
+  },
+  routePointsBox: {
+    backgroundColor: '#F8FAFC',
+    padding: 10,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 4,
+    marginBottom: 12,
+  },
+  routePointItem: {
+    fontSize: 12,
+    color: Colors.textMuted,
+  },
+  actionButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  acceptBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: '#16A34A',
+    paddingVertical: 10,
+    borderRadius: 10,
+  },
+  acceptBtnText: {
+    color: '#FFF',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  declineBtn: {
+    paddingHorizontal: 16,
+    paddingVertical: 10,
+    borderRadius: 10,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  declineBtnText: {
+    color: Colors.textMuted,
+    fontSize: 13,
+    fontWeight: 'bold',
   },
   emptyContainer: {
     alignItems: 'center',

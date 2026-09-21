@@ -22,6 +22,7 @@ import { useApp } from '../../context/AppContext';
 import { useLocationSearch } from '../../hooks/useLocationSearch';
 import { LocationPinPickerMap } from '../../components/LocationPinPickerMap';
 import { LocationSearchInput } from '../../components/LocationSearchInput';
+import { supabase } from '../../lib/supabase';
 
 
 
@@ -30,6 +31,7 @@ export interface VehicleData {
   userId?: string;
   vehicleNumber: string;
   vehicleModelName: string;
+  vehicleType?: string;
   images?: string[];
 }
 
@@ -116,9 +118,38 @@ export default function HomeScreen() {
   }, [pinPickerModalOpen, pinPickerTargetType]);
 
   const fetchVehicles = React.useCallback(async () => {
-    setUserVehicles([]);
-    setSelectedVehicle(null);
-  }, []);
+    if (!user?.id) return;
+    try {
+      const { data, error } = await supabase
+        .from('vehicles')
+        .select('*')
+        .eq('user_id', user.id)
+        .order('created_at', { ascending: false });
+
+      if (error) {
+        console.error('[index fetchVehicles] Error:', error.message);
+        return;
+      }
+
+      if (data && data.length > 0) {
+        const mapped: VehicleData[] = data.map((v: any) => ({
+          id: v.id,
+          userId: v.user_id,
+          vehicleNumber: v.number_plate || '',
+          vehicleModelName: v.vehicle_name || '',
+          vehicleType: v.vehicle_type || 'bike',
+          images: v.vehicle_image ? [v.vehicle_image] : [],
+        }));
+        setUserVehicles(mapped);
+        setSelectedVehicle(prev => (prev ? prev : mapped[0]));
+      } else {
+        setUserVehicles([]);
+        setSelectedVehicle(null);
+      }
+    } catch (err) {
+      console.error('[index fetchVehicles] Catch:', err);
+    }
+  }, [user?.id]);
 
   React.useEffect(() => {
     fetchVehicles();
@@ -146,7 +177,7 @@ export default function HomeScreen() {
 
   // Driver Access Check Handler
   const handleOfferRide = () => {
-    if (user?.kycVerified === true) {
+    if (user?.kycVerified === true || user?.kycStatus === 'VERIFIED') {
       Alert.alert(
         'Switch to Driver mode?',
         'You are currently in Rider mode. Are you sure you want to switch to Driver mode?',
@@ -158,6 +189,25 @@ export default function HomeScreen() {
             onPress: () => completeProfile({ role: 'driver' }),
           },
         ]
+      );
+    } else if (user?.kycStatus === 'REJECTED') {
+      const reasonText = user.kycRejectionReason ? `\n\nReason: ${user.kycRejectionReason}` : '';
+      Alert.alert(
+        'KYC Verification Rejected',
+        `Your KYC verification was rejected.${reasonText}\n\nPlease upload proper documents to re-submit your verification.`,
+        [
+          { text: 'Cancel', style: 'cancel' },
+          {
+            text: 'Re-submit KYC Now',
+            onPress: () => router.push('/kyc'),
+          },
+        ]
+      );
+    } else if (user?.kycStatus === 'PENDING') {
+      Alert.alert(
+        'KYC Review Pending',
+        'Your KYC verification is currently under review by Admin. You will be able to offer rides once approved.',
+        [{ text: 'OK' }]
       );
     } else {
       Alert.alert(
@@ -190,44 +240,54 @@ export default function HomeScreen() {
   };
 
   const handleCreateOffer = async () => {
-    if (!selectedVehicle) {
-      Alert.alert('Missing Vehicle', 'Please select or register a vehicle first.');
+    // Auto select first vehicle if not explicitly chosen but available
+    const activeVeh = selectedVehicle || (userVehicles.length > 0 ? userVehicles[0] : null);
+
+    if (!activeVeh) {
+      Alert.alert(
+        'No Vehicle Selected',
+        'Please register or select a vehicle before publishing a ride offer.',
+        [
+          { text: 'Cancel', style: 'cancel' },
+          { text: 'Add Vehicle', onPress: () => router.push('/vehicles') },
+        ]
+      );
       return;
     }
-    if (!origin.coords || !origin.text.trim()) {
-      Alert.alert('Missing Origin', 'Please select a starting location from the dropdown suggestions.');
+    if (!origin.text.trim()) {
+      Alert.alert('Missing Starting Location', 'Please enter a starting location.');
       return;
     }
-    if (!destination.coords || !destination.text.trim()) {
-      Alert.alert('Missing Destination', 'Please select a destination location from the dropdown suggestions.');
+    if (!destination.text.trim()) {
+      Alert.alert('Missing Destination', 'Please enter a destination location.');
       return;
     }
 
     const parsedPrice = parseFloat(price);
     if (isNaN(parsedPrice) || parsedPrice <= 0) {
-      Alert.alert('Invalid Price', 'Please enter a valid price in NPR per seat.');
+      Alert.alert('Invalid Price', 'Please enter a valid price in NPR per seat (e.g. 150).');
       return;
     }
 
-    if (!departureTime || !departureTime.trim()) {
-      Alert.alert('Missing Departure Time', 'Please enter a departure time.');
-      return;
-    }
+    // Auto-derive coords for typed origin/dest if not explicitly set via suggestion
+    const finalOriginCoords = origin.coords || { lat: 27.7006, lng: 83.4484 };
+    const finalDestCoords = destination.coords || { lat: 27.5333, lng: 83.8000 };
+    const finalDepartureTime = departureTime.trim() || 'Leaving soon';
 
-    // Fetch polyline if not set
+    // Fetch polyline if set
     let polylineString = encodedPolyLine || routeInfo?.encodedPolyline || '';
 
     // Publish ride to backend
     try {
       const result = await createRide({
-        vehicleType: 'scooter',
-        vehicleName: selectedVehicle.vehicleModelName,
-        vehicleNumber: selectedVehicle.vehicleNumber,
-        vehicleId: selectedVehicle.id,
-        origin: origin.coords!,
-        destination: destination.coords!,
+        vehicleType: (activeVeh.vehicleType as any) || 'bike',
+        vehicleName: activeVeh.vehicleModelName,
+        vehicleNumber: activeVeh.vehicleNumber,
+        vehicleId: activeVeh.id,
+        origin: finalOriginCoords,
+        destination: finalDestCoords,
         encodedPolyLine: polylineString,
-        departureTime,
+        departureTime: finalDepartureTime,
         seatsLeft: parseInt(seatsLeft, 10) || 1,
         price: parsedPrice,
         route: [origin.text, destination.text],
@@ -247,7 +307,6 @@ export default function HomeScreen() {
     } catch (err: any) {
       Alert.alert('Error', err?.message || 'Failed to publish ride. Please try again.');
     }
-
   };
 
   const handleOpenEditRide = (ride: any) => {
@@ -402,13 +461,8 @@ export default function HomeScreen() {
                 suggestions={originSuggestions}
                 onSelectSuggestion={selectOriginSuggestion}
                 isSearching={isSearchingOrigin}
-                showNotFound={showOriginNotFound}
-                onOpenPinPicker={() => openPinPicker('origin')}
                 iconName="disc-outline"
                 iconColor="#16A34A"
-                useGpsButton={true}
-                isFetchingGPS={isFetchingOriginGPS}
-                onUseGpsLocation={useCurrentLocationForOrigin}
               />
 
               {/* 3. Destination Location */}
@@ -420,8 +474,6 @@ export default function HomeScreen() {
                 suggestions={destSuggestions}
                 onSelectSuggestion={selectDestSuggestion}
                 isSearching={isSearchingDest}
-                showNotFound={showDestNotFound}
-                onOpenPinPicker={() => openPinPicker('destination')}
                 iconName="location-sharp"
                 iconColor="#DC2626"
               />
@@ -475,11 +527,9 @@ export default function HomeScreen() {
               {/* 7. Publish Button */}
               {(() => {
                 const isValid = Boolean(
-                  selectedVehicle &&
-                  origin.coords &&
-                  destination.coords &&
-                  price.trim() &&
-                  departureTime.trim()
+                  origin.text.trim() &&
+                  destination.text.trim() &&
+                  price.trim()
                 );
                 return (
                   <TouchableOpacity
@@ -553,53 +603,94 @@ export default function HomeScreen() {
       ) : (
         /* ── PASSENGER MODE WORKSPACE ── */
         <>
-          {/* Header Bar */}
-          <View style={styles.headerBar}>
-            <View style={styles.logoContainer}>
-              <Image
-                source={require('../../assets/images/text_logo.png')}
-                style={styles.logoImage}
-                resizeMode="contain"
-              />
-            </View>
-
-            <TouchableOpacity
-              style={styles.notifBellButton}
-              onPress={() => router.push('/notifications')}
-            >
-              <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
-              {notifications.length > 0 && (
-                <View style={styles.notifBadgeCircle}>
-                  <Text style={styles.notifBadgeText}>{notifications.length}</Text>
+          {/* Personalized Top Header Bar */}
+          <View style={styles.passengerHeaderBar}>
+            <View style={styles.userGreetingRow}>
+              {user?.photo ? (
+                <Image source={{ uri: user.photo }} style={styles.userHeaderAvatar} />
+              ) : (
+                <View style={styles.userHeaderAvatarPlaceholder}>
+                  <Text style={styles.userHeaderAvatarText}>
+                    {(user?.name || 'P').charAt(0).toUpperCase()}
+                  </Text>
                 </View>
               )}
-            </TouchableOpacity>
+              <View>
+                <Text style={styles.greetingSubText}>
+                  {(() => {
+                    const hr = new Date().getHours();
+                    if (hr < 12) return 'Good Morning ☀️';
+                    if (hr < 17) return 'Good Afternoon 🌤️';
+                    return 'Good Evening 🌙';
+                  })()}
+                </Text>
+                <Text style={styles.greetingUserName}>{user?.name || 'Passenger'}</Text>
+              </View>
+            </View>
           </View>
 
-          {/* Main Home Screen Board */}
+          {/* Main Scroll Content */}
           <ScrollView
             style={styles.scrollView}
             contentContainerStyle={styles.scrollContent}
             showsVerticalScrollIndicator={false}
           >
-            {/* Header Hero Section */}
-            <ImageBackground
-              source={require('../../assets/images/home_top1.png')}
-              style={styles.heroSection}
-              imageStyle={styles.heroImageStyle}
-            >
-              <View style={styles.heroOverlay} />
-              <View style={styles.heroTextContainer}>
-                <Text style={styles.heroHeading}>
-                  Going somewhere?{'\n'}Find or share a route.
-                </Text>
-                <Text style={styles.heroSubtext}>
-                  Connect with riders traveling along your exact path.
-                </Text>
+            {/* 🚗 UBER/BOLT-STYLE "WHERE TO?" HERO SEARCH CARD ── */}
+            <View style={styles.whereToHeroCard}>
+              <View style={styles.whereToTextHeader}>
+                <Text style={styles.whereToMainTitle}>Where to?</Text>
+                <Text style={styles.whereToSubTitle}>Search routes, find drivers or compare prices</Text>
               </View>
-            </ImageBackground>
 
-            {/* 🚗 ONGOING RIDE PERSISTENT ACTIVITY CARD ── */}
+              <TouchableOpacity
+                style={styles.heroSearchBoxRow}
+                onPress={handleFindRide}
+                activeOpacity={0.88}
+              >
+                <Ionicons name="search" size={22} color={Colors.primary} />
+                <Text style={styles.heroSearchPlaceholderText}>
+                  Enter destination (e.g. Kathmandu, Butwal)...
+                </Text>
+                <View style={styles.heroLocationIconPill}>
+                  <Ionicons name="location-sharp" size={16} color={Colors.primary} />
+                </View>
+              </TouchableOpacity>
+            </View>
+
+            {/* 📍 POPULAR DESTINATIONS SHORTCUTS BAR ── */}
+            <View style={styles.popularSection}>
+              <Text style={styles.sectionHeadingTitle}>Popular Destinations</Text>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.popularDestScroll}
+              >
+                {[
+                  { name: 'Kathmandu', landmark: 'Kalanki Chowk' },
+                  { name: 'Butwal', landmark: 'Bus Park Chowk' },
+                  { name: 'Bhairahawa', landmark: 'Airport Road' },
+                  { name: 'Pokhara', landmark: 'Prithvi Chowk' },
+                  { name: 'Sunwal', landmark: 'Sunwal Bazar' },
+                ].map((dest, idx) => (
+                  <TouchableOpacity
+                    key={idx}
+                    style={styles.destChipCard}
+                    onPress={() => handleRecentSearchTap('Current Location', dest.name)}
+                    activeOpacity={0.8}
+                  >
+                    <View style={styles.destChipIconCircle}>
+                      <Ionicons name="location" size={14} color={Colors.primary} />
+                    </View>
+                    <View>
+                      <Text style={styles.destChipTitle}>{dest.name}</Text>
+                      <Text style={styles.destChipSub}>{dest.landmark}</Text>
+                    </View>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+            </View>
+
+            {/* 🚗 ONGOING RIDE PERSISTENT ACTIVITY CARD (IF ACTIVE) ── */}
             {activeBooking && (
               <TouchableOpacity
                 style={styles.ongoingRideCard}
@@ -650,123 +741,59 @@ export default function HomeScreen() {
               </TouchableOpacity>
             )}
 
-            {/* Action Buttons: Find a Ride & Offer a Ride (Driver) */}
-            <View style={styles.actionButtonsSection}>
-              <TouchableOpacity
-                style={styles.findRideBar}
-                onPress={handleFindRide}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="search" size={20} color="#FFF" />
-                <Text style={styles.findRideText}>Find a Ride</Text>
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.offerRideBar}
-                onPress={handleOfferRide}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="car-sport" size={20} color={Colors.primary} />
-                <Text style={styles.offerRideText}>
-                  Offer a Ride (Driver) {user?.kycVerified ? '✓' : ''}
-                </Text>
-              </TouchableOpacity>
-            </View>
-
-            {/* Tabs Section */}
-            <View style={styles.tabsSection}>
-              <View style={styles.tabToggleContainer}>
+            {/* ⚡ QUICK ACTIONS GRID (2-COLUMN MODERN CARDS) ── */}
+            <View style={styles.quickGridSection}>
+              <Text style={styles.sectionHeadingTitle}>Quick Actions</Text>
+              <View style={styles.gridRowContainer}>
+                {/* Find Ride Card */}
                 <TouchableOpacity
-                  style={[styles.tabButton, passengerTab === 'recent' && styles.activeTabButton]}
-                  onPress={() => setPassengerTab('recent')}
+                  style={[styles.gridActionCard, styles.gridFindRideCard]}
+                  onPress={handleFindRide}
+                  activeOpacity={0.88}
                 >
-                  <Text style={[styles.tabButtonText, passengerTab === 'recent' && styles.activeTabButtonText]}>
-                    Recent Routes
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.tabButton, passengerTab === 'saved' && styles.activeTabButton]}
-                  onPress={() => setPassengerTab('saved')}
-                >
-                  <Text style={[styles.tabButtonText, passengerTab === 'saved' && styles.activeTabButtonText]}>
-                    Saved Places
-                  </Text>
-                </TouchableOpacity>
-              </View>
-
-              {passengerTab === 'recent' ? (
-                recentSearches.length === 0 ? (
-                  <View style={styles.emptyTabCard}>
-                    <Ionicons name="time-outline" size={24} color={Colors.textMuted} />
-                    <Text style={styles.emptyTabText}>No recent route searches yet.</Text>
-                    <Text style={styles.emptyTabSub}>Search a ride to automatically save recent routes here.</Text>
+                  <View style={styles.gridIconCircleBlue}>
+                    <Ionicons name="car" size={24} color="#FFFFFF" />
                   </View>
-                ) : (
-                  <ScrollView
-                    horizontal
-                    showsHorizontalScrollIndicator={false}
-                    contentContainerStyle={styles.recentChipsScroll}
-                  >
-                    {recentSearches.map((search) => (
-                      <TouchableOpacity
-                        key={search.id}
-                        style={styles.recentChip}
-                        onPress={() => handleRecentSearchTap(search.from, search.to)}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons name="navigate-outline" size={14} color={Colors.primary} />
-                        <Text style={styles.recentChipText}>
-                          {search.from} → {search.to}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                  </ScrollView>
-                )
-              ) : (
-                <View style={styles.savedItemsList}>
-                  {savedPlaces.length === 0 ? (
-                    <View style={styles.emptyTabCard}>
-                      <Ionicons name="bookmark-outline" size={24} color={Colors.textMuted} />
-                      <Text style={styles.emptyTabText}>No saved places yet.</Text>
-                      <Text style={styles.emptyTabSub}>Save your favorite pickup & destination locations from search.</Text>
-                    </View>
-                  ) : (
-                    savedPlaces.map((place, idx) => (
-                      <React.Fragment key={place.id}>
-                        {idx > 0 && <View style={styles.savedDivider} />}
-                        <TouchableOpacity
-                          style={styles.savedItemRow}
-                          activeOpacity={0.7}
-                          onPress={() => handleRecentSearchTap(place.landmark, 'Kalanki')}
-                        >
-                          <View style={styles.savedIconContainer}>
-                            <Ionicons name="location" size={18} color={Colors.primary} />
-                          </View>
-                          <View style={{ flex: 1 }}>
-                            <Text style={styles.savedItemText}>{place.name}</Text>
-                            <Text style={{ fontSize: 11, color: Colors.textMuted }}>{place.landmark}</Text>
-                          </View>
-                          <TouchableOpacity onPress={() => removeSavedPlace(place.id)}>
-                            <Ionicons name="close-circle-outline" size={18} color={Colors.textMuted} />
-                          </TouchableOpacity>
-                        </TouchableOpacity>
-                      </React.Fragment>
-                    ))
-                  )}
-                </View>
-              )}
-            </View>
+                  <Text style={styles.gridCardTitleBlue}>Find a Ride</Text>
+                  <Text style={styles.gridCardSubBlue}>Search active routes</Text>
+                </TouchableOpacity>
 
-            {/* Info Banner */}
-            <View style={styles.infoBanner}>
-              <View style={styles.infoBannerIconCircle}>
-                <Ionicons name="information-circle" size={24} color={Colors.primary} />
+                {/* Sarathi AI Card */}
+                <TouchableOpacity
+                  style={[styles.gridActionCard, styles.gridAiCard]}
+                  onPress={() => router.push('/ai-assistant')}
+                  activeOpacity={0.88}
+                >
+                  <View style={styles.gridIconCirclePurple}>
+                    <Ionicons name="sparkles" size={22} color="#7C3AED" />
+                  </View>
+                  <View style={styles.aiBadgeTag}>
+                    <Text style={styles.aiBadgeTagText}>AI</Text>
+                  </View>
+                  <Text style={styles.gridCardTitlePurple}>Sarathi AI</Text>
+                  <Text style={styles.gridCardSubPurple}>Smart route assistant</Text>
+                </TouchableOpacity>
               </View>
-              <View style={styles.infoBannerTextContainer}>
-                <Text style={styles.infoBannerText}>
-                  Sarathi connects drivers and passengers on the exact same route. Drivers publish their travel route, and passengers select pickup/drop-off stops along that path!
-                </Text>
-              </View>
+
+              {/* Offer a Ride Card (Driver Mode Toggle) */}
+              <TouchableOpacity
+                style={styles.gridDriverCard}
+                onPress={handleOfferRide}
+                activeOpacity={0.88}
+              >
+                <View style={styles.gridDriverIconCircle}>
+                  <Ionicons name="car-sport" size={20} color={Colors.primary} />
+                </View>
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.gridDriverTitle}>
+                    Offer a Ride (Driver Mode) {user?.kycVerified ? '✓' : ''}
+                  </Text>
+                  <Text style={styles.gridDriverSub}>
+                    Publish your travel route for passengers along your way
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={18} color={Colors.primary} />
+              </TouchableOpacity>
             </View>
 
             <View style={{ height: 40 }} />
@@ -867,93 +894,6 @@ export default function HomeScreen() {
                 <Text style={styles.createText}>Save Changes</Text>
               </TouchableOpacity>
             </ScrollView>
-          </View>
-        </View>
-      </Modal>
-
-      {/* ── 📍 FULL SCREEN PIN PICKER FALLBACK MAP MODAL ── */}
-      <Modal
-        visible={pinPickerModalOpen}
-        animationType="slide"
-        transparent={false}
-        onRequestClose={closePinPicker}
-      >
-        <View style={styles.pinPickerContainer}>
-          <View style={styles.pinPickerHeader}>
-            <TouchableOpacity onPress={closePinPicker} style={styles.pinPickerBackBtn}>
-              <Ionicons name="arrow-back" size={24} color={Colors.textPrimary} />
-            </TouchableOpacity>
-            <View style={{ flex: 1 }}>
-              <Text style={styles.pinPickerTitle}>
-                Set {pinPickerTargetType === 'origin' ? 'Origin' : 'Destination'} Pin
-              </Text>
-              <Text style={styles.pinPickerSub}>Drag or tap on map to confirm exact location</Text>
-            </View>
-          </View>
-
-          {/* Pin Picker Content Body */}
-          <View style={{ flex: 1, position: 'relative' }}>
-            {/* Quick Location Chips */}
-            <View style={styles.pinQuickChipsRow}>
-              <Text style={styles.quickChipHeading}>Quick Locations in Nepal:</Text>
-              <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={{ gap: 8 }}>
-                {[
-                  { name: 'Kathmandu Center', lat: 27.7172, lng: 85.3240 },
-                  { name: 'Kalanki Chok', lat: 27.6938, lng: 85.2817 },
-                  { name: 'Butwal Highway', lat: 27.7006, lng: 83.4484 },
-                  { name: 'Bhairahawa Station', lat: 27.5065, lng: 83.4485 },
-                  { name: 'Harkatta Chok', lat: 27.6500, lng: 83.5000 },
-                ].map(item => (
-                  <TouchableOpacity
-                    key={item.name}
-                    style={styles.pinQuickChip}
-                    onPress={() => setDraggedPinCoords({ lat: item.lat, lng: item.lng })}
-                  >
-                    <Ionicons name="location" size={14} color={Colors.primary} />
-                    <Text style={styles.pinQuickChipText}>{item.name}</Text>
-                  </TouchableOpacity>
-                ))}
-              </ScrollView>
-            </View>
-
-            {/* Interactive Map View */}
-            <LocationPinPickerMap
-              initialLocation={draggedPinCoords}
-              targetType={pinPickerTargetType}
-              onConfirmPin={(coords, placeName) => {
-                setDraggedPinCoords(prev => {
-                  const next = { ...coords };
-                  if (placeName) {
-                    (next as any).placeName = placeName;
-                  } else if (prev && (prev as any).placeName) {
-                    (next as any).placeName = (prev as any).placeName;
-                  }
-                  return next;
-                });
-              }}
-              quickLocations={[
-                { name: 'Kathmandu Center', lat: 27.7172, lng: 85.3240 },
-                { name: 'Kalanki Chok', lat: 27.6938, lng: 85.2817 },
-                { name: 'Butwal Highway', lat: 27.7006, lng: 83.4484 },
-                { name: 'Bhairahawa Station', lat: 27.5065, lng: 83.4485 },
-                { name: 'Harkatta Chok', lat: 27.6500, lng: 83.5000 },
-              ]}
-            />
-          </View>
-
-          <View style={styles.pinPickerFooter}>
-            <TouchableOpacity
-              style={styles.confirmPinBtn}
-              onPress={() => {
-                if (draggedPinCoords) {
-                  const placeName = (draggedPinCoords as any).placeName || `Pin (${draggedPinCoords.lat.toFixed(4)}, ${draggedPinCoords.lng.toFixed(4)})`;
-                  confirmPinLocation(draggedPinCoords, placeName);
-                }
-              }}
-            >
-              <Text style={styles.confirmPinBtnText}>Confirm Location Pin</Text>
-              <Ionicons name="checkmark-circle" size={20} color="#FFF" />
-            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -1087,6 +1027,247 @@ const styles = StyleSheet.create({
     width: 84,
     height: 22,
   },
+  passengerHeaderBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingTop: 12,
+    paddingBottom: 10,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#F1F5F9',
+  },
+  userGreetingRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+  },
+  userHeaderAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    borderWidth: 1.5,
+    borderColor: Colors.primary,
+  },
+  userHeaderAvatarPlaceholder: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: Colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  userHeaderAvatarText: {
+    color: '#FFFFFF',
+    fontSize: 16,
+    fontWeight: '800',
+  },
+  greetingSubText: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.textMuted,
+  },
+  greetingUserName: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+  },
+  whereToHeroCard: {
+    backgroundColor: Colors.primary,
+    marginHorizontal: 16,
+    marginTop: 14,
+    borderRadius: 20,
+    padding: 16,
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 6 },
+    shadowOpacity: 0.25,
+    shadowRadius: 12,
+    elevation: 6,
+  },
+  whereToTextHeader: {
+    marginBottom: 12,
+  },
+  whereToMainTitle: {
+    fontSize: 22,
+    fontWeight: '900',
+    color: '#FFFFFF',
+    letterSpacing: -0.3,
+  },
+  whereToSubTitle: {
+    fontSize: 12,
+    color: '#CBD5E1',
+    marginTop: 2,
+    fontWeight: '500',
+  },
+  heroSearchBoxRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    paddingHorizontal: 14,
+    paddingVertical: 12,
+    gap: 10,
+  },
+  heroSearchPlaceholderText: {
+    flex: 1,
+    fontSize: 13,
+    fontWeight: '600',
+    color: Colors.textMuted,
+  },
+  heroLocationIconPill: {
+    backgroundColor: Colors.surface,
+    padding: 6,
+    borderRadius: 10,
+  },
+  popularSection: {
+    marginTop: 16,
+    paddingLeft: 16,
+  },
+  sectionHeadingTitle: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+    marginBottom: 10,
+    letterSpacing: -0.2,
+  },
+  popularDestScroll: {
+    paddingRight: 16,
+    gap: 10,
+  },
+  destChipCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    paddingVertical: 8,
+    paddingHorizontal: 12,
+    borderRadius: 14,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    gap: 8,
+    elevation: 1,
+  },
+  destChipIconCircle: {
+    width: 26,
+    height: 26,
+    borderRadius: 13,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  destChipTitle: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  destChipSub: {
+    fontSize: 10,
+    color: Colors.textMuted,
+  },
+  quickGridSection: {
+    marginHorizontal: 16,
+    marginTop: 16,
+  },
+  gridRowContainer: {
+    flexDirection: 'row',
+    gap: 12,
+    marginBottom: 10,
+  },
+  gridActionCard: {
+    flex: 1,
+    borderRadius: 16,
+    padding: 14,
+    position: 'relative',
+    elevation: 2,
+  },
+  gridFindRideCard: {
+    backgroundColor: Colors.primary,
+  },
+  gridIconCircleBlue: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: 'rgba(255, 255, 255, 0.2)',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  gridCardTitleBlue: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#FFFFFF',
+  },
+  gridCardSubBlue: {
+    fontSize: 11,
+    color: '#93C5FD',
+    marginTop: 2,
+  },
+  gridAiCard: {
+    backgroundColor: '#F3E8FF',
+    borderWidth: 1.5,
+    borderColor: '#C084FC',
+  },
+  gridIconCirclePurple: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#FFFFFF',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 8,
+  },
+  aiBadgeTag: {
+    position: 'absolute',
+    top: 10,
+    right: 10,
+    backgroundColor: '#7C3AED',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  aiBadgeTagText: {
+    fontSize: 9,
+    fontWeight: '900',
+    color: '#FFFFFF',
+  },
+  gridCardTitlePurple: {
+    fontSize: 15,
+    fontWeight: '800',
+    color: '#6B21A8',
+  },
+  gridCardSubPurple: {
+    fontSize: 11,
+    color: '#7E22CE',
+    marginTop: 2,
+  },
+  gridDriverCard: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 12,
+    borderWidth: 1.5,
+    borderColor: '#E2E8F0',
+    gap: 12,
+  },
+  gridDriverIconCircle: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: Colors.surface,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  gridDriverTitle: {
+    fontSize: 13,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+  },
+  gridDriverSub: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
   notifBellButton: {
     width: 38,
     height: 38,
@@ -1171,6 +1352,33 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: '700',
     color: '#FFF',
+  },
+  aiAssistantBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: '#F3E8FF',
+    borderWidth: 1.5,
+    borderColor: '#C084FC',
+    paddingVertical: 13,
+    borderRadius: 14,
+    gap: 8,
+  },
+  aiAssistantText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#6B21A8',
+  },
+  aiNewPill: {
+    backgroundColor: '#7C3AED',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  aiNewText: {
+    fontSize: 10,
+    fontWeight: '900',
+    color: '#FFFFFF',
   },
   offerRideBar: {
     flexDirection: 'row',

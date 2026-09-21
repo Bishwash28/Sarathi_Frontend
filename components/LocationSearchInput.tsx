@@ -31,61 +31,30 @@ export interface LocationSearchInputProps {
   suggestions: PlaceSuggestion[];
   onSelectSuggestion: (suggestion: PlaceSuggestion) => void;
   isSearching: boolean;
-  showNotFound: boolean;
-  onOpenPinPicker: () => void;
+  onFocus?: () => void;
   iconName?: keyof typeof Ionicons.glyphMap;
   iconColor?: string;
-  // Optional GPS button for origin input
-  useGpsButton?: boolean;
-  isFetchingGPS?: boolean;
-  onUseGpsLocation?: () => void;
 }
 
 /**
- * Reusable location search input with debounced Nominatim search dropdown,
- * "Searching..." loading state, direct suggestion selection, and map pin picker fallback.
+ * Reusable location search input with debounced Nepal place search dropdown,
+ * autocomplete suggestions, and focus events for real-time map sync.
  */
 export const LocationSearchInput: React.FC<LocationSearchInputProps> = ({
   label,
-  placeholder = 'Search location in Nepal...',
+  placeholder = 'Search location...',
   value,
   onChangeText,
   suggestions,
   onSelectSuggestion,
   isSearching,
-  showNotFound,
-  onOpenPinPicker,
+  onFocus,
   iconName = 'location-outline',
   iconColor = Colors.primary,
-  useGpsButton = false,
-  isFetchingGPS = false,
-  onUseGpsLocation,
 }) => {
   return (
     <View style={styles.container}>
-      {/* Label Row with optional "Use my current location" GPS button */}
-      {label ? (
-        <View style={styles.labelRow}>
-          <Text style={styles.inputLabel}>{label}</Text>
-          {useGpsButton && onUseGpsLocation && (
-            <TouchableOpacity
-              style={styles.gpsBadgeBtn}
-              onPress={onUseGpsLocation}
-              disabled={isFetchingGPS}
-              activeOpacity={0.7}
-            >
-              <Ionicons
-                name={isFetchingGPS ? 'sync' : 'navigate-circle-outline'}
-                size={14}
-                color={Colors.primary}
-              />
-              <Text style={styles.gpsBadgeText}>
-                {isFetchingGPS ? 'Locating...' : 'Use my current location'}
-              </Text>
-            </TouchableOpacity>
-          )}
-        </View>
-      ) : null}
+      {label ? <Text style={styles.inputLabel}>{label}</Text> : null}
 
       {/* Input Box Row */}
       <View style={styles.inputBoxRow}>
@@ -96,14 +65,16 @@ export const LocationSearchInput: React.FC<LocationSearchInputProps> = ({
           placeholderTextColor={Colors.textMuted}
           value={value}
           onChangeText={onChangeText}
+          onFocus={onFocus}
           autoCorrect={false}
         />
+
         {isSearching && (
           <View style={styles.searchingBadge}>
             <ActivityIndicator size="small" color={Colors.primary} />
-            <Text style={styles.searchingText}>Searching...</Text>
           </View>
         )}
+
         {value.length > 0 && !isSearching && (
           <TouchableOpacity onPress={() => onChangeText('')} style={styles.clearBtn}>
             <Ionicons name="close-circle" size={18} color={Colors.textMuted} />
@@ -132,14 +103,6 @@ export const LocationSearchInput: React.FC<LocationSearchInputProps> = ({
           ))}
         </View>
       )}
-
-      {/* "Can't find this place? Drop a pin" Fallback Button */}
-      {showNotFound && (
-        <TouchableOpacity style={styles.cantFindBtn} onPress={onOpenPinPicker} activeOpacity={0.8}>
-          <Ionicons name="location" size={16} color={Colors.primary} />
-          <Text style={styles.cantFindText}>Can't find this place? Tap to set pin on map</Text>
-        </TouchableOpacity>
-      )}
     </View>
   );
 };
@@ -159,18 +122,20 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: Colors.textPrimary,
   },
-  gpsBadgeBtn: {
+  mapBadgeBtn: {
     flexDirection: 'row',
     alignItems: 'center',
     gap: 4,
-    backgroundColor: '#EFF6FF',
-    paddingHorizontal: 8,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.accent + '35',
+    paddingHorizontal: 9,
     paddingVertical: 4,
     borderRadius: 12,
   },
-  gpsBadgeText: {
+  mapBadgeText: {
     fontSize: 12,
-    fontWeight: '600',
+    fontWeight: '700',
     color: Colors.primary,
   },
   inputBoxRow: {
@@ -182,6 +147,12 @@ const styles = StyleSheet.create({
     borderRadius: 12,
     paddingHorizontal: 12,
     height: 48,
+  },
+  inputMapBtn: {
+    paddingLeft: 6,
+    paddingRight: 2,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   inputIcon: {
     marginRight: 8,

@@ -1,649 +1,639 @@
-import React, { useState } from 'react';
-import { StyleSheet, Text, View, Image, TouchableOpacity, ScrollView, Alert, TextInput } from 'react-native';
-import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
+import { router, useLocalSearchParams } from 'expo-router';
+import React, { useState } from 'react';
+import {
+  ActivityIndicator,
+  Alert,
+  Image,
+  Linking,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
+import { LocationPinPickerMap } from '../components/LocationPinPickerMap';
 import { Colors } from '../constants/Colors';
 import { useApp } from '../context/AppContext';
-import { validatePassengerJourney, findLandmarkIndexInRoute } from '../utils/routeValidation';
-import { matchPassengerToRoute, calculateProratedFare, RouteMatchResult } from '../utils/routeMatching';
-
 import { makePhoneCall } from '../utils/phoneUtils';
 
 export default function RideDetailScreen() {
-  const {
-    id, selectedPickup, selectedDest,
-    pickupLat, pickupLng, dropLat, dropLng,
-    riderName: paramRiderName, vehicleName: paramVehicleName,
-    vehicleNumber: paramVehicleNumber, price: paramPrice,
-    seatsLeft: paramSeatsLeft, departureTime: paramDepartureTime,
-    rating: paramRating,
-  } = useLocalSearchParams();
-  const { rides, requestBooking, bookings, startRiderChat, deviceLocation } = useApp();
+  const params = useLocalSearchParams();
+  const { rides, requestBooking, bookings, startRiderChat } = useApp();
+  const [isSubmitting, setIsSubmitting] = useState(false);
 
-  // Try to find the ride in the local rides array, fall back to params
-  const foundRide = rides.find(r => r.id === id);
-  const ride = foundRide ?? (id ? {
-    id: id as string,
-    riderName: (paramRiderName as string) || 'Driver',
-    riderPhoto: '',
-    phone: undefined,
-    rating: parseFloat((paramRating as string) || '5') || 5,
-    vehicleType: 'scooter' as const,
-    vehicleName: (paramVehicleName as string) || 'Vehicle',
-    vehicleNumber: (paramVehicleNumber as string) || '',
-    departureTime: (paramDepartureTime as string) || 'Soon',
-    seatsLeft: parseInt((paramSeatsLeft as string) || '1', 10),
-    price: parseFloat((paramPrice as string) || '0') || 0,
-    route: [selectedPickup as string || '', selectedDest as string || ''],
-    pickupPoint: (selectedPickup as string) || '',
-    origin: pickupLat && pickupLng ? { lat: parseFloat(pickupLat as string), lng: parseFloat(pickupLng as string) } : undefined,
-    destination: dropLat && dropLng ? { lat: parseFloat(dropLat as string), lng: parseFloat(dropLng as string) } : undefined,
-  } : null);
+  // Extract params & match with local ride object
+  const rideId = typeof params.id === 'string' ? params.id : '';
+  const foundRide = rides.find(r => r.id === rideId);
 
-  if (!ride) {
-    return (
-      <SafeAreaView style={styles.safeArea} edges={['top', 'bottom']}>
-        <View style={styles.errorContainer}>
-          <Text style={styles.errorText}>Ride not found</Text>
-          <TouchableOpacity style={styles.backButton} onPress={() => router.back()}>
-            <Text style={styles.backButtonText}>Go Back</Text>
-          </TouchableOpacity>
-        </View>
-      </SafeAreaView>
-    );
-  }
+  const driverName = foundRide?.riderName || (params.riderName as string) || 'Sarathi Rider';
+  const driverPhotoUrl = foundRide?.riderPhoto || (params.riderPhoto as string) || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80';
+  const driverRating = foundRide?.rating || (params.rating ? parseFloat(params.rating as string) : 5.0);
+  const driverPhone = foundRide?.phone || (params.phone as string) || '+9779841234567';
 
-  // Driver Point A (Start) & Point B (End)
-  const driverPointA = ride.route[0];
-  const driverPointB = ride.route[ride.route.length - 1];
+  const vehicleModel = foundRide?.vehicleName || (params.vehicleName as string) || 'Vehicle';
+  const vehiclePlate = foundRide?.vehicleNumber || (params.vehicleNumber as string) || 'BA 99 PA 1234';
 
-  // Passenger's custom selected Pickup and Drop-off locations
-  const initialPickup = typeof selectedPickup === 'string' && selectedPickup.trim() ? selectedPickup : (ride.route[0] || '');
-  const initialDropoff = typeof selectedDest === 'string' && selectedDest.trim() ? selectedDest : (ride.route[ride.route.length - 1] || '');
+  const originName = (params.selectedPickup as string) || foundRide?.pickupPoint || foundRide?.route?.[0] || 'Origin';
+  const destName = (params.selectedDest as string) || (foundRide?.route ? foundRide.route[foundRide.route.length - 1] : 'Destination');
 
-  const [passengerPickup, setPassengerPickup] = useState<string>(initialPickup);
-  const [passengerDropoff, setPassengerDropoff] = useState<string>(initialDropoff);
+  const riderStartPoint = foundRide?.route?.[0] || (params.riderOrigin as string) || originName;
+  const riderEndPoint = foundRide?.route ? foundRide.route[foundRide.route.length - 1] : ((params.riderDest as string) || destName);
 
-  // Coordinates for Map (landmark lookup removed — use real GPS coords from ride data)
-  const startCoord = ride.origin ? { latitude: ride.origin.lat, longitude: ride.origin.lng } : undefined;
-  const endCoord = ride.destination ? { latitude: ride.destination.lat, longitude: ride.destination.lng } : undefined;
-  const pickupCoord = undefined;
-  const dropoffCoord = undefined;
+  const farePrice = foundRide?.price ?? (params.price ? parseFloat(params.price as string) : 150);
+  const seatsLeftCount = foundRide?.seatsLeft ?? (params.seatsLeft ? parseInt(params.seatsLeft as string, 10) : 1);
+  const departureTimeText = foundRide?.departureTime || (params.departureTime as string) || 'Leaving soon';
 
-  // Validate passenger journey against driver's published route polyline & sequence
-  let validationResult: { isValid: boolean; reason: string } = { isValid: false, reason: '' };
-  let calculatedFare = ride.price;
+  // Coordinate objects for small box map
+  const originCoords = {
+    lat: params.pickupLat ? parseFloat(params.pickupLat as string) : (foundRide?.origin?.lat ?? 27.7172),
+    lng: params.pickupLng ? parseFloat(params.pickupLng as string) : (foundRide?.origin?.lng ?? 85.3240),
+  };
+  const destCoords = {
+    lat: params.dropLat ? parseFloat(params.dropLat as string) : (foundRide?.destination?.lat ?? 27.7006),
+    lng: params.dropLng ? parseFloat(params.dropLng as string) : (foundRide?.destination?.lng ?? 83.4484),
+  };
 
-  if (ride.encodedPolyLine && pickupCoord && dropoffCoord) {
-    // 1. Live polyline geometrical matching with 1000m threshold
-    const polyMatch: RouteMatchResult = matchPassengerToRoute(
-      ride.encodedPolyLine,
-      pickupCoord,
-      dropoffCoord,
-      1000
-    );
-
-    if (polyMatch.isValid) {
-      validationResult = {
-        isValid: true,
-        reason: `Journey from "${passengerPickup}" to "${passengerDropoff}" is along the driver's polyline route!`,
-      };
-      // Prorate fare dynamically based on segment distance vs full route distance
-      calculatedFare = calculateProratedFare(
-        ride.encodedPolyLine,
-        pickupCoord,
-        dropoffCoord,
-        ride.price
-      );
-    } else {
-      validationResult = {
-        isValid: false,
-        reason: polyMatch.reason || `Drop-off (${passengerDropoff}) must come after pickup (${passengerPickup}) along driver's route direction.`,
-      };
-    }
-  } else {
-    // 2. Sequence/landmark index fallback validation
-    const fallbackVal = validatePassengerJourney(ride.route, passengerPickup, passengerDropoff);
-    validationResult = {
-      isValid: fallbackVal.isValid,
-      reason: fallbackVal.reason,
-    };
-    if (fallbackVal.isValid && fallbackVal.pickupIndex !== undefined && fallbackVal.dropoffIndex !== undefined) {
-      const totalStops = Math.max(1, ride.route.length - 1);
-      const travelledStops = Math.max(1, fallbackVal.dropoffIndex - fallbackVal.pickupIndex);
-      calculatedFare = Math.max(30, Math.round((travelledStops / totalStops) * ride.price));
-    }
-  }
-
+  // Handlers
   const handleBooking = async () => {
-    const pendingBooking = bookings.find(b => b.status === 'pending' || b.status === 'accepted');
-    if (pendingBooking) {
-      Alert.alert('Active Booking Exists', 'You already have an active or pending booking. Please manage your active trip first.');
+    const existingActiveBooking = bookings.find(b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing');
+    if (existingActiveBooking) {
+      Alert.alert(
+        'Active Trip Exists',
+        'You already have an active ride request or ongoing trip. Please complete or cancel your current ride before booking a new one.',
+        [
+          {
+            text: 'View Active Trip',
+            onPress: () => router.push({ pathname: '/active-trip', params: { rideId: existingActiveBooking.rideId } }),
+          },
+          { text: 'OK', style: 'cancel' }
+        ]
+      );
       return;
     }
 
-    // Build pickup/drop coords from navigation params
-    const pLat = parseFloat((pickupLat as string) || '0');
-    const pLng = parseFloat((pickupLng as string) || '0');
-    const dLat = parseFloat((dropLat as string) || '0');
-    const dLng = parseFloat((dropLng as string) || '0');
-
+    setIsSubmitting(true);
     try {
       await requestBooking(
-        ride!.id,
-        passengerPickup,
-        passengerDropoff,
-        pLat && pLng ? { lat: pLat, lng: pLng } : ride?.origin,
-        dLat && dLng ? { lat: dLat, lng: dLng } : ride?.destination,
+        rideId || `ride-${Date.now()}`,
+        originName,
+        destName,
+        originCoords,
+        destCoords,
+        riderStartPoint,
+        riderEndPoint
       );
-      router.push({
-        pathname: '/booking-status',
-        params: { rideId: ride!.id }
-      });
+      Alert.alert(
+        'Request Sent! 🎉',
+        'Your ride request has been sent to the driver. You will be notified once accepted.',
+        [
+          {
+            text: 'View Booking Status',
+            onPress: () => router.push({ pathname: '/booking-status', params: { rideId: rideId || '1' } }),
+          },
+        ]
+      );
     } catch (err: any) {
-      Alert.alert('Booking Failed', err?.message || 'Could not place booking request.');
+      Alert.alert('Booking Request Failed', err?.message || 'Unable to place ride request.');
+    } finally {
+      setIsSubmitting(false);
     }
   };
 
   const handleCall = () => {
-    makePhoneCall(ride.phone || '+9779841234567');
+    if (typeof makePhoneCall === 'function') {
+      makePhoneCall(driverPhone);
+    } else {
+      Linking.openURL(`tel:${driverPhone}`);
+    }
   };
 
-  const handleChat = () => {
-    startRiderChat(ride.id);
+  const handleMessage = () => {
+    startRiderChat(rideId || '1');
     router.push({
       pathname: '/chat-room',
-      params: { rideId: ride.id }
+      params: { rideId: rideId || '1' },
     });
   };
 
-  // Driver's location marker
-  const driverCurrentLocation = startCoord ? {
-    latitude: startCoord.latitude + 0.002,
-    longitude: startCoord.longitude + 0.002,
-  } : undefined;
-
-  // Waypoints removed (landmark lookup removed)
-  const waypoints: { coordinate: { latitude: number; longitude: number }; title: string }[] = [];
-
+  const handleBack = () => {
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
+  };
 
   return (
-    <View style={styles.rootContainer}>
-      {/* Top Navigation Header */}
-      <SafeAreaView style={{ backgroundColor: '#FFFFFF' }} edges={['top']}>
-        <View style={{ flexDirection: 'row', alignItems: 'center', paddingHorizontal: 16, paddingVertical: 12, borderBottomWidth: 1, borderBottomColor: '#E2E8F0', backgroundColor: '#FFFFFF' }}>
-          <TouchableOpacity style={{ padding: 4 }} onPress={() => router.back()}>
-            <Ionicons name="arrow-back" size={24} color={Colors.primary} />
-          </TouchableOpacity>
-          <Text style={{ fontSize: 16, fontWeight: 'bold', color: Colors.textPrimary, marginLeft: 12 }}>Ride Offer Details</Text>
-        </View>
-      </SafeAreaView>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      {/* Top Header */}
+      <View style={styles.header}>
+        <TouchableOpacity style={styles.backBtn} onPress={handleBack} activeOpacity={0.8}>
+          <Ionicons name="arrow-back" size={22} color={Colors.primary} />
+        </TouchableOpacity>
+        <Text style={styles.headerTitle}>Ride Offer Details</Text>
+      </View>
 
-      {/* Overlaying White Bottom Sheet */}
-      <View style={styles.bottomSheetCard}>
-        {/* Centered Handle Bar */}
-        <View style={styles.handleBar} />
-
-        <ScrollView showsVerticalScrollIndicator={false} contentContainerStyle={styles.scrollContent}>
-          
-          {/* Driver Route Corridor Banner */}
-          <View style={styles.corridorBanner}>
-            <Ionicons name="git-commit-sharp" size={18} color="#2563EB" />
-            <Text style={styles.corridorBannerTitle}>Driver's Published Route Corridor:</Text>
-            <Text style={styles.corridorBannerRoute} numberOfLines={1}>
-              {ride.route.join(' ➔ ')}
+      <ScrollView
+        style={styles.container}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator={false}
+      >
+        {/* ── 1. SMALL BOX MAP CARD ── */}
+        <View style={styles.mapBoxCard}>
+          <LocationPinPickerMap
+            originCoords={originCoords}
+            destCoords={destCoords}
+            originName={originName}
+            destName={destName}
+            showControls={false}
+            showBadge={false}
+            interactive={false}
+          />
+          <View style={styles.mapRouteOverlayBadge}>
+            <Ionicons name="navigate" size={14} color={Colors.primary} />
+            <Text style={styles.mapRouteOverlayText} numberOfLines={1}>
+              {originName} ➔ {destName}
             </Text>
           </View>
+        </View>
 
-          {/* Passenger Selects Custom Pickup & Drop-off Inputs */}
-          <View style={styles.passengerSelectBox}>
-            <Text style={styles.selectBoxHeading}>Choose Your Pickup & Drop-off Along Route:</Text>
-            
-            {/* Pickup Row */}
-            <View style={styles.inputRow}>
-              <Ionicons name="disc-outline" size={18} color="#16A34A" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Pickup location..."
-                value={passengerPickup}
-                onChangeText={setPassengerPickup}
-              />
-            </View>
+        {/* ── 2. ROUTE & DEPARTURE DETAILS CARD ── */}
+        <View style={styles.card}>
+          <Text style={styles.cardSectionTitle}>Route Details</Text>
 
-            <View style={styles.inputDivider} />
-
-            {/* Drop-off Row */}
-            <View style={styles.inputRow}>
-              <Ionicons name="location-sharp" size={18} color="#DC2626" style={styles.inputIcon} />
-              <TextInput
-                style={styles.input}
-                placeholder="Drop-off location..."
-                value={passengerDropoff}
-                onChangeText={setPassengerDropoff}
-              />
-            </View>
-
-            {/* Suggested Landmark Chips along Driver Route */}
-            <Text style={styles.quickSelectSubtext}>Quick select from driver's stops:</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipsScroll}>
-              {ride.route.map((landmark) => (
-                <TouchableOpacity
-                  key={landmark}
-                  style={styles.landmarkChip}
-                  onPress={() => {
-                    if (!passengerPickup || passengerPickup === landmark) {
-                      setPassengerPickup(landmark);
-                    } else {
-                      setPassengerDropoff(landmark);
-                    }
-                  }}
-                >
-                  <Text style={styles.landmarkChipText}>{landmark}</Text>
-                </TouchableOpacity>
-              ))}
-            </ScrollView>
-          </View>
-
-          {/* Real-time Validation Result Box */}
-          <View
-            style={[
-              styles.validationCard,
-              validationResult.isValid ? styles.validationCardSuccess : styles.validationCardError,
-            ]}
-          >
-            <Ionicons
-              name={validationResult.isValid ? 'checkmark-circle' : 'warning'}
-              size={22}
-              color={validationResult.isValid ? '#16A34A' : '#DC2626'}
-            />
+          {/* Rider's Full Travel Corridor */}
+          <View style={styles.riderFullRouteBox}>
+            <Ionicons name="navigate-circle" size={20} color={Colors.primary} />
             <View style={{ flex: 1 }}>
-              <Text
-                style={[
-                  styles.validationTitle,
-                  validationResult.isValid ? styles.validationTitleSuccess : styles.validationTitleError,
-                ]}
-              >
-                {validationResult.isValid ? 'Route Compatible ✅' : 'Invalid Journey ❌'}
-              </Text>
-              <Text
-                style={[
-                  styles.validationReason,
-                  validationResult.isValid ? styles.validationReasonSuccess : styles.validationReasonError,
-                ]}
-              >
-                {validationResult.reason}
-              </Text>
+              <Text style={styles.riderFullRouteLabel}>Rider's Full Route</Text>
+              <Text style={styles.riderFullRouteText}>{riderStartPoint} ➔ {riderEndPoint}</Text>
             </View>
           </View>
 
-          {/* Driver Profile Row */}
-          <View style={styles.driverCardRow}>
-            <View style={styles.photoWrapper}>
-              <Image source={{ uri: ride.riderPhoto }} style={styles.driverPhoto} />
-              <View style={styles.ratingBadgePill}>
-                <Ionicons name="star" size={10} color={Colors.warning} />
-                <Text style={styles.ratingBadgeText}>{ride.rating}</Text>
+          {/* Passenger's Segment Timeline */}
+          <Text style={styles.passengerSegmentHeader}>Your Requested Trip Segment</Text>
+          <View style={styles.timelineContainer}>
+            {/* Pickup */}
+            <View style={styles.timelineRow}>
+              <View style={styles.greenDotOutline}>
+                <View style={styles.greenDotInner} />
+              </View>
+              <View style={styles.stopTextContainer}>
+                <Text style={styles.stopLabelText}>Your Pickup Point</Text>
+                <Text style={styles.stopNameText}>{originName}</Text>
               </View>
             </View>
 
-            <View style={styles.driverDetails}>
-              <Text style={styles.driverName}>{ride.riderName}</Text>
-              <View style={styles.vehicleRow}>
-                <Ionicons name={ride.vehicleType === 'bike' ? 'bicycle' : 'speedometer-outline'} size={14} color="#64748B" />
-                <Text style={styles.vehicleText} numberOfLines={1}>
-                  {ride.vehicleName} • {ride.vehicleNumber}
-                </Text>
+            <View style={styles.timelineLine} />
+
+            {/* Destination */}
+            <View style={styles.timelineRow}>
+              <View style={styles.redDotOutline}>
+                <View style={styles.redDotInner} />
+              </View>
+              <View style={styles.stopTextContainer}>
+                <Text style={styles.stopLabelText}>Your Drop-off Point</Text>
+                <Text style={styles.stopNameText}>{destName}</Text>
+              </View>
+            </View>
+          </View>
+
+          {/* Departure & Available Seats Info Pills */}
+          <View style={styles.metaRow}>
+            <View style={styles.metaBadge}>
+              <Ionicons name="time-outline" size={16} color={Colors.primary} />
+              <Text style={styles.metaBadgeText}>{departureTimeText}</Text>
+            </View>
+            <View style={styles.metaBadge}>
+              <Ionicons name="people-outline" size={16} color="#16A34A" />
+              <Text style={styles.metaBadgeText}>{seatsLeftCount} seat{seatsLeftCount > 1 ? 's' : ''} left</Text>
+            </View>
+          </View>
+        </View>
+
+        {/* ── 3. RIDER & VEHICLE INFO CARD ── */}
+        <View style={styles.card}>
+          <Text style={styles.cardSectionTitle}>Rider & Vehicle</Text>
+
+          <View style={styles.driverProfileRow}>
+            <View style={styles.avatarWrapper}>
+              <Image source={{ uri: driverPhotoUrl }} style={styles.driverAvatar} />
+              <View style={styles.starRatingBadge}>
+                <Ionicons name="star" size={10} color="#F59E0B" />
+                <Text style={styles.starRatingText}>{driverRating.toFixed(1)}</Text>
               </View>
             </View>
 
-            {/* Message & Call Action Buttons */}
-            <View style={styles.driverActions}>
-              <TouchableOpacity style={styles.chatCircleButton} onPress={handleChat}>
-                <Ionicons name="chatbubble-ellipses" size={18} color="#2563EB" />
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.callCircleButton} onPress={handleCall}>
-                <Ionicons name="call" size={18} color="#FFF" />
-              </TouchableOpacity>
+            <View style={styles.driverMetaInfo}>
+              <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                <Text style={styles.driverNameText}>{driverName}</Text>
+                <Ionicons name="checkmark-circle" size={16} color={Colors.primary} />
+              </View>
+              <Text style={styles.kycVerifiedSub}>Verified Sarathi Rider</Text>
+
+              <View style={styles.vehicleBadgeRow}>
+                <Ionicons name="speedometer-outline" size={14} color={Colors.textMuted} />
+                <Text style={styles.vehicleText}>{vehicleModel} • {vehiclePlate}</Text>
+              </View>
             </View>
           </View>
+        </View>
 
-          {/* Fare & Request CTA Bar */}
-          <View style={styles.bottomCtaRow}>
-            <View>
-              <Text style={styles.fareLabel}>Total Fare</Text>
-              <Text style={styles.fareValue}>NPR {calculatedFare}</Text>
-            </View>
-            <TouchableOpacity
-              style={[
-                styles.requestButton,
-                !validationResult.isValid && styles.requestButtonDisabled,
-              ]}
-              onPress={handleBooking}
-              disabled={!validationResult.isValid}
-              activeOpacity={validationResult.isValid ? 0.85 : 1}
-            >
-              <Text style={styles.requestButtonText}>
-                {validationResult.isValid ? 'Request to Book' : 'Outside Route'}
-              </Text>
-              <Ionicons
-                name={validationResult.isValid ? 'chevron-forward' : 'lock-closed'}
-                size={18}
-                color="#FFF"
-              />
-            </TouchableOpacity>
+        {/* ── 4. ACTION BUTTONS: MESSAGE & CALL ── */}
+        <View style={styles.actionButtonsRow}>
+          <TouchableOpacity style={styles.messageActionBtn} onPress={handleMessage} activeOpacity={0.85}>
+            <Ionicons name="chatbubble-ellipses" size={20} color={Colors.primary} />
+            <Text style={styles.messageActionText}>Message Rider</Text>
+          </TouchableOpacity>
+
+          <TouchableOpacity style={styles.callActionBtn} onPress={handleCall} activeOpacity={0.85}>
+            <Ionicons name="call" size={20} color="#16A34A" />
+            <Text style={styles.callActionText}>Call Rider</Text>
+          </TouchableOpacity>
+        </View>
+      </ScrollView>
+
+      {/* ── 5. STICKY FOOTER CTA: PRICE & REQUEST RIDE ── */}
+      <SafeAreaView style={styles.stickyFooterArea} edges={['bottom']}>
+        <View style={styles.stickyFooterBar}>
+          <View>
+            <Text style={styles.fareLabel}>Total Fare</Text>
+            <Text style={styles.farePriceText}>NPR {farePrice}</Text>
           </View>
 
-        </ScrollView>
-      </View>
-    </View>
+          <TouchableOpacity
+            style={[styles.requestRideBtn, isSubmitting && { opacity: 0.7 }]}
+            onPress={handleBooking}
+            disabled={isSubmitting}
+            activeOpacity={0.85}
+          >
+            {isSubmitting ? (
+              <ActivityIndicator size="small" color="#FFFFFF" />
+            ) : (
+              <>
+                <Text style={styles.requestRideBtnText}>Request Ride</Text>
+                <Ionicons name="arrow-forward" size={18} color="#FFFFFF" />
+              </>
+            )}
+          </TouchableOpacity>
+        </View>
+      </SafeAreaView>
+    </SafeAreaView>
   );
 }
 
 const styles = StyleSheet.create({
-  rootContainer: {
-    flex: 1,
-    backgroundColor: '#FFF',
-  },
   safeArea: {
     flex: 1,
-    backgroundColor: '#FFF',
+    backgroundColor: '#F8FAFC',
   },
-  errorContainer: {
-    flex: 1,
-    justifyContent: 'center',
+  header: {
+    flexDirection: 'row',
     alignItems: 'center',
-    padding: 20,
-  },
-  errorText: {
-    fontSize: 18,
-    fontWeight: 'bold',
-    color: Colors.textPrimary,
-    marginBottom: 16,
-  },
-  backButton: {
-    backgroundColor: Colors.primary,
+    paddingHorizontal: 16,
     paddingVertical: 12,
-    paddingHorizontal: 24,
-    borderRadius: 8,
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
   },
-  backButtonText: {
-    color: '#FFF',
-    fontWeight: 'bold',
-  },
-  mapContainer: {
-    flex: 1,
-    position: 'relative',
-  },
-  floatingHeaderArea: {
-    position: 'absolute',
-    top: 10,
-    left: 16,
-    zIndex: 20,
-  },
-  floatingBackButton: {
+  backBtn: {
     width: 38,
     height: 38,
     borderRadius: 19,
-    backgroundColor: '#FFFFFF',
+    backgroundColor: '#F1F5F9',
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  headerTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  container: {
+    flex: 1,
+  },
+  scrollContent: {
+    padding: 16,
+    paddingBottom: 24,
+    gap: 16,
+  },
+  // 1. Map Box Card
+  mapBoxCard: {
+    height: 200,
+    width: '100%',
+    borderRadius: 18,
+    overflow: 'hidden',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    backgroundColor: '#FFFFFF',
+    position: 'relative',
+    elevation: 4,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.1,
+    shadowRadius: 6,
+  },
+  mapRouteOverlayBadge: {
+    position: 'absolute',
+    bottom: 12,
+    alignSelf: 'center',
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#FFFFFF',
+    paddingHorizontal: 14,
+    paddingVertical: 7,
+    borderRadius: 20,
+    elevation: 4,
     shadowColor: '#000',
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.15,
     shadowRadius: 4,
-    elevation: 4,
+    maxWidth: '90%',
   },
-  bottomSheetCard: {
+  mapRouteOverlayText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  // Cards General
+  card: {
     backgroundColor: '#FFFFFF',
-    borderTopLeftRadius: 24,
-    borderTopRightRadius: 24,
-    marginTop: -24,
-    paddingTop: 12,
-    paddingHorizontal: 16,
-    maxHeight: '65%',
+    borderRadius: 18,
+    padding: 16,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    elevation: 2,
     shadowColor: '#000',
-    shadowOffset: { width: 0, height: -4 },
-    shadowOpacity: 0.08,
-    shadowRadius: 10,
-    elevation: 10,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.05,
+    shadowRadius: 4,
   },
-  handleBar: {
-    width: 40,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: '#E2E8F0',
-    alignSelf: 'center',
-    marginBottom: 12,
-  },
-  scrollContent: {
-    paddingBottom: 24,
-  },
-  corridorBanner: {
-    backgroundColor: '#F8FAFC',
-    borderRadius: 10,
-    padding: 10,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    marginBottom: 12,
-  },
-  corridorBannerTitle: {
-    fontSize: 11,
-    fontWeight: '700',
-    color: '#64748B',
-    marginBottom: 2,
-  },
-  corridorBannerRoute: {
-    fontSize: 13,
-    fontWeight: 'bold',
-    color: '#1E293B',
-  },
-  passengerSelectBox: {
-    backgroundColor: '#FFFFFF',
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-    borderRadius: 12,
-    padding: 12,
-    marginBottom: 12,
-  },
-  selectBoxHeading: {
-    fontSize: 12,
-    fontWeight: '700',
-    color: Colors.textPrimary,
-    marginBottom: 8,
-  },
-  inputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    height: 40,
-  },
-  inputIcon: {
-    marginRight: 8,
-  },
-  input: {
-    flex: 1,
+  cardSectionTitle: {
     fontSize: 14,
-    fontWeight: '600',
+    fontWeight: 'bold',
     color: Colors.textPrimary,
+    marginBottom: 12,
   },
-  inputDivider: {
-    height: 1,
-    backgroundColor: '#F1F5F9',
-    marginVertical: 4,
-  },
-  quickSelectSubtext: {
-    fontSize: 10,
-    color: Colors.textMuted,
-    marginTop: 8,
-    marginBottom: 6,
-    fontWeight: '600',
-  },
-  chipsScroll: {
-    flexDirection: 'row',
-  },
-  landmarkChip: {
-    backgroundColor: '#F1F5F9',
-    paddingVertical: 4,
-    paddingHorizontal: 10,
-    borderRadius: 12,
-    marginRight: 6,
-    borderWidth: 1,
-    borderColor: '#E2E8F0',
-  },
-  landmarkChipText: {
-    fontSize: 11,
-    fontWeight: '600',
-    color: Colors.textPrimary,
-  },
-  validationCard: {
+  riderFullRouteBox: {
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 10,
+    backgroundColor: '#F0F9FF',
     padding: 12,
     borderRadius: 12,
     borderWidth: 1,
+    borderColor: '#BAE6FD',
     marginBottom: 14,
-    gap: 10,
   },
-  validationCardSuccess: {
-    backgroundColor: '#F0FDF4',
-    borderColor: '#BBF7D0',
+  riderFullRouteLabel: {
+    fontSize: 11,
+    fontWeight: '700',
+    color: '#0369A1',
+    textTransform: 'uppercase',
+    letterSpacing: 0.3,
   },
-  validationCardError: {
-    backgroundColor: '#FEF2F2',
-    borderColor: '#FECACA',
-  },
-  validationTitle: {
-    fontSize: 13,
-    fontWeight: 'bold',
-  },
-  validationTitleSuccess: {
-    color: '#15803D',
-  },
-  validationTitleError: {
-    color: '#B91C1C',
-  },
-  validationReason: {
-    fontSize: 12,
+  riderFullRouteText: {
+    fontSize: 14,
+    fontWeight: '800',
+    color: Colors.primary,
     marginTop: 1,
   },
-  validationReasonSuccess: {
-    color: '#166534',
+  passengerSegmentHeader: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textMuted,
+    marginBottom: 10,
+    textTransform: 'uppercase',
+    letterSpacing: 0.2,
   },
-  validationReasonError: {
-    color: '#991B1B',
-  },
-  driverCardRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    backgroundColor: '#FFFFFF',
-    paddingVertical: 8,
+  // Timeline
+  timelineContainer: {
+    paddingLeft: 4,
     marginBottom: 14,
   },
-  photoWrapper: {
+  timelineRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  greenDotOutline: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#DCFCE7',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  greenDotInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#16A34A',
+  },
+  redDotOutline: {
+    width: 20,
+    height: 20,
+    borderRadius: 10,
+    backgroundColor: '#FEE2E2',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  redDotInner: {
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: '#DC2626',
+  },
+  timelineLine: {
+    width: 2,
+    height: 24,
+    backgroundColor: '#CBD5E1',
+    marginLeft: 9,
+    marginVertical: 2,
+  },
+  stopTextContainer: {
+    flex: 1,
+  },
+  stopLabelText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    fontWeight: '600',
+  },
+  stopNameText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginTop: 1,
+  },
+  metaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  metaBadge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: '#F8FAFC',
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  metaBadgeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+  },
+  // Rider & Vehicle Profile Row
+  driverProfileRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 14,
+  },
+  avatarWrapper: {
     position: 'relative',
-    marginRight: 12,
   },
-  driverPhoto: {
-    width: 48,
-    height: 48,
-    borderRadius: 14,
+  driverAvatar: {
+    width: 54,
+    height: 54,
+    borderRadius: 27,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
-  ratingBadgePill: {
+  starRatingBadge: {
     position: 'absolute',
     bottom: -4,
     alignSelf: 'center',
     flexDirection: 'row',
     alignItems: 'center',
+    gap: 2,
     backgroundColor: '#FFFFFF',
-    paddingVertical: 2,
     paddingHorizontal: 6,
+    paddingVertical: 2,
     borderRadius: 8,
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    gap: 2,
+    elevation: 2,
   },
-  ratingBadgeText: {
+  starRatingText: {
     fontSize: 10,
-    fontWeight: '700',
+    fontWeight: 'bold',
     color: Colors.textPrimary,
   },
-  driverDetails: {
+  driverMetaInfo: {
     flex: 1,
   },
-  driverName: {
-    fontSize: 15,
-    fontWeight: '700',
+  driverNameText: {
+    fontSize: 16,
+    fontWeight: 'bold',
     color: Colors.textPrimary,
-    marginBottom: 2,
   },
-  vehicleRow: {
+  kycVerifiedSub: {
+    fontSize: 11,
+    fontWeight: '600',
+    color: Colors.primary,
+    marginTop: 1,
+  },
+  vehicleBadgeRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 4,
+    gap: 6,
+    marginTop: 6,
   },
   vehicleText: {
     fontSize: 12,
-    color: '#64748B',
-    fontWeight: '500',
+    color: Colors.textMuted,
+    fontWeight: '600',
   },
-  driverActions: {
+  // Action Buttons Row (Message & Call)
+  actionButtonsRow: {
     flexDirection: 'row',
+    gap: 12,
+  },
+  messageActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
+    backgroundColor: Colors.surface,
+    borderWidth: 1,
+    borderColor: Colors.accent + '35',
+    borderRadius: 14,
+    paddingVertical: 12,
   },
-  chatCircleButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#EFF6FF',
-    alignItems: 'center',
-    justifyContent: 'center',
+  messageActionText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: Colors.primary,
   },
-  callCircleButton: {
-    width: 38,
-    height: 38,
-    borderRadius: 19,
-    backgroundColor: '#C62026',
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  bottomCtaRow: {
+  callActionBtn: {
+    flex: 1,
     flexDirection: 'row',
-    justifyContent: 'space-between',
     alignItems: 'center',
-    paddingTop: 6,
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: '#F0FDF4',
+    borderWidth: 1,
+    borderColor: '#BBF7D0',
+    borderRadius: 14,
+    paddingVertical: 12,
+  },
+  callActionText: {
+    fontSize: 14,
+    fontWeight: '700',
+    color: '#15803D',
+  },
+  // Sticky Footer CTA Bar
+  stickyFooterArea: {
+    backgroundColor: '#FFFFFF',
+    borderTopWidth: 1,
+    borderTopColor: '#E2E8F0',
+  },
+  stickyFooterBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
   },
   fareLabel: {
     fontSize: 11,
-    fontWeight: '600',
     color: Colors.textMuted,
+    fontWeight: '600',
   },
-  fareValue: {
+  farePriceText: {
     fontSize: 20,
     fontWeight: '800',
     color: Colors.primary,
   },
-  requestButton: {
-    backgroundColor: '#C62026',
+  requestRideBtn: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingVertical: 12,
-    paddingHorizontal: 20,
-    borderRadius: 12,
-    gap: 6,
-    shadowColor: '#C62026',
+    justifyContent: 'center',
+    gap: 8,
+    backgroundColor: Colors.primary,
+    paddingHorizontal: 24,
+    paddingVertical: 14,
+    borderRadius: 14,
+    elevation: 4,
+    shadowColor: Colors.primary,
     shadowOffset: { width: 0, height: 4 },
     shadowOpacity: 0.2,
     shadowRadius: 6,
-    elevation: 4,
   },
-  requestButtonDisabled: {
-    backgroundColor: '#94A3B8',
-    shadowOpacity: 0,
-    elevation: 0,
-  },
-  requestButtonText: {
-    color: '#FFF',
-    fontWeight: 'bold',
-    fontSize: 14,
+  requestRideBtnText: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
 });

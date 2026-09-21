@@ -26,6 +26,64 @@ export interface LocationState {
   selectedSuggestion: PlaceSuggestion | null;
 }
 
+// Pre-loaded list of major cities, highway hubs, and intermediate stops in Nepal
+const NEPAL_LOCATIONS: PlaceSuggestion[] = [
+  { placeId: 'np-butwal', mainText: 'Butwal', secondaryText: 'Butwal Bus Park, East-West Highway, Rupandehi', description: 'Butwal, Rupandehi', coordinates: { lat: 27.7006, lng: 83.4484 } },
+  { placeId: 'np-khaireni', mainText: 'Khaireni', secondaryText: 'Khaireni, East-West Highway, Devdaha, Rupandehi', description: 'Khaireni, Devdaha', coordinates: { lat: 27.6500, lng: 83.5500 } },
+  { placeId: 'np-sunwal', mainText: 'Sunwal', secondaryText: 'Sunwal Chok, East-West Highway, Nawalparasi', description: 'Sunwal, Nawalparasi', coordinates: { lat: 27.6167, lng: 83.6333 } },
+  { placeId: 'np-bhumahi', mainText: 'Bhumahi', secondaryText: 'Bhumahi Chok, East-West Highway, Nawalparasi', description: 'Bhumahi, Nawalparasi', coordinates: { lat: 27.5800, lng: 83.6800 } },
+  { placeId: 'np-bardaghat', mainText: 'Bardaghat', secondaryText: 'Bardaghat Bus Stop, Nawalparasi', description: 'Bardaghat, Nawalparasi', coordinates: { lat: 27.5333, lng: 83.8000 } },
+  { placeId: 'np-bhairahawa', mainText: 'Bhairahawa', secondaryText: 'Bhairahawa / Gautam Buddha Intl Airport, Rupandehi', description: 'Bhairahawa, Rupandehi', coordinates: { lat: 27.5065, lng: 83.4485 } },
+  { placeId: 'np-tilottama', mainText: 'Tilottama', secondaryText: 'Tilottama (Manigram / Drivertol), Rupandehi', description: 'Tilottama, Rupandehi', coordinates: { lat: 27.6500, lng: 83.4667 } },
+  { placeId: 'np-kalanki', mainText: 'Kalanki', secondaryText: 'Kalanki Chok, Ring Road, Kathmandu', description: 'Kalanki, Kathmandu', coordinates: { lat: 27.6938, lng: 85.2817 } },
+  { placeId: 'np-koteshwor', mainText: 'Koteshwor', secondaryText: 'Koteshwor Chok, Ring Road, Kathmandu', description: 'Koteshwor, Kathmandu', coordinates: { lat: 27.6788, lng: 85.3486 } },
+  { placeId: 'np-kathmandu', mainText: 'Kathmandu', secondaryText: 'Kathmandu City Center, Bagmati', description: 'Kathmandu, Nepal', coordinates: { lat: 27.7172, lng: 85.3240 } },
+  { placeId: 'np-pokhara', mainText: 'Pokhara', secondaryText: 'Pokhara Lakeside / Prithvi Chok, Kaski', description: 'Pokhara, Kaski', coordinates: { lat: 28.2096, lng: 83.9856 } },
+  { placeId: 'np-narayangarh', mainText: 'Narayangarh', secondaryText: 'Narayangarh / Bharatpur, Chitwan', description: 'Narayangarh, Chitwan', coordinates: { lat: 27.6833, lng: 84.4333 } },
+  { placeId: 'np-hetauda', mainText: 'Hetauda', secondaryText: 'Hetauda Bus Park, Makwanpur', description: 'Hetauda, Makwanpur', coordinates: { lat: 27.4286, lng: 85.0322 } },
+  { placeId: 'np-itahari', mainText: 'Itahari', secondaryText: 'Itahari Main Chok, Sunsari', description: 'Itahari, Sunsari', coordinates: { lat: 26.6667, lng: 87.2833 } },
+  { placeId: 'np-dharan', mainText: 'Dharan', secondaryText: 'Bhanu Chok, Dharan, Sunsari', description: 'Dharan, Sunsari', coordinates: { lat: 26.8126, lng: 87.2834 } },
+  { placeId: 'np-lumbini', mainText: 'Lumbini', secondaryText: 'Lumbini Sacred Garden, Rupandehi', description: 'Lumbini, Rupandehi', coordinates: { lat: 27.4833, lng: 83.2833 } },
+];
+
+async function fetchNepalNominatimPlaces(query: string): Promise<PlaceSuggestion[]> {
+  if (!query || query.trim().length < 2) return [];
+  try {
+    const url = `https://nominatim.openstreetmap.org/search?format=json&q=${encodeURIComponent(query.trim())}&countrycodes=np&limit=6&addressdetails=1`;
+    const res = await fetch(url, {
+      headers: {
+        'Accept': 'application/json',
+        'User-Agent': 'SarathiRideSharingNepal/1.0',
+      },
+    });
+
+    if (!res.ok) return [];
+
+    const data = await res.json();
+    if (!Array.isArray(data)) return [];
+
+    return data.map((item: any) => {
+      const parts = (item.display_name || '').split(',');
+      const mainText = parts[0] ? parts[0].trim() : item.display_name;
+      const secondaryText = parts.slice(1, 4).map((p: string) => p.trim()).join(', ');
+
+      return {
+        placeId: `osm-${item.place_id}`,
+        mainText,
+        secondaryText: secondaryText || 'Nepal',
+        description: item.display_name,
+        coordinates: {
+          lat: parseFloat(item.lat),
+          lng: parseFloat(item.lon),
+        },
+      };
+    });
+  } catch (err) {
+    console.warn('[Nominatim fetch error]', err);
+    return [];
+  }
+}
+
 export function useLocationSearch() {
   // Origin state
   const [origin, setOrigin] = useState<LocationState>({
@@ -60,10 +118,8 @@ export function useLocationSearch() {
   // Debounce timers & Request sequence tracking (prevents async race conditions)
   const originTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const destTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const originRequestIdRef = useRef<number>(0);
-  const destRequestIdRef = useRef<number>(0);
 
-  // Debounced search for Origin with Geocoding fallback
+  // Debounced search for Origin with local dictionary & OpenStreetMap Nominatim
   const handleOriginChange = useCallback((text: string) => {
     setOrigin(prev => ({
       ...prev,
@@ -82,16 +138,36 @@ export function useLocationSearch() {
       return;
     }
 
-    const currentReqId = ++originRequestIdRef.current;
+    const query = text.toLowerCase().trim();
     setIsSearchingOrigin(true);
 
-    originTimerRef.current = setTimeout(() => {
+    originTimerRef.current = setTimeout(async () => {
+      // 1. Local fast dictionary matches
+      const localMatches = NEPAL_LOCATIONS.filter(
+        item => item.mainText.toLowerCase().includes(query) || item.secondaryText.toLowerCase().includes(query)
+      );
+
+      // 2. OpenStreetMap Nominatim API for entire Nepal
+      let osmMatches: PlaceSuggestion[] = [];
+      if (query.length >= 2) {
+        osmMatches = await fetchNepalNominatimPlaces(query);
+      }
+
+      // Combine local + OSM matches (deduplicated)
+      const combined = [...localMatches];
+      for (const osmItem of osmMatches) {
+        if (!combined.some(c => c.mainText.toLowerCase() === osmItem.mainText.toLowerCase())) {
+          combined.push(osmItem);
+        }
+      }
+
+      setOriginSuggestions(combined);
       setIsSearchingOrigin(false);
-      setOriginSuggestions([]);
-    }, 200);
+      setShowOriginNotFound(combined.length === 0);
+    }, 300);
   }, []);
 
-  // Debounced search for Destination
+  // Debounced search for Destination with OpenStreetMap Nominatim
   const handleDestChange = useCallback((text: string) => {
     setDestination(prev => ({
       ...prev,
@@ -110,12 +186,33 @@ export function useLocationSearch() {
       return;
     }
 
+    const query = text.toLowerCase().trim();
     setIsSearchingDest(true);
 
-    destTimerRef.current = setTimeout(() => {
+    destTimerRef.current = setTimeout(async () => {
+      // 1. Local fast dictionary matches
+      const localMatches = NEPAL_LOCATIONS.filter(
+        item => item.mainText.toLowerCase().includes(query) || item.secondaryText.toLowerCase().includes(query)
+      );
+
+      // 2. OpenStreetMap Nominatim API for entire Nepal
+      let osmMatches: PlaceSuggestion[] = [];
+      if (query.length >= 2) {
+        osmMatches = await fetchNepalNominatimPlaces(query);
+      }
+
+      // Combine local + OSM matches (deduplicated)
+      const combined = [...localMatches];
+      for (const osmItem of osmMatches) {
+        if (!combined.some(c => c.mainText.toLowerCase() === osmItem.mainText.toLowerCase())) {
+          combined.push(osmItem);
+        }
+      }
+
+      setDestSuggestions(combined);
       setIsSearchingDest(false);
-      setDestSuggestions([]);
-    }, 200);
+      setShowDestNotFound(combined.length === 0);
+    }, 300);
   }, []);
 
   // Select suggestion for Origin

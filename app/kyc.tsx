@@ -51,7 +51,7 @@ const DOCUMENT_TYPES: DocTypeOption[] = [
 ];
 
 export default function KYCScreen() {
-  const { user } = useApp();
+  const { user, refreshKycStatus } = useApp();
   const [selectedDocType, setSelectedDocType] = useState<DocumentType>('NID');
   const [isDropdownOpen, setIsDropdownOpen] = useState(false);
   const [isSourceModalOpen, setIsSourceModalOpen] = useState(false);
@@ -66,7 +66,11 @@ export default function KYCScreen() {
   const selectedDocObj = DOCUMENT_TYPES.find(d => d.type === selectedDocType) || DOCUMENT_TYPES[0];
 
   const handleBack = () => {
-    router.back();
+    if (router.canGoBack()) {
+      router.back();
+    } else {
+      router.replace('/(tabs)');
+    }
   };
 
   const handleImagePicked = (uri: string) => {
@@ -138,7 +142,14 @@ export default function KYCScreen() {
 
     setIsSubmitting(true);
     try {
-      const { error } = await supabase.from('kyc_verifications').upsert({
+      // Check for existing record ID to safely update instead of inserting duplicate key
+      const { data: existingRecord } = await supabase
+        .from('kyc_verifications')
+        .select('id')
+        .eq('user_id', user?.id)
+        .maybeSingle();
+
+      const kycPayload: any = {
         user_id: user?.id,
         id_type: selectedDocType.toLowerCase(),
         id_number: 'UPLOADED_DOCUMENT',
@@ -146,8 +157,17 @@ export default function KYCScreen() {
         id_front_image: idFrontUri,
         license_front_image: licenseFrontUri,
         status: 'pending',
+        rejection_reason: null,
         submitted_at: new Date().toISOString(),
-      });
+      };
+
+      if (existingRecord?.id) {
+        kycPayload.id = existingRecord.id;
+      }
+
+      const { error } = await supabase
+        .from('kyc_verifications')
+        .upsert(kycPayload, { onConflict: 'user_id' });
 
       setIsSubmitting(false);
 
@@ -156,9 +176,14 @@ export default function KYCScreen() {
         return;
       }
 
+      await refreshKycStatus();
+
+      const isResubmission = user?.kycStatus === 'REJECTED';
       Alert.alert(
-        'KYC Submitted',
-        'Your document photos (Identity + Driving License) have been submitted successfully and are pending admin review.',
+        isResubmission ? 'KYC Resubmitted' : 'KYC Submitted',
+        isResubmission
+          ? 'Your updated document photos have been resubmitted successfully and are pending admin review.'
+          : 'Your document photos (Identity + Driving License) have been submitted successfully and are pending admin review.',
         [{ text: 'Done', onPress: () => router.replace('/(tabs)') }]
       );
     } catch (err: any) {
@@ -180,6 +205,22 @@ export default function KYCScreen() {
 
       <KeyboardAvoidingView style={{ flex: 1 }} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
         <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {/* Rejection Banner if previously rejected */}
+          {user?.kycStatus === 'REJECTED' && (
+            <View style={styles.rejectionBanner}>
+              <Ionicons name="alert-circle" size={26} color="#DC2626" />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.rejectionBannerTitle}>Previous Request Rejected</Text>
+                <Text style={styles.rejectionBannerReason}>
+                  Reason: {user.kycRejectionReason || 'Document photo was unreadable or invalid.'}
+                </Text>
+                <Text style={styles.rejectionBannerSub}>
+                  Please upload clear, valid photos of your documents to re-submit your verification.
+                </Text>
+              </View>
+            </View>
+          )}
+
           {/* Banner */}
           <View style={styles.introCard}>
             <Ionicons name="shield-checkmark" size={32} color={Colors.primary} />
@@ -432,6 +473,34 @@ const styles = StyleSheet.create({
   scrollContent: {
     padding: 20,
     paddingBottom: 48,
+  },
+  rejectionBanner: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#FCA5A5',
+    borderRadius: 16,
+    padding: 16,
+    marginBottom: 16,
+  },
+  rejectionBannerTitle: {
+    fontSize: 15,
+    fontWeight: 'bold',
+    color: '#991B1B',
+    marginBottom: 4,
+  },
+  rejectionBannerReason: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#B91C1C',
+    marginBottom: 4,
+  },
+  rejectionBannerSub: {
+    fontSize: 12,
+    color: '#7F1D1D',
+    lineHeight: 16,
   },
   introCard: {
     flexDirection: 'row',

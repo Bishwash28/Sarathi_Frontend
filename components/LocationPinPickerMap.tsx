@@ -20,136 +20,89 @@ export interface PinLocation {
 }
 
 interface LocationPinPickerProps {
-  initialLocation?: PinLocation | null;
-  targetType?: 'origin' | 'destination' | null;
-  onConfirmPin: (coords: PinLocation, placeName?: string) => void;
-  quickLocations?: Array<{ name: string; lat: number; lng: number }>;
+  originCoords?: PinLocation | null;
+  destCoords?: PinLocation | null;
+  originName?: string;
+  destName?: string;
+  activeTarget?: 'origin' | 'destination';
+  showControls?: boolean;
+  showBadge?: boolean;
+  interactive?: boolean;
+  onSelectCoords?: (coords: PinLocation) => void;
+  onConfirmPin?: (coords: PinLocation, placeName?: string) => void;
 }
 
 const DEFAULT_NEPAL_CENTER: PinLocation = {
-  lat: 28.3949,
-  lng: 84.1240,
+  lat: 27.7172,
+  lng: 85.3240,
 };
 
 export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
-  initialLocation,
-  targetType = 'origin',
+  originCoords,
+  destCoords,
+  originName,
+  destName,
+  activeTarget = 'origin',
+  showControls = true,
+  showBadge = true,
+  interactive = true,
+  onSelectCoords,
   onConfirmPin,
 }) => {
-  const nativeMapRef = useRef<MapView | null>(null);
   const webViewRef = useRef<WebView | null>(null);
-  const [isMapReady, setIsMapReady] = useState(false);
+  const [isFetchingGPS, setIsFetchingGPS] = useState(false);
+  const [resolvedPlaceName, setResolvedPlaceName] = useState<string | null>(null);
+  const [isGeocoding, setIsGeocoding] = useState(false);
 
-  // Active raw pin coordinates state (used for backend submission)
-  const [currentPin, setCurrentPin] = useState<PinLocation>(() => {
-    return initialLocation && initialLocation.lat && initialLocation.lng
-      ? initialLocation
-      : DEFAULT_NEPAL_CENTER;
-  });
+  const pinColor = activeTarget === 'destination' ? '#DC2626' : '#16A34A';
+  const currentPin = activeTarget === 'destination' && destCoords?.lat
+    ? destCoords
+    : (originCoords?.lat ? originCoords : DEFAULT_NEPAL_CENTER);
 
-  // Display place name & geocode loading states
-  const [resolvedPlaceName, setResolvedPlaceName] = useState<string>('');
-  const [isGeocoding, setIsGeocoding] = useState<boolean>(false);
-  const [isFetchingGPS, setIsFetchingGPS] = useState<boolean>(false);
+  const currentCenter = currentPin;
 
-  // Perform place name formatting on gesture end
-  const fetchPlaceName = useCallback((lat: number, lng: number) => {
-    setResolvedPlaceName(`${lat.toFixed(4)}, ${lng.toFixed(4)}`);
-  }, []);
-
-  // Center map on user's current GPS location
-  const handleCenterOnMyLocation = useCallback(async () => {
-    setIsFetchingGPS(true);
-    try {
-      const { status } = await Location.requestForegroundPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Permission Needed', 'Location permission needed to use this feature.');
-        setIsFetchingGPS(false);
-        return;
-      }
-
-      const location = await Location.getCurrentPositionAsync({
-        accuracy: Location.Accuracy.High,
-      });
-
-      const gpsCoords: PinLocation = {
-        lat: location.coords.latitude,
-        lng: location.coords.longitude,
-      };
-
-      // 1. Update internal pin state & map views immediately
-      setCurrentPin(gpsCoords);
-
-      if (nativeMapRef.current) {
-        nativeMapRef.current.animateToRegion({
-          latitude: gpsCoords.lat,
-          longitude: gpsCoords.lng,
-          latitudeDelta: 0.01,
-          longitudeDelta: 0.01,
-        }, 800);
-      }
-
-      if (webViewRef.current) {
-        webViewRef.current.injectJavaScript(
-          `if (window.updatePin) { window.updatePin(${gpsCoords.lat}, ${gpsCoords.lng}); } true;`
-        );
-      }
-
-      const fetchedName = `${gpsCoords.lat.toFixed(4)}, ${gpsCoords.lng.toFixed(4)}`;
-      setResolvedPlaceName(fetchedName);
-      onConfirmPin(gpsCoords, fetchedName);
-    } catch (err) {
-      console.warn('[LocationPinPickerMap] GPS locate error:', err);
-      Alert.alert('Location Error', 'Unable to get current location.');
-    } finally {
-      setIsFetchingGPS(false);
-    }
-  }, [onConfirmPin]);
-
-  // Sync state & update map view when initialLocation changes
+  // Reverse geocode to display human readable place name in live badge
   useEffect(() => {
-    if (initialLocation && initialLocation.lat && initialLocation.lng) {
-      setCurrentPin(initialLocation);
-      fetchPlaceName(initialLocation.lat, initialLocation.lng);
-
-      if (nativeMapRef.current) {
-        nativeMapRef.current.animateToRegion({
-          latitude: initialLocation.lat,
-          longitude: initialLocation.lng,
-          latitudeDelta: 0.03,
-          longitudeDelta: 0.03,
-        }, 800);
-      }
-
-      if (webViewRef.current) {
-        webViewRef.current.injectJavaScript(
-          `if (window.updatePin) { window.updatePin(${initialLocation.lat}, ${initialLocation.lng}); } true;`
-        );
-      }
+    let isMounted = true;
+    const pin = activeTarget === 'destination' ? destCoords : originCoords;
+    if (pin && pin.lat && pin.lng && showBadge) {
+      setIsGeocoding(true);
+      Location.reverseGeocodeAsync({ latitude: pin.lat, longitude: pin.lng })
+        .then((res) => {
+          if (!isMounted) return;
+          if (res && res.length > 0) {
+            const item = res[0];
+            const nameParts = [item.name || item.street, item.subregion || item.city || item.district].filter(Boolean);
+            const formatted = nameParts.join(', ');
+            setResolvedPlaceName(formatted && !formatted.includes('+') ? formatted : `${pin.lat.toFixed(4)}, ${pin.lng.toFixed(4)}`);
+          } else {
+            setResolvedPlaceName(`${pin.lat.toFixed(4)}, ${pin.lng.toFixed(4)}`);
+          }
+        })
+        .catch(() => {
+          if (isMounted) setResolvedPlaceName(`${pin.lat.toFixed(4)}, ${pin.lng.toFixed(4)}`);
+        })
+        .finally(() => {
+          if (isMounted) setIsGeocoding(false);
+        });
     } else {
-      fetchPlaceName(DEFAULT_NEPAL_CENTER.lat, DEFAULT_NEPAL_CENTER.lng);
+      setResolvedPlaceName(null);
     }
-  }, [initialLocation, fetchPlaceName]);
+    return () => {
+      isMounted = false;
+    };
+  }, [originCoords, destCoords, activeTarget, showBadge]);
 
-  const handleMarkerDragEnd = (e: any) => {
-    const coords = e.nativeEvent.coordinate;
-    if (coords) {
-      const newPin = { lat: coords.latitude, lng: coords.longitude };
-      setCurrentPin(newPin);
-      fetchPlaceName(coords.latitude, coords.longitude);
-      onConfirmPin(newPin, resolvedPlaceName || undefined);
+  // Sync map center & route when active target coords or names change
+  useEffect(() => {
+    if (webViewRef.current) {
+      const oNameEsc = JSON.stringify(originName || resolvedPlaceName || 'Pickup');
+      const dNameEsc = JSON.stringify(destName || 'Destination');
+      webViewRef.current.injectJavaScript(
+        `if (window.updateMapPositions) { window.updateMapPositions(${originCoords?.lat ?? 'null'}, ${originCoords?.lng ?? 'null'}, ${destCoords?.lat ?? 'null'}, ${destCoords?.lng ?? 'null'}, '${activeTarget}', ${oNameEsc}, ${dNameEsc}); } true;`
+      );
     }
-  };
-
-  const handleMapPress = (e: any) => {
-    const coords = e.nativeEvent.coordinate;
-    if (coords) {
-      const newPin = { lat: coords.latitude, lng: coords.longitude };
-      setCurrentPin(newPin);
-      fetchPlaceName(coords.latitude, coords.longitude);
-      onConfirmPin(newPin, resolvedPlaceName || undefined);
-    }
-  };
+  }, [originCoords, destCoords, activeTarget, originName, destName, resolvedPlaceName]);
 
   const handleZoomIn = useCallback(() => {
     if (webViewRef.current) {
@@ -163,9 +116,36 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
     }
   }, []);
 
-  const pinColor = targetType === 'destination' ? '#DC2626' : Colors.primary;
+  const handleCenterOnMyLocation = async () => {
+    try {
+      setIsFetchingGPS(true);
+      const { status } = await Location.requestForegroundPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Permission to access device location was denied.');
+        setIsFetchingGPS(false);
+        return;
+      }
+      const loc = await Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced });
+      const coords = { lat: loc.coords.latitude, lng: loc.coords.longitude };
+      onSelectCoords?.(coords);
+      if (webViewRef.current) {
+        const oNameEsc = JSON.stringify(originName || 'Pickup');
+        const dNameEsc = JSON.stringify(destName || 'Destination');
+        webViewRef.current.injectJavaScript(
+          `if (window.updateMapPositions) { window.updateMapPositions(${activeTarget === 'origin' ? coords.lat : (originCoords?.lat ?? 'null')}, ${activeTarget === 'origin' ? coords.lng : (originCoords?.lng ?? 'null')}, ${activeTarget === 'destination' ? coords.lat : (destCoords?.lat ?? 'null')}, ${activeTarget === 'destination' ? coords.lng : (destCoords?.lng ?? 'null')}, '${activeTarget}', ${oNameEsc}, ${dNameEsc}); } true;`
+        );
+      }
+    } catch (e) {
+      console.warn('GPS location fetch error:', e);
+    } finally {
+      setIsFetchingGPS(false);
+    }
+  };
 
-  // HTML content for Leaflet map fallback
+  const initialOrigName = JSON.stringify(originName || 'Pickup');
+  const initialDestName = JSON.stringify(destName || 'Destination');
+
+  // Leaflet HTML with Standard Light OpenStreetMap Tiles & Minimal Professional Markers
   const leafletHTML = `
     <!DOCTYPE html>
     <html>
@@ -174,51 +154,234 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
         <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
         <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
         <style>
-          html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background: #e2e8f0; }
-          .leaflet-container { font-family: sans-serif; }
+          html, body, #map { height: 100%; width: 100%; margin: 0; padding: 0; background: #f8fafc; }
+          .leaflet-container { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #f8fafc; }
+          .clean-orig-pin, .clean-dest-pin, .route-tooltip-container { background: transparent; border: none; }
         </style>
       </head>
       <body>
         <div id="map"></div>
         <script>
-          var map = L.map('map', { zoomControl: false }).setView([${currentPin.lat}, ${currentPin.lng}], 13);
+          var isInteractive = ${interactive ? 'true' : 'false'};
+          var map = L.map('map', {
+            zoomControl: false,
+            dragging: isInteractive,
+            touchZoom: isInteractive,
+            doubleClickZoom: isInteractive,
+            scrollWheelZoom: isInteractive,
+            boxZoom: isInteractive
+          }).setView([${currentCenter.lat}, ${currentCenter.lng}], 12);
+          
+          // Clean Light OpenStreetMap tile layer (No API Key Required)
           L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
             maxZoom: 19,
             attribution: '© OpenStreetMap'
           }).addTo(map);
 
-          var marker = L.marker([${currentPin.lat}, ${currentPin.lng}], { draggable: true }).addTo(map);
+          var origMarker = null;
+          var destMarker = null;
+          var routePolyline = null;
+          var routeTooltipMarker = null;
 
           function notifyParent(lat, lng) {
-            if (window.ReactNativeWebView) {
+            if (isInteractive && window.ReactNativeWebView) {
               window.ReactNativeWebView.postMessage(JSON.stringify({ lat: lat, lng: lng }));
             }
           }
 
-          marker.on('dragend', function(e) {
-            var latlng = marker.getLatLng();
-            notifyParent(latlng.lat, latlng.lng);
-          });
+          function createOrigIcon(label) {
+            var name = label || 'Pickup';
+            return L.divIcon({
+              className: 'clean-orig-pin',
+              html: '<div style="display:flex; align-items:center; gap:6px; pointer-events:none; transform:translate(-8px, -8px);">' +
+                      '<div style="width:16px; height:16px; border-radius:50%; background:#FFFFFF; border:4px solid #0F172A; box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>' +
+                      '<span style="font-size:13px; font-weight:800; color:#0F172A; font-family:-apple-system, sans-serif; text-shadow:-1px -1px 0 #FFF, 1px -1px 0 #FFF, -1px 1px 0 #FFF, 1px 1px 0 #FFF, 0 2px 4px rgba(255,255,255,0.95); white-space:nowrap;">' + name + '</span>' +
+                    '</div>',
+              iconSize: [0, 0]
+            });
+          }
 
-          map.on('click', function(e) {
-            marker.setLatLng(e.latlng);
-            notifyParent(e.latlng.lat, e.latlng.lng);
-          });
+          function createDestIcon(label) {
+            var name = label || 'Destination';
+            return L.divIcon({
+              className: 'clean-dest-pin',
+              html: '<div style="display:flex; align-items:center; gap:6px; pointer-events:none; transform:translate(-12px, -24px);">' +
+                      '<svg width="24" height="28" viewBox="0 0 24 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 2px 5px rgba(0,0,0,0.35));">' +
+                        '<path d="M12 0C5.37 0 0 5.37 0 12C0 21 12 28 12 28C12 28 24 21 24 12C24 5.37 18.63 0 12 0Z" fill="#DC2626"/>' +
+                        '<circle cx="12" cy="11" r="4.5" fill="#FFFFFF"/>' +
+                      '</svg>' +
+                      '<span style="font-size:13px; font-weight:800; color:#0F172A; font-family:-apple-system, sans-serif; text-shadow:-1px -1px 0 #FFF, 1px -1px 0 #FFF, -1px 1px 0 #FFF, 1px 1px 0 #FFF, 0 2px 4px rgba(255,255,255,0.95); white-space:nowrap;">' + name + '</span>' +
+                    '</div>',
+              iconSize: [0, 0]
+            });
+          }
 
-          window.updatePin = function(lat, lng) {
-            marker.setLatLng([lat, lng]);
-            map.panTo([lat, lng]);
+          function calculateDistanceKm(lat1, lon1, lat2, lon2) {
+            var R = 6371;
+            var dLat = (lat2 - lat1) * Math.PI / 180;
+            var dLon = (lon2 - lon1) * Math.PI / 180;
+            var a = Math.sin(dLat/2) * Math.sin(dLat/2) +
+                    Math.cos(lat1 * Math.PI / 180) * Math.cos(lat2 * Math.PI / 180) *
+                    Math.sin(dLon/2) * Math.sin(dLon/2);
+            var c = 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+            return R * c;
+          }
+
+          function renderRouteTooltip(midPoint, estMins, distKmStr) {
+            if (routeTooltipMarker) { map.removeLayer(routeTooltipMarker); routeTooltipMarker = null; }
+
+            var customTooltipIcon = L.divIcon({
+              className: 'route-tooltip-container',
+              html: '<div style="background:#0F172A; color:#FFFFFF; padding:8px 14px; border-radius:12px; font-family:-apple-system, sans-serif; box-shadow:0 8px 24px rgba(0,0,0,0.6); border:1.5px solid #1E293B; text-align:left; transform:translate(-50%, -100%); margin-top:-14px; min-width:90px;">' +
+                      '<div style="font-size:15px; font-weight:800; display:flex; align-items:center; gap:6px; color:#FFFFFF; line-height:1.2;">' +
+                        '<span style="font-size:16px;">🚗</span> <span>' + estMins + ' min</span>' +
+                      '</div>' +
+                      '<div style="font-size:12px; color:#94A3B8; margin-top:2px; font-weight:700; padding-left:22px;">' + distKmStr + ' km</div>' +
+                    '</div>',
+              iconSize: [0, 0]
+            });
+
+            routeTooltipMarker = L.marker(midPoint, { icon: customTooltipIcon, interactive: false }).addTo(map);
+          }
+
+          function updateRouteLine(oLat, oLng, dLat, dLng) {
+            if (routePolyline) { map.removeLayer(routePolyline); routePolyline = null; }
+            if (routeTooltipMarker) { map.removeLayer(routeTooltipMarker); routeTooltipMarker = null; }
+
+            if (oLat !== null && oLng !== null && dLat !== null && dLng !== null &&
+                oLat !== undefined && oLng !== undefined && dLat !== undefined && dLng !== undefined) {
+              
+              var osrmUrl = 'https://router.project-osrm.org/route/v1/driving/' + oLng + ',' + oLat + ';' + dLng + ',' + dLat + '?overview=full&geometries=geojson';
+
+              fetch(osrmUrl)
+                .then(function(res) { return res.json(); })
+                .then(function(data) {
+                  var roadCoords = [];
+                  var distKmStr = '0.0';
+                  var estMins = 1;
+
+                  if (data && data.code === 'Ok' && data.routes && data.routes.length > 0) {
+                    var route = data.routes[0];
+                    distKmStr = (route.distance / 1000).toFixed(1);
+                    estMins = Math.max(1, Math.round(route.duration / 60));
+                    roadCoords = route.geometry.coordinates.map(function(c) { return [c[1], c[0]]; });
+                  } else {
+                    roadCoords = [[oLat, oLng], [dLat, dLng]];
+                    var dKm = calculateDistanceKm(oLat, oLng, dLat, dLng);
+                    distKmStr = dKm.toFixed(1);
+                    estMins = Math.max(1, Math.round((dKm / 35) * 60));
+                  }
+
+                  // Draw Vibrant Cyan Road Polyline matching user screenshot
+                  routePolyline = L.polyline(roadCoords, {
+                    color: '#00C4DF',
+                    weight: 6,
+                    opacity: 0.95,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                  }).addTo(map);
+
+                  // Floating Callout Tooltip on road midpoint
+                  var midIdx = Math.floor(roadCoords.length / 2);
+                  var midPt = roadCoords[midIdx] || [(oLat + dLat)/2, (oLng + dLng)/2];
+                  renderRouteTooltip(midPt, estMins, distKmStr);
+
+                  try {
+                    map.fitBounds(routePolyline.getBounds(), { padding: [40, 40] });
+                  } catch (e) {}
+                })
+                .catch(function() {
+                  // Offline / Network Fallback
+                  var roadCoords = [[oLat, oLng], [dLat, dLng]];
+                  var dKm = calculateDistanceKm(oLat, oLng, dLat, dLng);
+                  var distKmStr = dKm.toFixed(1);
+                  var estMins = Math.max(1, Math.round((dKm / 35) * 60));
+
+                  routePolyline = L.polyline(roadCoords, {
+                    color: '#00C4DF',
+                    weight: 6,
+                    opacity: 0.95,
+                    lineCap: 'round',
+                    lineJoin: 'round'
+                  }).addTo(map);
+
+                  var midPt = [(oLat + dLat)/2, (oLng + dLng)/2];
+                  renderRouteTooltip(midPt, estMins, distKmStr);
+
+                  try {
+                    map.fitBounds(routePolyline.getBounds(), { padding: [40, 40] });
+                  } catch (e) {}
+                });
+            }
+          }
+
+          ${originCoords?.lat ? `
+            origMarker = L.marker([${originCoords.lat}, ${originCoords.lng}], { draggable: isInteractive, icon: createOrigIcon(${initialOrigName}) }).addTo(map);
+            if (isInteractive) {
+              origMarker.on('dragend', function(e) {
+                var ll = e.target.getLatLng();
+                notifyParent(ll.lat, ll.lng);
+              });
+            }
+          ` : ''}
+
+          ${destCoords?.lat ? `
+            destMarker = L.marker([${destCoords.lat}, ${destCoords.lng}], { draggable: isInteractive, icon: createDestIcon(${initialDestName}) }).addTo(map);
+            if (isInteractive) {
+              destMarker.on('dragend', function(e) {
+                var ll = e.target.getLatLng();
+                notifyParent(ll.lat, ll.lng);
+              });
+            }
+          ` : ''}
+
+          ${originCoords?.lat && destCoords?.lat ? `
+            updateRouteLine(${originCoords.lat}, ${originCoords.lng}, ${destCoords.lat}, ${destCoords.lng});
+          ` : ''}
+
+          if (isInteractive) {
+            map.on('click', function(e) {
+              notifyParent(e.latlng.lat, e.latlng.lng);
+            });
+          }
+
+          window.updateMapPositions = function(oLat, oLng, dLat, dLng, activeTarget, oName, dName) {
+            if (oLat !== null && oLng !== null && oLat !== undefined && oLng !== undefined) {
+              if (!origMarker) {
+                origMarker = L.marker([oLat, oLng], { draggable: isInteractive, icon: createOrigIcon(oName) }).addTo(map);
+                if (isInteractive) {
+                  origMarker.on('dragend', function(e) { notifyParent(e.target.getLatLng().lat, e.target.getLatLng().lng); });
+                }
+              } else {
+                origMarker.setLatLng([oLat, oLng]);
+                origMarker.setIcon(createOrigIcon(oName));
+              }
+            }
+            if (dLat !== null && dLng !== null && dLat !== undefined && dLng !== undefined) {
+              if (!destMarker) {
+                destMarker = L.marker([dLat, dLng], { draggable: isInteractive, icon: createDestIcon(dName) }).addTo(map);
+                if (isInteractive) {
+                  destMarker.on('dragend', function(e) { notifyParent(e.target.getLatLng().lat, e.target.getLatLng().lng); });
+                }
+              } else {
+                destMarker.setLatLng([dLat, dLng]);
+                destMarker.setIcon(createDestIcon(dName));
+              }
+            }
+
+            updateRouteLine(oLat, oLng, dLat, dLng);
+
+            if (!oLat || !dLat) {
+              var targetLat = activeTarget === 'destination' ? dLat : oLat;
+              var targetLng = activeTarget === 'destination' ? dLng : oLng;
+              if (targetLat !== null && targetLng !== null && targetLat !== undefined && targetLng !== undefined) {
+                map.panTo([targetLat, targetLng]);
+              }
+            }
           };
 
-          window.zoomIn = function() {
-            map.zoomIn();
-          };
-
-          window.zoomOut = function() {
-            map.zoomOut();
-          };
-
-          window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'ready' }));
+          window.zoomIn = function() { map.zoomIn(); };
+          window.zoomOut = function() { map.zoomOut(); };
         </script>
       </body>
     </html>
@@ -226,15 +389,13 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
 
   // WebView message listener
   const handleWebViewMessage = (event: any) => {
+    if (!interactive) return;
     try {
       const data = JSON.parse(event.nativeEvent.data);
-      if (data.type === 'ready') {
-        setIsMapReady(true);
-      } else if (data.lat && data.lng) {
+      if (data.lat && data.lng) {
         const newPin = { lat: data.lat, lng: data.lng };
-        setCurrentPin(newPin);
-        fetchPlaceName(data.lat, data.lng);
-        onConfirmPin(newPin, resolvedPlaceName || undefined);
+        onSelectCoords?.(newPin);
+        onConfirmPin?.(newPin);
       }
     } catch (err) {
       console.warn('WebView msg err:', err);
@@ -251,12 +412,14 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
           <Text style={styles.webFallbackSub}>
             Interactive pin picking uses native maps on mobile devices. Please open Sarathi on a mobile emulator or physical device.
           </Text>
-          <View style={styles.liveCoordsBadgeWeb}>
-            <Ionicons name="location" size={14} color={pinColor} />
-            <Text style={styles.liveCoordsText}>
-              Selected: {isGeocoding ? 'Locating...' : resolvedPlaceName || `${currentPin.lat.toFixed(4)}, ${currentPin.lng.toFixed(4)}`}
-            </Text>
-          </View>
+          {showBadge && (
+            <View style={styles.liveCoordsBadgeWeb}>
+              <Ionicons name="location" size={14} color={pinColor} />
+              <Text style={styles.liveCoordsText}>
+                Selected: {isGeocoding ? 'Locating...' : resolvedPlaceName || `${currentPin.lat.toFixed(4)}, ${currentPin.lng.toFixed(4)}`}
+              </Text>
+            </View>
+          )}
         </View>
       </View>
     );
@@ -275,53 +438,57 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
           domStorageEnabled={true}
         />
 
-        {/* Custom Grouped Controls Stack (Top-Right) */}
-        <View style={styles.mapControlsStack}>
-          {/* Zoom In (+) */}
-          <TouchableOpacity
-            style={styles.mapControlBtn}
-            onPress={handleZoomIn}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="add" size={22} color={Colors.primary} />
-          </TouchableOpacity>
+        {/* Custom Grouped Controls Stack (Zoom +, -, GPS) - ONLY shown when showControls is true */}
+        {showControls && (
+          <View style={styles.mapControlsStack}>
+            {/* Zoom In (+) */}
+            <TouchableOpacity
+              style={styles.mapControlBtn}
+              onPress={handleZoomIn}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="add" size={22} color={Colors.primary} />
+            </TouchableOpacity>
 
-          {/* Zoom Out (−) */}
-          <TouchableOpacity
-            style={styles.mapControlBtn}
-            onPress={handleZoomOut}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="remove" size={22} color={Colors.primary} />
-          </TouchableOpacity>
+            {/* Zoom Out (−) */}
+            <TouchableOpacity
+              style={styles.mapControlBtn}
+              onPress={handleZoomOut}
+              activeOpacity={0.8}
+            >
+              <Ionicons name="remove" size={22} color={Colors.primary} />
+            </TouchableOpacity>
 
-          {/* GPS Current Location */}
-          <TouchableOpacity
-            style={styles.mapControlBtn}
-            onPress={handleCenterOnMyLocation}
-            disabled={isFetchingGPS}
-            activeOpacity={0.8}
-          >
-            {isFetchingGPS ? (
-              <ActivityIndicator size="small" color={Colors.primary} />
-            ) : (
-              <Ionicons name="locate" size={20} color={Colors.primary} />
-            )}
-          </TouchableOpacity>
-        </View>
-
-        {/* Live Formatted Place Name Badge with Raw Coords Subtitle */}
-        <View style={styles.liveCoordsBadge}>
-          <Ionicons name="location" size={16} color={pinColor} />
-          <View style={{ flexShrink: 1 }}>
-            <Text style={styles.livePlaceNameText} numberOfLines={1}>
-              {isGeocoding ? 'Locating...' : resolvedPlaceName || `${currentPin.lat.toFixed(4)}, ${currentPin.lng.toFixed(4)}`}
-            </Text>
-            <Text style={styles.liveRawCoordsSub}>
-              {currentPin.lat.toFixed(5)}, {currentPin.lng.toFixed(5)}
-            </Text>
+            {/* GPS Current Location */}
+            <TouchableOpacity
+              style={styles.mapControlBtn}
+              onPress={handleCenterOnMyLocation}
+              disabled={isFetchingGPS}
+              activeOpacity={0.8}
+            >
+              {isFetchingGPS ? (
+                <ActivityIndicator size="small" color={Colors.primary} />
+              ) : (
+                <Ionicons name="locate" size={20} color={Colors.primary} />
+              )}
+            </TouchableOpacity>
           </View>
-        </View>
+        )}
+
+        {/* Live Location Coordinates Pin Badge - ONLY shown when showBadge is true */}
+        {showBadge && (
+          <View style={styles.liveCoordsBadge}>
+            <Ionicons name="location" size={16} color={pinColor} />
+            <View style={{ flexShrink: 1 }}>
+              <Text style={styles.livePlaceNameText} numberOfLines={1}>
+                {isGeocoding ? 'Locating...' : resolvedPlaceName || `${currentPin.lat.toFixed(4)}, ${currentPin.lng.toFixed(4)}`}
+              </Text>
+              <Text style={styles.liveRawCoordsSub}>
+                {currentPin.lat.toFixed(5)}, {currentPin.lng.toFixed(5)}
+              </Text>
+            </View>
+          </View>
+        )}
       </View>
     </View>
   );

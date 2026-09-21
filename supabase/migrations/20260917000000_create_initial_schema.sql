@@ -152,7 +152,7 @@ CREATE TABLE IF NOT EXISTS public.vehicles (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
     user_id UUID NOT NULL REFERENCES public.users(id) ON DELETE CASCADE,
     vehicle_name VARCHAR(100) NOT NULL,
-    vehicle_type TEXT NOT NULL CHECK (vehicle_type IN ('car', 'bike', 'van', 'other')),
+    vehicle_type TEXT NOT NULL CHECK (vehicle_type IN ('car', 'bike', 'scooter', 'van', 'other')),
     color VARCHAR(30),
     number_plate VARCHAR(20) UNIQUE NOT NULL,
     vehicle_image VARCHAR(255),
@@ -230,6 +230,30 @@ CREATE POLICY "Riders can update their ride offers"
     TO authenticated
     USING (auth.uid() = rider_id)
     WITH CHECK (auth.uid() = rider_id);
+
+CREATE POLICY "Riders can delete their ride offers"
+    ON public.rides FOR DELETE
+    TO authenticated
+    USING (auth.uid() = rider_id);
+
+-- Trigger to auto-generate PostGIS LineString geometry if route_geom is null on insert/update
+CREATE OR REPLACE FUNCTION public.update_ride_route_geom()
+RETURNS TRIGGER AS $$
+BEGIN
+    IF NEW.route_geom IS NULL AND NEW.origin_lat IS NOT NULL AND NEW.destination_lat IS NOT NULL THEN
+        NEW.route_geom := ST_MakeLine(
+            ST_SetSRID(ST_MakePoint(NEW.origin_lng, NEW.origin_lat), 4326),
+            ST_SetSRID(ST_MakePoint(NEW.destination_lng, NEW.destination_lat), 4326)
+        );
+    END IF;
+    RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trigger_update_ride_route_geom ON public.rides;
+CREATE TRIGGER trigger_update_ride_route_geom
+    BEFORE INSERT OR UPDATE ON public.rides
+    FOR EACH ROW EXECUTE FUNCTION public.update_ride_route_geom();
 
 -- ==========================================
 -- 8. RIDE REQUESTS (BOOKINGS) TABLE
@@ -443,7 +467,7 @@ CREATE OR REPLACE FUNCTION public.search_matching_rides(
     p_dest_lat DOUBLE PRECISION,
     p_dest_lng DOUBLE PRECISION,
     p_seats_needed INT DEFAULT 1,
-    p_buffer_meters DOUBLE PRECISION DEFAULT 800.0
+    p_buffer_meters DOUBLE PRECISION DEFAULT 5000.0
 )
 RETURNS TABLE (
     ride_id UUID,
@@ -490,7 +514,10 @@ BEGIN
       AND (
           (r.route_geom IS NOT NULL AND 
            ST_DWithin(r.route_geom, ST_SetSRID(ST_MakePoint(p_origin_lng, p_origin_lat), 4326)::geography, p_buffer_meters) AND
-           ST_DWithin(r.route_geom, ST_SetSRID(ST_MakePoint(p_dest_lng, p_dest_lat), 4326)::geography, p_buffer_meters))
+           ST_DWithin(r.route_geom, ST_SetSRID(ST_MakePoint(p_dest_lng, p_dest_lat), 4326)::geography, p_buffer_meters) AND
+           (ST_LineLocatePoint(r.route_geom, ST_SetSRID(ST_MakePoint(p_origin_lng, p_origin_lat), 4326)) <=
+            ST_LineLocatePoint(r.route_geom, ST_SetSRID(ST_MakePoint(p_dest_lng, p_dest_lat), 4326)) OR
+            ST_LineLocatePoint(r.route_geom, ST_SetSRID(ST_MakePoint(p_origin_lng, p_origin_lat), 4326)) IS NULL))
           OR
           (ST_DWithin(ST_SetSRID(ST_MakePoint(r.origin_lng, r.origin_lat), 4326)::geography, ST_SetSRID(ST_MakePoint(p_origin_lng, p_origin_lat), 4326)::geography, p_buffer_meters) AND
            ST_DWithin(ST_SetSRID(ST_MakePoint(r.destination_lng, r.destination_lat), 4326)::geography, ST_SetSRID(ST_MakePoint(p_dest_lng, p_dest_lat), 4326)::geography, p_buffer_meters))

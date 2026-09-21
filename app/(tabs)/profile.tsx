@@ -1,8 +1,8 @@
 import { Ionicons } from '@expo/vector-icons';
 import AsyncStorage from '@react-native-async-storage/async-storage';
 import * as ImagePicker from 'expo-image-picker';
-import { router } from 'expo-router';
-import React, { useEffect, useRef, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import React, { useCallback, useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -23,21 +23,19 @@ import { useApp } from '../../context/AppContext';
 
 // ── Facebook-style top left-to-right animated loading bar ────────────────────
 const TopFacebookLoadingBar = () => {
-  const animValue = useRef(new Animated.Value(0)).current;
+  const animVal = useRef(new Animated.Value(0)).current;
 
   useEffect(() => {
-    const loopAnimation = Animated.loop(
-      Animated.timing(animValue, {
+    Animated.loop(
+      Animated.timing(animVal, {
         toValue: 1,
-        duration: 1100,
+        duration: 1200,
         useNativeDriver: false,
       })
-    );
-    loopAnimation.start();
-    return () => loopAnimation.stop();
-  }, [animValue]);
+    ).start();
+  }, [animVal]);
 
-  const left = animValue.interpolate({
+  const left = animVal.interpolate({
     inputRange: [0, 1],
     outputRange: ['-50%', '100%'],
   });
@@ -50,9 +48,15 @@ const TopFacebookLoadingBar = () => {
 };
 
 export default function ProfileScreen() {
-  const { user, completeProfile, updateEmergencyContact, logout, updateUserProfile, deleteAccount, switchUserRole, changePassword, adminApproveKyc, adminRejectKyc } = useApp();
+  const { user, completeProfile, updateEmergencyContact, logout, updateUserProfile, deleteAccount, switchUserRole, changePassword, adminApproveKyc, adminRejectKyc, refreshKycStatus } = useApp();
 
   const [isFetchingProfile, setIsFetchingProfile] = useState(false);
+
+  useFocusEffect(
+    useCallback(() => {
+      refreshKycStatus();
+    }, [])
+  );
 
   useEffect(() => {
     setIsFetchingProfile(false);
@@ -206,7 +210,7 @@ export default function ProfileScreen() {
     if (res.error === 'KYC_NOT_SUBMITTED') {
       Alert.alert(
         'KYC Verification Required',
-        res.message || 'You must submit your KYC verification before offering rides as a Driver.',
+        'You must submit your KYC verification before offering rides as a Driver.',
         [
           { text: 'Cancel', style: 'cancel' },
           { text: 'Verify KYC Now', onPress: () => router.push('/kyc') },
@@ -215,11 +219,11 @@ export default function ProfileScreen() {
     } else if (res.error === 'KYC_PENDING') {
       Alert.alert(
         'KYC Review Pending',
-        res.message || 'Your KYC verification has been submitted and is awaiting Admin review.',
+        'Your KYC verification has been submitted and is awaiting Admin review.',
         [{ text: 'OK', style: 'default' }]
       );
     } else {
-      Alert.alert('Role Switch Failed', res.message || res.error || 'Unable to switch role at this time.');
+      Alert.alert('Role Switch Failed', res.error || 'Unable to switch role at this time.');
     }
   };
 
@@ -322,44 +326,38 @@ export default function ProfileScreen() {
                 {(() => {
                   const isVerified = user?.kycVerified === true || user?.kycStatus === 'VERIFIED';
                   const isPending = !isVerified && user?.kycStatus === 'PENDING';
+                  const isRejected = !isVerified && user?.kycStatus === 'REJECTED';
 
                   if (isVerified) {
                     return <Text style={[styles.detailValue, { color: Colors.success }]}>Verified ✓</Text>;
                   } else if (isPending) {
                     return (
+                      <Text style={[styles.detailValue, { color: '#F59E0B' }]}>Pending Admin Review ⏳</Text>
+                    );
+                  } else if (isRejected) {
+                    return (
                       <View style={{ marginTop: 4 }}>
-                        <Text style={[styles.detailValue, { color: '#F59E0B' }]}>Pending Admin Review</Text>
-                        <View style={{ flexDirection: 'row', gap: 8, marginTop: 8 }}>
+                        <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                          <Text style={[styles.detailValue, { color: Colors.error, marginTop: 0 }]}>Rejected ✕</Text>
                           <TouchableOpacity
-                            style={{ backgroundColor: Colors.success, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}
-                            onPress={async () => {
-                              setIsFetchingProfile(true);
-                              const res = await adminApproveKyc();
-                              setIsFetchingProfile(false);
-                              if (res.success) Alert.alert('Dev Admin', 'KYC Approved successfully!');
-                            }}
+                            style={styles.completeKycButton}
+                            onPress={() => router.push('/kyc')}
                           >
-                            <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>[Dev] Approve KYC</Text>
+                            <Text style={styles.completeKycText}>Re-submit KYC →</Text>
                           </TouchableOpacity>
-
-                          <TouchableOpacity
-                            style={{ backgroundColor: Colors.error, paddingHorizontal: 12, paddingVertical: 6, borderRadius: 8 }}
-                            onPress={async () => {
-                              setIsFetchingProfile(true);
-                              const res = await adminRejectKyc();
-                              setIsFetchingProfile(false);
-                              if (res.success) Alert.alert('Dev Admin', 'KYC Rejected.');
-                            }}
-                          >
-                            <Text style={{ color: '#FFF', fontSize: 12, fontWeight: '700' }}>[Dev] Reject</Text>
-                          </TouchableOpacity>
+                        </View>
+                        <View style={styles.rejectionReasonBox}>
+                          <Text style={styles.rejectionReasonLabel}>Rejection Reason:</Text>
+                          <Text style={styles.rejectionReasonValue}>
+                            {user?.kycRejectionReason || 'Document photo was unreadable or invalid.'}
+                          </Text>
                         </View>
                       </View>
                     );
                   } else {
                     return (
                       <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', marginTop: 2 }}>
-                        <Text style={[styles.detailValue, { color: Colors.error, marginTop: 0 }]}>Not Verified</Text>
+                        <Text style={[styles.detailValue, { color: Colors.textMuted, marginTop: 0 }]}>Not Submitted</Text>
                         <TouchableOpacity
                           style={styles.completeKycButton}
                           onPress={() => router.push('/kyc')}
@@ -378,14 +376,18 @@ export default function ProfileScreen() {
           <View style={styles.sectionCard}>
             <Text style={styles.sectionTitle}>Settings</Text>
 
-            {/* My Vehicles Button */}
-            <TouchableOpacity style={styles.settingRow} onPress={() => router.push('/vehicles')} activeOpacity={0.7}>
-              <Ionicons name="car-sport-outline" size={20} color={Colors.primary} />
-              <Text style={styles.settingRowText}>My Vehicles</Text>
-              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
-            </TouchableOpacity>
+            {/* My Vehicles Button (Driver/Rider Mode Only) */}
+            {displayRole === 'driver' && (
+              <>
+                <TouchableOpacity style={styles.settingRow} onPress={() => router.push('/vehicles')} activeOpacity={0.7}>
+                  <Ionicons name="car-sport-outline" size={20} color={Colors.primary} />
+                  <Text style={styles.settingRowText}>My Vehicles</Text>
+                  <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
+                </TouchableOpacity>
 
-            <View style={styles.divider} />
+                <View style={styles.divider} />
+              </>
+            )}
 
             <TouchableOpacity style={styles.settingRow} onPress={() => Alert.alert('Notifications', 'Notification preferences updated.')} activeOpacity={0.7}>
               <Ionicons name="notifications-outline" size={20} color={Colors.primary} />
@@ -733,6 +735,27 @@ const styles = StyleSheet.create({
     color: Colors.textPrimary,
     fontWeight: '600',
     marginTop: 2,
+  },
+  rejectionReasonBox: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+    borderRadius: 10,
+    padding: 10,
+    marginTop: 8,
+  },
+  rejectionReasonLabel: {
+    fontSize: 11,
+    fontWeight: '800',
+    color: '#991B1B',
+    textTransform: 'uppercase',
+    marginBottom: 2,
+  },
+  rejectionReasonValue: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#B91C1C',
+    lineHeight: 16,
   },
   divider: {
     height: 1,

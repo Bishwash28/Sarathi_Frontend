@@ -24,20 +24,20 @@ export default function ActivityScreen() {
   const [editSeats, setEditSeats] = useState('');
   const [editDepartureTime, setEditDepartureTime] = useState('');
 
-  // Filter offered rides by this user (if driver/rider)
-  const myOffers = rides.filter(r =>
-    r.riderName === user?.name ||
-    (user?.phone && r.phone === user?.phone) ||
-    r.riderName === 'Sarathi Driver' ||
-    user?.role === 'driver'
-  );
+  // Filter offered rides created specifically by this user (rider/driver)
+  const myOffers = rides.filter(r => {
+    if (user?.id && r.riderId && r.riderId === user.id) return true;
+    if (user?.name && r.riderName && r.riderName === user.name) return true;
+    if (user?.phone && r.phone && r.phone === user.phone) return true;
+    return false;
+  });
   const myOfferIds = myOffers.map(o => o.id);
 
   // Group bookings based on user role (Passenger vs Driver)
   const isDriver = user?.role === 'driver';
   const ongoingBookings = isDriver
-    ? bookings.filter(b => (b.status === 'pending' || b.status === 'accepted') && (myOfferIds.length === 0 || myOfferIds.includes(b.rideId)))
-    : bookings.filter(b => b.status === 'pending' || b.status === 'accepted');
+    ? bookings.filter(b => (b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing') && (myOfferIds.length === 0 || myOfferIds.includes(b.rideId)))
+    : bookings.filter(b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing');
 
   const historyBookings = isDriver
     ? bookings.filter(b => (b.status === 'completed' || b.status === 'cancelled') && (myOfferIds.length === 0 || myOfferIds.includes(b.rideId)))
@@ -58,7 +58,7 @@ export default function ActivityScreen() {
     setEditDepartureTime(ride.departureTime || '');
   };
 
-  const handleSaveEditRide = () => {
+  const handleSaveEditRide = async () => {
     if (!editingRide) return;
     const parsedPrice = parseFloat(editPrice);
     if (isNaN(parsedPrice) || parsedPrice <= 0) {
@@ -71,14 +71,18 @@ export default function ActivityScreen() {
       return;
     }
 
-    updateRide(editingRide.id, {
+    const res = await updateRide(editingRide.id, {
       price: parsedPrice,
       seatsLeft: parsedSeats,
       departureTime: editDepartureTime || 'Leaving soon',
     });
 
-    setEditingRide(null);
-    Alert.alert('Offer Updated', 'Your offered ride has been updated successfully.');
+    if (res?.success) {
+      setEditingRide(null);
+      Alert.alert('Offer Updated', 'Your offered ride has been updated successfully in database.');
+    } else {
+      Alert.alert('Update Failed', res?.error || 'Could not update ride in database.');
+    }
   };
 
   const handleDeleteOffer = (rideId: string) => {
@@ -90,9 +94,13 @@ export default function ActivityScreen() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            deleteRide(rideId);
-            Alert.alert('Offer Removed', 'The ride offer was deleted.');
+          onPress: async () => {
+            const res = await deleteRide(rideId);
+            if (res?.success) {
+              Alert.alert('Offer Removed', 'The ride offer was deleted from database.');
+            } else {
+              Alert.alert('Delete Failed', res?.error || 'Could not delete ride from database.');
+            }
           },
         },
       ]
@@ -103,6 +111,7 @@ export default function ActivityScreen() {
     switch (status) {
       case 'pending': return Colors.warning;
       case 'accepted': return Colors.success;
+      case 'ongoing': return Colors.primary;
       case 'completed': return Colors.accent;
       case 'cancelled': return Colors.error;
       default: return Colors.textMuted;
@@ -114,10 +123,10 @@ export default function ActivityScreen() {
     if (!ride) return null;
 
     const isDriver = user?.role === 'driver';
-    const titleName = isDriver ? item.passengerId.split('@')[0] : ride.riderName;
+    const titleName = isDriver ? item.passengerName || item.passengerId.split('@')[0] : ride.riderName;
     const subText = isDriver ? `Passenger requesting to join` : `${ride.vehicleName} • ${ride.vehicleNumber}`;
     const avatarUrl = isDriver 
-      ? 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80'
+      ? (item.passengerPhoto || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80')
       : ride.riderPhoto;
 
     return (
@@ -203,14 +212,6 @@ export default function ActivityScreen() {
           <Text style={styles.headerTitle}>
             {user?.role === 'driver' ? 'Driver Activity & Rides' : 'Your Activity'}
           </Text>
-
-          <TouchableOpacity
-            style={styles.notifBellButton}
-            onPress={() => router.push('/notifications')}
-            activeOpacity={0.8}
-          >
-            <Ionicons name="notifications-outline" size={22} color={Colors.primary} />
-          </TouchableOpacity>
         </View>
 
         {/* Tab Selector */}
@@ -263,56 +264,18 @@ export default function ActivityScreen() {
               myOffers.map(renderOfferCard)
             )
           ) : activeSection === 'ongoing' ? (
-            (ongoingBookings.length === 0 && myOffers.length === 0) ? (
+            ongoingBookings.length === 0 ? (
               <View style={styles.emptyContainer}>
                 <Ionicons name="receipt-outline" size={48} color={Colors.textMuted} />
                 <Text style={styles.emptyTitle}>No ongoing rides</Text>
                 <Text style={styles.emptySubtitle}>
                   {user?.role === 'driver'
-                    ? 'Incoming passenger ride requests and your active published rides will appear here.'
+                    ? 'Rides that have been booked or accepted will appear here as ongoing trips.'
                     : 'Your active ride requests will be logged here.'}
                 </Text>
               </View>
             ) : (
-              <>
-                {ongoingBookings.map(renderBookingCard)}
-                {isDriver && ongoingBookings.length === 0 && myOffers.map(offer => (
-                  <TouchableOpacity
-                    key={`active-ride-${offer.id}`}
-                    style={styles.activityCard}
-                    onPress={() => router.push({ pathname: '/active-trip', params: { rideId: offer.id } })}
-                    activeOpacity={0.85}
-                  >
-                    <View style={styles.cardHeader}>
-                      <Image source={{ uri: offer.riderPhoto }} style={styles.driverPhoto} />
-                      <View style={styles.driverInfo}>
-                        <Text style={styles.driverName}>Active Published Route</Text>
-                        <Text style={styles.vehicleText}>{offer.vehicleName} • {offer.vehicleNumber}</Text>
-                      </View>
-                      <View style={[styles.statusBadge, { backgroundColor: `${Colors.success}15` }]}>
-                        <Text style={[styles.statusText, { color: Colors.success }]}>LIVE</Text>
-                      </View>
-                    </View>
-
-                    <View style={styles.routeContainer}>
-                      <Ionicons name="location-outline" size={16} color={Colors.textMuted} />
-                      <Text style={styles.routeText} numberOfLines={1}>
-                        {offer.route.join(' → ')}
-                      </Text>
-                    </View>
-
-                    <View style={styles.cardFooter}>
-                      <Text style={styles.dateText}>{offer.departureTime}</Text>
-                      <Text style={styles.priceText}>NPR {offer.price}/seat</Text>
-                    </View>
-
-                    <View style={styles.trackingHint}>
-                      <Ionicons name="navigate-circle" size={16} color={Colors.accent} />
-                      <Text style={styles.trackingHintText}>Tap to manage live trip & passenger requests</Text>
-                    </View>
-                  </TouchableOpacity>
-                ))}
-              </>
+              ongoingBookings.map(renderBookingCard)
             )
           ) : (
             historyBookings.length === 0 ? (
