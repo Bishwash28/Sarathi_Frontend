@@ -63,6 +63,9 @@ export default function TabLayout() {
 const FloatingTabBar: React.FC<CustomTabProps> = ({ state, descriptors, navigation, isDriver, kycVerified }) => {
   const insets = useSafeAreaInsets();
   const bottomOffset = Math.max(insets.bottom, Platform.OS === 'ios' ? 16 : 10) + 8;
+  const { unreadDriverNotifCount, unreadChatMessageCount, user } = useApp();
+
+  const isDriverMode = isDriver || user?.role === 'driver';
 
   const homeRouteIndex = state.routes.findIndex(r => r.name === 'index');
   const notifRouteIndex = state.routes.findIndex(r => r.name === 'notifications');
@@ -93,6 +96,13 @@ const FloatingTabBar: React.FC<CustomTabProps> = ({ state, descriptors, navigati
     const isFocused = state.index === index;
     const { label, icon } = getRouteConfig(route.name);
 
+    let badgeCount = 0;
+    if (route.name === 'notifications') {
+      badgeCount = unreadDriverNotifCount;
+    } else if (route.name === 'inbox') {
+      badgeCount = unreadChatMessageCount;
+    }
+
     const onPress = () => {
       const event = navigation.emit({
         type: 'tabPress',
@@ -112,11 +122,20 @@ const FloatingTabBar: React.FC<CustomTabProps> = ({ state, descriptors, navigati
         style={styles.tabItem}
         activeOpacity={0.75}
       >
-        <Ionicons
-          name={(isFocused ? icon : `${icon}-outline`) as any}
-          size={22}
-          color={isFocused ? Colors.primary : '#94A3B8'}
-        />
+        <View style={{ position: 'relative' }}>
+          <Ionicons
+            name={(isFocused ? icon : `${icon}-outline`) as any}
+            size={22}
+            color={isFocused ? Colors.primary : '#94A3B8'}
+          />
+          {badgeCount > 0 && (
+            <View style={styles.badgeContainer}>
+              <Text style={styles.badgeText}>
+                {badgeCount > 99 ? '99+' : badgeCount}
+              </Text>
+            </View>
+          )}
+        </View>
         <Text
           style={[
             styles.tabLabel,
@@ -219,6 +238,23 @@ const styles = StyleSheet.create({
   tabLabel: {
     fontSize: 10,
     marginTop: 2,
+  },
+  badgeContainer: {
+    position: 'absolute',
+    top: -4,
+    right: -10,
+    backgroundColor: '#EF4444',
+    borderRadius: 9,
+    minWidth: 16,
+    height: 16,
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingHorizontal: 3,
+  },
+  badgeText: {
+    color: '#FFFFFF',
+    fontSize: 9,
+    fontWeight: '800',
   },
   centerPostButtonDriver: {
     width: 56,

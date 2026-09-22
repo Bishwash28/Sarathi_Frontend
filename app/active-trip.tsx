@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   StyleSheet,
   Text,
   View,
@@ -15,11 +16,12 @@ import * as Location from 'expo-location';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { LocationPinPickerMap } from '../components/LocationPinPickerMap';
 import { Colors } from '../constants/Colors';
-import { useApp } from '../context/AppContext';
+import { useApp, Ride } from '../context/AppContext';
+import { supabase } from '../lib/supabase';
 import { makePhoneCall } from '../utils/phoneUtils';
 
 export default function ActiveTripScreen() {
-  const { rideId } = useLocalSearchParams();
+  const { rideId, bookingId } = useLocalSearchParams<{ rideId?: string; bookingId?: string }>();
   const {
     user,
     bookings,
@@ -29,19 +31,59 @@ export default function ActiveTripScreen() {
     nudgeDriverLocation,
     verifyPickupOtp,
     verifyCompletionOtp,
+    triggerCompletionOtpPrompt,
     processPayment,
     submitRideRating,
   } = useApp();
 
   const [inputPickupOtp, setInputPickupOtp] = useState('');
   const [inputCompletionOtp, setInputCompletionOtp] = useState('');
-  const [selectedPayment, setSelectedPayment] = useState<'cash' | 'khalti' | 'esewa'>('esewa');
+  const [selectedPayment, setSelectedPayment] = useState<'cash' | 'khalti' | 'esewa'>('cash');
   const [selectedStars, setSelectedStars] = useState<number>(5);
   const [reviewText, setReviewText] = useState<string>('');
   const [selectedTags, setSelectedTags] = useState<string[]>(['Safe Riding', 'Clean Vehicle']);
 
-  const currentBooking = activeBooking || bookings.find(b => b.rideId === rideId);
-  const ride = rides.find(r => r.id === (currentBooking?.rideId || rideId));
+  const [fetchedRide, setFetchedRide] = useState<Ride | null>(null);
+  const [isLoadingRide, setIsLoadingRide] = useState(true);
+  const currentBooking = activeBooking || bookings.find(b => b.rideId === rideId) || bookings.find(b => typeof bookingId === 'string' && b.id === bookingId);
+
+  useEffect(() => {
+    const targetRideId = currentBooking?.rideId || (typeof rideId === 'string' ? rideId : '');
+    if (targetRideId && !rides.some(r => r.id === targetRideId)) {
+      setIsLoadingRide(true);
+      supabase
+        .from('rides')
+        .select('*')
+        .eq('id', targetRideId)
+        .single()
+        .then(({ data }: { data: any }) => {
+          if (data) {
+            setFetchedRide({
+              id: data.id,
+              riderName: data.rider_name || 'Driver',
+              riderPhoto: data.rider_photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+              phone: data.phone || '+9779841234567',
+              rating: 5.0,
+              vehicleType: 'bike',
+              vehicleName: data.vehicle_name || 'Vehicle',
+              vehicleNumber: data.vehicle_number || 'BA 99 PA 1234',
+              departureTime: data.departure_time || 'Leaving soon',
+              seatsLeft: Number(data.available_seats) || 1,
+              price: Number(data.price) || 150,
+              route: Array.isArray(data.route) ? data.route : [data.pickup_point || 'Origin', 'Destination'],
+              pickupPoint: data.pickup_point || data.origin_name || 'Origin',
+              status: data.status,
+              riderId: data.rider_id,
+            });
+          }
+          setIsLoadingRide(false);
+        });
+    } else {
+      setIsLoadingRide(false);
+    }
+  }, [currentBooking?.rideId, rideId, rides]);
+
+  const ride = rides.find(r => r.id === (currentBooking?.rideId || rideId)) || fetchedRide;
 
   useEffect(() => {
     (async () => {
@@ -55,6 +97,15 @@ export default function ActiveTripScreen() {
       }
     })();
   }, []);
+
+  if (isLoadingRide) {
+    return (
+      <View style={styles.errorContainer}>
+        <ActivityIndicator size="large" color={Colors.primary} />
+        <Text style={[styles.errorText, { fontSize: 14, marginTop: 12 }]}>Loading trip details...</Text>
+      </View>
+    );
+  }
 
   if (!ride || !currentBooking) {
     return (
@@ -98,23 +149,24 @@ export default function ActiveTripScreen() {
   const handlePayNow = () => {
     const res = processPayment(currentBooking.id, selectedPayment);
     if (!res.success) {
-      Alert.alert('Payment Failed', res.error || 'Payment process failed.');
+      Alert.alert('Payment Failed', res.error || 'Could not process payment');
     }
   };
 
-  const handleSubmitRating = () => {
-    submitRideRating(currentBooking.id, selectedStars, reviewText);
-    Alert.alert('Thank You!', 'Your rating has been submitted successfully.', [
-      { text: 'Done', onPress: () => router.replace('/(tabs)') }
-    ]);
-  };
-
-  const toggleTag = (tag: string) => {
+  const handleTagToggle = (tag: string) => {
     if (selectedTags.includes(tag)) {
       setSelectedTags(prev => prev.filter(t => t !== tag));
     } else {
       setSelectedTags(prev => [...prev, tag]);
     }
+  };
+  const toggleTag = handleTagToggle;
+
+  const handleSubmitRating = () => {
+    submitRideRating(currentBooking.id, selectedStars, reviewText);
+    Alert.alert('Thank You! 🎉', 'Your rating has been submitted successfully and trip is completed.', [
+      { text: 'Done', onPress: () => router.replace('/(tabs)') }
+    ]);
   };
 
   const eta = Math.max(1, Math.ceil((100 - activeTripProgress) / 10));
@@ -135,7 +187,7 @@ export default function ActiveTripScreen() {
               {lifecycle === 'payment_pending'
                 ? 'Payment & Fare Summary'
                 : lifecycle === 'rating_pending'
-                ? 'Rate Your Driver'
+                ? 'Rate Your Rider / Driver'
                 : 'Live Trip Tracking'}
             </Text>
             <Text style={styles.headerSub}>
@@ -150,6 +202,8 @@ export default function ActiveTripScreen() {
                 ? 'Arriving'
                 : lifecycle === 'ride_started'
                 ? `${eta} mins`
+                : lifecycle === 'completion_otp_required'
+                ? 'Ending PIN'
                 : lifecycle === 'payment_pending'
                 ? 'Pay Fare'
                 : lifecycle === 'rating_pending'
@@ -171,7 +225,7 @@ export default function ActiveTripScreen() {
             />
           </View>
 
-          {/* STEP 1 & 2: Pickup OTP State */}
+          {/* STEP 1: Pickup OTP State */}
           {(lifecycle === 'waiting_for_pickup' || lifecycle === 'pickup_otp_required') && (
             <View style={styles.stepCard}>
               {user?.role === 'driver' ? (
@@ -180,21 +234,21 @@ export default function ActiveTripScreen() {
                   <View style={[styles.otpBanner, { backgroundColor: '#1E293B' }]}>
                     <Ionicons name="key-outline" size={24} color="#FFF" />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.otpBannerTitle}>DRIVER OTP VERIFICATION</Text>
+                      <Text style={styles.otpBannerTitle}>DRIVER PICKUP PIN VERIFICATION</Text>
                       <Text style={[styles.otpBannerTitle, { color: '#94A3B8', fontSize: 13, marginTop: 2 }]}>
-                        Ask passenger for their 4-digit Pickup OTP
+                        Ask passenger for their 4-digit Pickup PIN
                       </Text>
                     </View>
                   </View>
                   <Text style={styles.stepHelpText}>
-                    Enter the 4-digit Pickup OTP displayed on the passenger's screen to verify pickup and start the ride.
+                    Enter the 4-digit Pickup PIN code displayed on the passenger's screen to verify pickup and begin the ride.
                   </Text>
                   <View style={styles.divider} />
-                  <Text style={styles.inputLabelText}>Passenger Pickup OTP Code:</Text>
+                  <Text style={styles.inputLabelText}>Passenger Pickup PIN Code:</Text>
                   <View style={styles.otpInputRow}>
                     <TextInput
                       style={styles.otpTextInput}
-                      placeholder="Enter 4-digit OTP"
+                      placeholder="Enter 4-digit PIN"
                       placeholderTextColor={Colors.textMuted}
                       value={inputPickupOtp}
                       onChangeText={setInputPickupOtp}
@@ -202,7 +256,7 @@ export default function ActiveTripScreen() {
                       maxLength={4}
                     />
                     <TouchableOpacity style={styles.verifyButton} onPress={handleVerifyPickup}>
-                      <Text style={styles.verifyButtonText}>Verify & Start</Text>
+                      <Text style={styles.verifyButtonText}>Verify & Start Ride</Text>
                     </TouchableOpacity>
                   </View>
                   {currentBooking.otpError && (
@@ -215,20 +269,20 @@ export default function ActiveTripScreen() {
                   <View style={styles.otpBanner}>
                     <Ionicons name="key" size={24} color="#FFF" />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.otpBannerTitle}>YOUR PICKUP OTP CODE</Text>
-                      <Text style={styles.otpBannerCode}>{currentBooking.pickupOtp || '4821'}</Text>
+                      <Text style={styles.otpBannerTitle}>YOUR PICKUP PIN CODE</Text>
+                      <Text style={styles.otpBannerCode}>{currentBooking.pickupOtp || '4829'}</Text>
                     </View>
                   </View>
                   <Text style={styles.stepHelpText}>
-                    Show this 4-digit Pickup OTP to {ride.riderName} when they arrive at your pickup location to start the ride.
+                    Show this 4-digit Pickup PIN to {ride.riderName} when they arrive at your pickup point to start the ride.
                   </Text>
                 </>
               )}
             </View>
           )}
 
-          {/* STEP 3 & 4: Ride Started & Completion OTP State */}
-          {(lifecycle === 'ride_started' || lifecycle === 'completion_otp_required') && (
+          {/* STEP 2: Ride Started (En Route) */}
+          {lifecycle === 'ride_started' && (
             <View style={styles.stepCard}>
               <View style={styles.ongoingHeader}>
                 <Ionicons name="navigate-circle" size={28} color="#16A34A" />
@@ -241,17 +295,40 @@ export default function ActiveTripScreen() {
 
               <View style={styles.divider} />
 
+              {user?.role === 'driver' && (
+                <TouchableOpacity
+                  style={[styles.actionMainButton, { backgroundColor: '#7C3AED', marginTop: 10 }]}
+                  onPress={() => triggerCompletionOtpPrompt(currentBooking.id)}
+                >
+                  <Ionicons name="checkmark-done-circle" size={20} color="#FFF" />
+                  <Text style={styles.actionMainButtonText}>Complete Ride (Prompt Ending PIN)</Text>
+                </TouchableOpacity>
+              )}
+
+              <TouchableOpacity
+                style={[styles.nudgeButton, { marginTop: 12 }]}
+                onPress={() => nudgeDriverLocation(currentBooking.id)}
+              >
+                <Ionicons name="location" size={18} color="#FFF" />
+                <Text style={styles.nudgeButtonText}>Simulate Live GPS Movement</Text>
+              </TouchableOpacity>
+            </View>
+          )}
+
+          {/* STEP 3: Completion OTP State */}
+          {lifecycle === 'completion_otp_required' && (
+            <View style={styles.stepCard}>
               {user?.role === 'driver' ? (
                 /* Rider View: Completion OTP Input */
                 <>
-                  <Text style={styles.inputLabelText}>Driver Completion Verification:</Text>
+                  <Text style={styles.inputLabelText}>Driver Ending PIN Verification:</Text>
                   <Text style={styles.stepHelpText}>
-                    Ask passenger for their 4-digit Completion OTP upon reaching {currentBooking.passengerDropoff}.
+                    Ask passenger for their 4-digit Ending PIN upon reaching {currentBooking.passengerDropoff}.
                   </Text>
                   <View style={[styles.otpInputRow, { marginTop: 10 }]}>
                     <TextInput
                       style={styles.otpTextInput}
-                      placeholder="Enter Completion OTP"
+                      placeholder="Enter 4-digit Ending PIN"
                       placeholderTextColor={Colors.textMuted}
                       value={inputCompletionOtp}
                       onChangeText={setInputCompletionOtp}
@@ -259,7 +336,7 @@ export default function ActiveTripScreen() {
                       maxLength={4}
                     />
                     <TouchableOpacity style={[styles.verifyButton, { backgroundColor: '#7C3AED' }]} onPress={handleVerifyCompletion}>
-                      <Text style={styles.verifyButtonText}>Verify & End</Text>
+                      <Text style={styles.verifyButtonText}>Verify & End Ride</Text>
                     </TouchableOpacity>
                   </View>
                   {currentBooking.otpError && (
@@ -272,150 +349,121 @@ export default function ActiveTripScreen() {
                   <View style={[styles.otpBanner, { backgroundColor: '#7C3AED' }]}>
                     <Ionicons name="checkmark-done-circle" size={24} color="#FFF" />
                     <View style={{ flex: 1 }}>
-                      <Text style={styles.otpBannerTitle}>YOUR RIDE COMPLETION OTP</Text>
+                      <Text style={styles.otpBannerTitle}>YOUR RIDE ENDING PIN</Text>
                       <Text style={styles.otpBannerCode}>{currentBooking.completionOtp || '7392'}</Text>
                     </View>
                   </View>
                   <Text style={styles.stepHelpText}>
-                    Share this 4-digit Completion OTP with {ride.riderName} when you arrive at your destination to complete the trip.
+                    Share this 4-digit Ending PIN with {ride.riderName} when you arrive at your destination to complete the trip.
                   </Text>
                 </>
               )}
-
-              <TouchableOpacity
-                style={[styles.nudgeButton, { marginTop: 14 }]}
-                onPress={() => nudgeDriverLocation(currentBooking.id)}
-              >
-                <Ionicons name="location" size={18} color="#FFF" />
-                <Text style={styles.nudgeButtonText}>Simulate Live GPS Movement</Text>
-              </TouchableOpacity>
             </View>
           )}
 
-          {/* STEP 5: Payment Screen */}
-          {lifecycle === 'payment_pending' && (
-            <View style={styles.stepCard}>
-              <Text style={styles.cardHeaderTitle}>Ride Fare Breakdown</Text>
-              <View style={styles.fareRow}>
-                <Text style={styles.fareLabel}>Base Fare</Text>
-                <Text style={styles.fareValue}>NPR 100</Text>
+          {/* STEP 4: Post-Completion Screen (Role-Based) */}
+          {user?.role === 'driver' && (lifecycle === 'payment_pending' || lifecycle === 'rating_pending' || lifecycle === 'completed') ? (
+            /* Rider / Driver View: Small prompt asking "Want to post another ride?" */
+            <View style={styles.promptCard}>
+              <View style={styles.promptIconCircle}>
+                <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
               </View>
-              <View style={styles.fareRow}>
-                <Text style={styles.fareLabel}>Distance Fare (12.4 km)</Text>
-                <Text style={styles.fareValue}>NPR 80</Text>
+              <Text style={styles.promptHeaderTitle}>Ride Completed! 🎉</Text>
+              <Text style={styles.promptQuestionText}>Want to post another ride?</Text>
+
+              <View style={styles.promptButtonRow}>
+                <TouchableOpacity
+                  style={styles.promptNoButton}
+                  onPress={() => {
+                    submitRideRating(currentBooking.id, 5, 'Ride completed by driver');
+                    router.replace('/(tabs)');
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.promptNoButtonText}>No</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.promptYesButton}
+                  onPress={() => {
+                    submitRideRating(currentBooking.id, 5, 'Ride completed by driver');
+                    router.replace('/(tabs)');
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.promptYesButtonText}>Yes</Text>
+                </TouchableOpacity>
               </View>
-              <View style={styles.divider} />
-              <View style={styles.totalRow}>
-                <Text style={styles.totalLabel}>Total Payable</Text>
-                <Text style={styles.totalValue}>NPR {ride.price || 180}</Text>
-              </View>
-
-              <Text style={[styles.cardHeaderTitle, { marginTop: 20 }]}>Select Payment Method</Text>
-
-              <TouchableOpacity
-                style={[styles.paymentCard, selectedPayment === 'esewa' && styles.selectedPaymentCard]}
-                onPress={() => setSelectedPayment('esewa')}
-              >
-                <Ionicons name="wallet" size={24} color="#60BB46" />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.paymentName}>eSewa Digital Wallet</Text>
-                  <Text style={styles.paymentSub}>Instant digital payment</Text>
-                </View>
-                {selectedPayment === 'esewa' && <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.paymentCard, selectedPayment === 'khalti' && styles.selectedPaymentCard]}
-                onPress={() => setSelectedPayment('khalti')}
-              >
-                <Ionicons name="card" size={24} color="#5C2D91" />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.paymentName}>Khalti Wallet</Text>
-                  <Text style={styles.paymentSub}>Fast online checkout</Text>
-                </View>
-                {selectedPayment === 'khalti' && <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />}
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={[styles.paymentCard, selectedPayment === 'cash' && styles.selectedPaymentCard]}
-                onPress={() => setSelectedPayment('cash')}
-              >
-                <Ionicons name="cash" size={24} color="#16A34A" />
-                <View style={{ flex: 1 }}>
-                  <Text style={styles.paymentName}>Cash Payment</Text>
-                  <Text style={styles.paymentSub}>Pay driver directly in cash</Text>
-                </View>
-                {selectedPayment === 'cash' && <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />}
-              </TouchableOpacity>
-
-              <TouchableOpacity style={styles.actionMainButton} onPress={handlePayNow}>
-                <Ionicons name="checkmark-done" size={20} color="#FFF" />
-                <Text style={styles.actionMainButtonText}>Confirm & Pay NPR {ride.price || 180}</Text>
-              </TouchableOpacity>
             </View>
-          )}
+          ) : (
+            /* Passenger View: Payment Method Screen after completion */
+            lifecycle === 'payment_pending' && (
+              <View style={styles.stepCard}>
+                <Text style={styles.cardHeaderTitle}>Trip & Fare Summary</Text>
+                <View style={styles.fareRow}>
+                  <Text style={styles.fareLabel}>Booking / Trip ID</Text>
+                  <Text style={[styles.fareValue, { fontSize: 12, color: Colors.primary }]}>{currentBooking.id}</Text>
+                </View>
+                <View style={styles.fareRow}>
+                  <Text style={styles.fareLabel}>Pickup</Text>
+                  <Text style={styles.fareValue}>{currentBooking.passengerPickup}</Text>
+                </View>
+                <View style={styles.fareRow}>
+                  <Text style={styles.fareLabel}>Drop-off</Text>
+                  <Text style={styles.fareValue}>{currentBooking.passengerDropoff}</Text>
+                </View>
+                <View style={styles.divider} />
+                <View style={styles.totalRow}>
+                  <Text style={styles.totalLabel}>Total Payable Amount</Text>
+                  <Text style={styles.totalValue}>NPR {ride.price || 180}</Text>
+                </View>
 
-          {/* STEP 6: Rating & Review */}
-          {lifecycle === 'rating_pending' && (
-            <View style={styles.stepCard}>
-              <Text style={styles.cardHeaderTitle}>Rate Your Driver</Text>
-              <Text style={styles.stepHelpText}>How was your trip with {ride.riderName}?</Text>
+                <Text style={[styles.cardHeaderTitle, { marginTop: 20 }]}>Payment Method</Text>
 
-              {/* Star Rating Row */}
-              <View style={styles.starsRow}>
-                {[1, 2, 3, 4, 5].map(star => (
-                  <TouchableOpacity key={star} onPress={() => setSelectedStars(star)}>
-                    <Ionicons
-                      name={star <= selectedStars ? 'star' : 'star-outline'}
-                      size={36}
-                      color="#F59E0B"
-                    />
-                  </TouchableOpacity>
-                ))}
+                {/* Cash Payment Option Only */}
+                <TouchableOpacity
+                  style={[styles.paymentCard, styles.selectedPaymentCard]}
+                  activeOpacity={1}
+                >
+                  <Ionicons name="cash" size={24} color="#16A34A" />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.paymentName}>Pay in Cash</Text>
+                    <Text style={styles.paymentSub}>Pay the rider directly in cash upon reaching destination</Text>
+                  </View>
+                  <Ionicons name="checkmark-circle" size={20} color={Colors.primary} />
+                </TouchableOpacity>
+
+                <View style={{ backgroundColor: '#F8FAFC', padding: 10, borderRadius: 10, borderWidth: 1, borderColor: '#E2E8F0', marginTop: 10, marginBottom: 16 }}>
+                  <Text style={{ fontSize: 11, color: Colors.textMuted, lineHeight: 16 }}>
+                    ℹ️ Sarathi currently supports cash payment only. Digital online payments (eSewa, Khalti, Cards) will be introduced in a future update.
+                  </Text>
+                </View>
+
+                <TouchableOpacity style={styles.actionMainButton} onPress={handlePayNow}>
+                  <Ionicons name="checkmark-done" size={20} color="#FFF" />
+                  <Text style={styles.actionMainButtonText}>Complete Ride & Pay NPR {ride.price || 180}</Text>
+                </TouchableOpacity>
               </View>
-
-              {/* Feedback Tags */}
-              <Text style={styles.inputLabelText}>Quick Feedback:</Text>
-              <View style={styles.tagsContainer}>
-                {['Safe Riding', 'Clean Vehicle', 'Punctual Driver', 'Friendly Behavior', 'Great Route'].map(tag => {
-                  const isSelected = selectedTags.includes(tag);
-                  return (
-                    <TouchableOpacity
-                      key={tag}
-                      style={[styles.tagChip, isSelected && styles.selectedTagChip]}
-                      onPress={() => toggleTag(tag)}
-                    >
-                      <Text style={[styles.tagText, isSelected && styles.selectedTagText]}>{tag}</Text>
-                    </TouchableOpacity>
-                  );
-                })}
-              </View>
-
-              {/* Comment Input */}
-              <Text style={styles.inputLabelText}>Optional Comment:</Text>
-              <TextInput
-                style={styles.commentInput}
-                placeholder="Write a comment about your ride experience..."
-                placeholderTextColor={Colors.textMuted}
-                value={reviewText}
-                onChangeText={setReviewText}
-                multiline
-                numberOfLines={3}
-              />
-
-              <TouchableOpacity style={[styles.actionMainButton, { backgroundColor: Colors.success }]} onPress={handleSubmitRating}>
-                <Ionicons name="star" size={20} color="#FFF" />
-                <Text style={styles.actionMainButtonText}>Submit Rating & Complete</Text>
-              </TouchableOpacity>
-            </View>
+            )
           )}
 
           {/* Participant Summary Footer Panel */}
           <View style={styles.driverPanel}>
-            <Image source={{ uri: ride.riderPhoto }} style={styles.driverPhoto} />
+            <Image
+              source={{
+                uri: user?.role === 'driver'
+                  ? (currentBooking.passengerPhoto || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80')
+                  : (ride.riderPhoto || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80')
+              }}
+              style={styles.driverPhoto}
+            />
             <View style={{ flex: 1 }}>
-              <Text style={styles.driverName}>{user?.role === 'driver' ? currentBooking.passengerId.split('@')[0] : ride.riderName}</Text>
-              <Text style={styles.vehicleInfo}>{ride.vehicleName} • {ride.vehicleNumber}</Text>
+              <Text style={styles.driverName}>
+                {user?.role === 'driver' ? (currentBooking.passengerName || 'Passenger') : ride.riderName}
+              </Text>
+              <Text style={styles.vehicleInfo}>
+                {user?.role === 'driver' ? (currentBooking.passengerPhone || 'Passenger Contact') : `${ride.vehicleName} • ${ride.vehicleNumber}`}
+              </Text>
             </View>
 
             <TouchableOpacity style={styles.callIconButton} onPress={handleCallParticipant}>
@@ -678,6 +726,23 @@ const styles = StyleSheet.create({
     borderColor: Colors.primary,
     backgroundColor: '#EFF6FF',
   },
+  disabledPaymentCard: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#CBD5E1',
+    opacity: 0.7,
+  },
+  disabledBadge: {
+    backgroundColor: '#E2E8F0',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 6,
+  },
+  disabledBadgeText: {
+    fontSize: 9,
+    color: '#64748B',
+    fontWeight: '800',
+    textTransform: 'uppercase',
+  },
   paymentName: {
     fontSize: 14,
     fontWeight: 'bold',
@@ -796,5 +861,73 @@ const styles = StyleSheet.create({
     color: Colors.primary,
     fontWeight: '700',
     fontSize: 13,
+  },
+  promptCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 20,
+    padding: 20,
+    alignItems: 'center',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.1,
+    shadowRadius: 10,
+    elevation: 4,
+    marginVertical: 10,
+  },
+  promptIconCircle: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: '#DCFCE7',
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  promptHeaderTitle: {
+    fontSize: 18,
+    fontWeight: '800',
+    color: Colors.textPrimary,
+    marginBottom: 6,
+  },
+  promptQuestionText: {
+    fontSize: 15,
+    fontWeight: '600',
+    color: Colors.textMuted,
+    marginBottom: 20,
+  },
+  promptButtonRow: {
+    flexDirection: 'row',
+    gap: 12,
+    width: '100%',
+  },
+  promptNoButton: {
+    flex: 1,
+    backgroundColor: '#F1F5F9',
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+  },
+  promptNoButtonText: {
+    color: Colors.textPrimary,
+    fontSize: 15,
+    fontWeight: '700',
+  },
+  promptYesButton: {
+    flex: 1,
+    backgroundColor: Colors.primary,
+    paddingVertical: 14,
+    borderRadius: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  promptYesButtonText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: '800',
   },
 });

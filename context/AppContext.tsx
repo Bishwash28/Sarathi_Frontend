@@ -2,7 +2,7 @@ import { default as AsyncStorage, default as AsyncStorageLib } from '@react-nati
 import * as Location from 'expo-location';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
 import { router } from 'expo-router';
-import React, { createContext, useContext, useEffect, useRef, useState } from 'react';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
 import { Alert, Platform } from 'react-native';
 import * as Linking from 'expo-linking';
 import * as WebBrowser from 'expo-web-browser';
@@ -97,6 +97,7 @@ export interface Ride {
   encodedPolyLine?: string;
   vehicleId?: string;
   riderId?: string;
+  status?: 'active' | 'completed' | 'cancelled';
 }
 
 export interface Booking {
@@ -144,8 +145,10 @@ export interface DriverMessage {
   senderName?: string;
   senderPhoto?: string;
   senderPhone?: string;
+  receiverId?: string;
   passengerId?: string;
   riderId?: string;
+  isRead?: boolean;
 }
 
 interface UserProfile {
@@ -181,6 +184,7 @@ interface AppContextType {
   notifications: string[];
   driverNotifications: DriverNotificationItem[];
   unreadDriverNotifCount: number;
+  unreadChatMessageCount: number;
   recentSearches: RecentSearchItem[];
   savedPlaces: SavedPlaceItem[];
   addRecentSearch: (from: string, to: string) => void;
@@ -198,7 +202,7 @@ interface AppContextType {
   updateEmergencyContact: (contact: string) => void;
   updateUserProfile: (payload: { name?: string; email?: string; phone?: string; avatarUrl?: string }) => Promise<{ success: boolean; error?: string }>;
   deleteAccount: () => Promise<{ success: boolean; error?: string }>;
-  switchUserRole: (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => Promise<{ success: boolean; error?: string }>;
+  switchUserRole: (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => Promise<{ success: boolean; error?: string; message?: string }>;
   uploadUserKycDocument: (documentType: string, document: string, file: string) => Promise<{ success: boolean; error?: string }>;
   submitKycVerify: () => Promise<{ success: boolean; error?: string }>;
   refreshKycStatus: () => Promise<{ status: string; rejectionReason?: string }>;
@@ -213,11 +217,14 @@ interface AppContextType {
   sendChatMessage: (text: string) => void;
   sendDriverMessage: (rideId: string, text: string) => void;
   startRiderChat: (rideId: string) => void;
+  markConversationAsRead: (rideId: string) => Promise<void>;
+  fetchUserConversations: () => Promise<Record<string, DriverMessage[]>>;
   nudgeDriverLocation: (bookingId: string) => void;
   startRideWithOTP: (bookingId: string, otp: string) => boolean;
   endRideWithOTP: (bookingId: string, otp: string) => boolean;
   verifyPickupOtp: (bookingId: string, otp: string) => { success: boolean; error?: string };
   verifyCompletionOtp: (bookingId: string, otp: string) => { success: boolean; error?: string };
+  triggerCompletionOtpPrompt: (bookingId: string) => void;
   processPayment: (bookingId: string, method: 'cash' | 'khalti' | 'esewa') => { success: boolean; error?: string };
   submitRideRating: (bookingId: string, rating: number, comment?: string) => void;
   createRide: (ride: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => Promise<{ success: boolean; error?: string }>;
@@ -225,6 +232,10 @@ interface AppContextType {
   deleteRide: (id: string) => Promise<{ success: boolean; error?: string }>;
   acceptBooking: (bookingId: string) => void;
   declineBooking: (bookingId: string) => void;
+  deleteConversation: (rideId: string) => Promise<void>;
+  deletedChatRideIds: string[];
+  fetchActiveRides: () => Promise<Ride[]>;
+  fetchUserBookings: () => Promise<Booking[]>;
   logout: () => Promise<void>;
 }
 
@@ -293,6 +304,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [driverNotifications, setDriverNotifications] = useState<DriverNotificationItem[]>(initialDriverNotifications);
   const [driverMessages, setDriverMessages] = useState<Record<string, DriverMessage[]>>(initialDriverMessages);
   const [activeChatRideIds, setActiveChatRideIds] = useState<string[]>([]);
+  const [deletedChatRideIds, setDeletedChatRideIds] = useState<string[]>([]);
   const [notifications, setNotifications] = useState<string[]>([]);
   const [messages, setMessages] = useState<Message[]>([
     {
@@ -399,6 +411,53 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     })();
   }, []);
 
+  // ── RE-FETCH ACTIVE RIDES & BOOKINGS ON AUTHENTICATION CHANGE ──
+  useEffect(() => {
+    if (isAuthenticated) {
+      fetchActiveRides();
+      fetchUserConversations();
+      fetchUserBookings();
+    }
+  }, [isAuthenticated]);
+
+  // ── REALTIME DB CHAT CONVERSATIONS SUBSCRIPTION ──
+  useEffect(() => {
+    if (!userId) return;
+
+    fetchUserConversations();
+    fetchUserBookings();
+
+    const dbChatChannel = supabase
+      .channel(`sarathi-db-chat-realtime-${userId}`)
+      .on(
+        'postgres_changes',
+        {
+          event: '*',
+          schema: 'public',
+          table: 'chat_messages',
+        },
+        (payload: any) => {
+          if (payload.new) {
+            const newRow = payload.new;
+            const isParticipant =
+              newRow.sender_id === userId ||
+              newRow.receiver_id === userId ||
+              newRow.passenger_id === userId ||
+              newRow.rider_id === userId;
+
+            if (isParticipant) {
+              fetchUserConversations();
+            }
+          }
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(dbChatChannel);
+    };
+  }, [userId]);
+
   // ── SUPABASE REALTIME WEBSOCKET SUBSCRIPTION ──
   useEffect(() => {
     const realtimeChannel = supabase.channel('sarathi-global-realtime');
@@ -406,12 +465,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     realtimeChannel
       .on('broadcast', { event: 'chat_message' }, ({ payload }) => {
         if (payload && payload.rideId) {
+          const isParticipant =
+            !payload.senderId ||
+            !userId ||
+            payload.senderId === userId ||
+            payload.receiverId === userId ||
+            payload.passengerId === userId ||
+            payload.riderId === userId;
+
+          if (!isParticipant) return;
+
           setDriverMessages(prev => {
             const existingList = prev[payload.rideId] || [];
-            if (existingList.some(m => m.id === payload.id)) return prev;
+            const payloadTime = new Date(payload.timestamp).getTime();
+            const isDuplicate = existingList.some(
+              m => m.id === payload.id ||
+                   ((m.senderId === payload.senderId || (m.senderName && payload.senderName && m.senderName === payload.senderName)) &&
+                    m.text === payload.text &&
+                    Math.abs(new Date(m.timestamp).getTime() - payloadTime) < 3000)
+            );
+            if (isDuplicate) return prev;
             const updated = {
               ...prev,
-              [payload.rideId]: [...existingList, payload],
+              [payload.rideId]: [...existingList, { ...payload, timestamp: new Date(payload.timestamp) }],
             };
             saveChatMessagesToStorage(updated);
             return updated;
@@ -514,7 +590,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     };
   }, []);
 
-  const fetchActiveRides = async () => {
+  const fetchActiveRides = async (): Promise<Ride[]> => {
     try {
       const { data, error } = await supabase
         .from('rides')
@@ -524,10 +600,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       if (error) {
         console.warn('[fetchActiveRides] Error:', error.message);
-        return;
+        return rides;
       }
 
-      if (data && data.length > 0) {
+      if (data) {
         const mappedRides: Ride[] = data.map((item: any) => ({
           id: item.id,
           riderId: item.rider_id,
@@ -547,11 +623,74 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           destination: { lat: Number(item.destination_lat), lng: Number(item.destination_lng) },
           encodedPolyLine: item.encoded_polyline,
           vehicleId: item.vehicle_id,
+          status: item.status || 'active',
         }));
         setRides(mappedRides);
+        return mappedRides;
       }
+      return rides;
     } catch (err) {
       console.error('[fetchActiveRides] Catch:', err);
+      return rides;
+    }
+  };
+
+  const fetchUserBookings = async (): Promise<Booking[]> => {
+    if (!userId) {
+      return bookings;
+    }
+
+    try {
+      const activeUserId = userId;
+      const userRideIds = rides
+        .filter(r => (r.riderId && r.riderId === activeUserId) || (user?.phone && r.phone === user.phone))
+        .map(r => r.id);
+
+      let query = supabase.from('bookings').select('*');
+      if (userRideIds.length > 0) {
+        query = query.or(`passenger_id.eq.${activeUserId},ride_id.in.(${userRideIds.join(',')})`);
+      } else {
+        query = query.eq('passenger_id', activeUserId);
+      }
+
+      const { data, error } = await query.order('created_at', { ascending: false });
+
+      if (error) {
+        if (!error.message.includes('schema cache')) {
+          console.warn('[fetchUserBookings] Error:', error.message);
+        }
+        return bookings;
+      }
+
+      if (data) {
+        const mappedBookings: Booking[] = data.map((item: any) => ({
+          id: item.id,
+          rideId: item.ride_id,
+          passengerId: item.passenger_id || '',
+          passengerName: item.passenger_name || 'Passenger',
+          passengerPhone: item.passenger_phone || '',
+          passengerPhoto: item.passenger_photo || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80',
+          passengerPickup: item.pickup_name || '',
+          passengerDropoff: item.dropoff_name || '',
+          status: item.status || 'pending',
+          createdAt: item.created_at ? new Date(item.created_at) : new Date(),
+          pickupOtp: item.pickup_otp || '1234',
+          completionOtp: item.completion_otp || '5678',
+          lifecycleState: item.lifecycle_state || 'request_pending',
+        }));
+
+        setBookings(prev => {
+          const map = new Map<string, Booking>();
+          prev.forEach(b => map.set(b.id, b));
+          mappedBookings.forEach(b => map.set(b.id, b));
+          return Array.from(map.values());
+        });
+        return mappedBookings;
+      }
+      return bookings;
+    } catch (err) {
+      console.error('[fetchUserBookings] Catch:', err);
+      return bookings;
     }
   };
 
@@ -613,6 +752,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         photo: profile?.profile_image || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
       });
       setIsAuthenticated(true);
+      await fetchActiveRides();
       return { success: true };
     } catch (err: any) {
       return { success: false, error: err.message || 'Login failed' };
@@ -929,7 +1069,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   }, []);
 
   const activeBooking = bookings.find(
-    b => b.lifecycleState !== 'completed' && b.lifecycleState !== 'cancelled'
+    b => (user?.id ? (b.passengerId === user.id) : true) &&
+         b.lifecycleState !== 'completed' &&
+         b.lifecycleState !== 'cancelled' &&
+         b.status !== 'completed' &&
+         b.status !== 'cancelled'
   ) || null;
 
   // ─── Helper: map backend status strings → local types ───────────────────
@@ -971,6 +1115,22 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     riderOriginName?: string,
     riderDestName?: string,
   ): Promise<void> => {
+    // Verify ride availability and self-booking restriction
+    const targetRide = rides.find(r => r.id === ridePostId);
+    if (targetRide) {
+      if (targetRide.status === 'completed' || targetRide.status === 'cancelled' || targetRide.seatsLeft <= 0) {
+        throw new Error('RIDE_UNAVAILABLE: This ride offer has been completed or has no available seats.');
+      }
+      const isRiderOwner = Boolean(
+        (targetRide.riderId && user?.id && targetRide.riderId === user.id) ||
+        (targetRide.riderName && user?.name && targetRide.riderName === user.name) ||
+        (targetRide.phone && user?.phone && targetRide.phone === user.phone)
+      );
+      if (isRiderOwner) {
+        throw new Error('SELF_BOOKING_DISALLOWED: You cannot request a booking on your own ride offer.');
+      }
+    }
+
     // Prevent passenger from creating concurrent active ride requests
     const activeBooking = bookings.find(
       b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing'
@@ -1051,6 +1211,26 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     addDriverNotification(passengerNotif);
     startRiderChat(ridePostId);
 
+    // Persist booking in Supabase DB if table exists
+    try {
+      await supabase.from('bookings').insert({
+        id: newBooking.id,
+        ride_id: ridePostId,
+        passenger_id: user?.id || user?.email,
+        passenger_name: passengerName,
+        passenger_phone: passengerPhone,
+        passenger_photo: passengerPhoto,
+        pickup_name: passengerPickup,
+        dropoff_name: passengerDropoff,
+        status: 'pending',
+        lifecycle_state: 'request_pending',
+        pickup_otp: randomPickupOtp,
+        completion_otp: randomCompletionOtp,
+      });
+    } catch (e) {
+      console.warn('[requestBooking] Supabase bookings notice:', e);
+    }
+
     // Broadcast over Supabase Realtime WebSocket
     supabase.channel('sarathi-global-realtime').send({
       type: 'broadcast',
@@ -1068,6 +1248,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const acceptBooking = async (bookingId: string): Promise<void> => {
     const targetBooking = bookings.find(b => b.id === bookingId);
     if (!targetBooking) return;
+    const targetRide = rides.find(r => r.id === targetBooking.rideId);
+
+    // Authorization check: Only ride owner can accept
+    const isOwner = Boolean(
+      user?.role === 'driver' &&
+      ((targetRide?.riderId && user?.id && targetRide.riderId === user.id) ||
+       (targetRide?.riderName && user?.name && targetRide.riderName === user.name) ||
+       (targetRide?.phone && user?.phone && targetRide.phone === user.phone))
+    );
+
+    if (!isOwner) {
+      console.warn('[acceptBooking] Unauthorized attempt to accept booking');
+      return;
+    }
+
+    if (targetBooking.status !== 'pending') {
+      console.warn('[acceptBooking] Booking is not pending:', targetBooking.status);
+      return;
+    }
 
     const updatedBooking: Booking = {
       ...targetBooking,
@@ -1095,6 +1294,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     if (targetBooking.rideId) {
       startRiderChat(targetBooking.rideId);
+    }
+
+    // Persist booking update to Supabase DB
+    try {
+      await supabase.from('bookings').update({ status: 'accepted', lifecycle_state: 'waiting_for_pickup' }).eq('id', bookingId);
+      if (targetBooking.rideId) {
+        await supabase.from('rides').update({ available_seats: Math.max(0, (targetRide?.seatsLeft || 1) - 1) }).eq('id', targetBooking.rideId);
+      }
+    } catch (e) {
+      console.warn('[acceptBooking] Supabase notice:', e);
     }
 
     // Broadcast WebSocket event over Supabase Realtime so BOTH users redirect live to /active-trip!
@@ -1153,6 +1362,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBookings(prev => prev.map(b => (b.id === bookingId ? updatedBooking : b)));
       saveActiveBookingToStorage(updatedBooking);
 
+      if (target.rideId) {
+        supabase.from('rides').update({ status: 'completed' }).eq('id', target.rideId).then(({ error }) => {
+          if (error) console.error('[verifyCompletionOtp] Supabase ride update error:', error.message);
+        });
+        setRides(prev => prev.map(r => (r.id === target.rideId ? { ...r, status: 'completed' } : r)));
+      }
+
       supabase.channel('sarathi-global-realtime').send({
         type: 'broadcast',
         event: 'booking_status_change',
@@ -1167,8 +1383,35 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return { success: false, error: errText };
   };
 
+  /** Driver: prompt dropoff / completion PIN verification */
+  const triggerCompletionOtpPrompt = (bookingId: string) => {
+    const target = bookings.find(b => b.id === bookingId);
+    if (!target) return;
+
+    const updatedBooking: Booking = {
+      ...target,
+      lifecycleState: 'completion_otp_required',
+    };
+
+    setBookings(prev => prev.map(b => (b.id === bookingId ? updatedBooking : b)));
+    saveActiveBookingToStorage(updatedBooking);
+
+    supabase.channel('sarathi-global-realtime').send({
+      type: 'broadcast',
+      event: 'booking_status_change',
+      payload: { booking: updatedBooking }
+    });
+  };
+
   /** Payment — mark complete */
   const processPayment = (_bookingId: string, _method: 'cash' | 'khalti' | 'esewa'): { success: boolean; error?: string } => {
+    const target = bookings.find(b => b.id === _bookingId);
+    if (target?.rideId) {
+      supabase.from('rides').update({ status: 'completed' }).eq('id', target.rideId).then(({ error }) => {
+        if (error) console.error('[processPayment] Supabase ride update error:', error.message);
+      });
+      setRides(prev => prev.map(r => (r.id === target.rideId ? { ...r, status: 'completed' } : r)));
+    }
     setBookings(prev =>
       prev.map(b =>
         b.id === _bookingId
@@ -1181,6 +1424,13 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   /** Rating submission */
   const submitRideRating = (_bookingId: string, _rating: number, _comment?: string): void => {
+    const target = bookings.find(b => b.id === _bookingId);
+    if (target?.rideId) {
+      supabase.from('rides').update({ status: 'completed' }).eq('id', target.rideId).then(({ error }) => {
+        if (error) console.error('[submitRideRating] Supabase ride update error:', error.message);
+      });
+      setRides(prev => prev.map(r => (r.id === target.rideId ? { ...r, status: 'completed' } : r)));
+    }
     setBookings(prev =>
       prev.map(b =>
         b.id === _bookingId
@@ -1203,11 +1453,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   /** Driver rejects a booking */
   const declineBooking = async (bookingId: string): Promise<void> => {
-    setBookings(prev =>
-      prev.map(b =>
-        b.id === bookingId ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b
-      )
+    const targetBooking = bookings.find(b => b.id === bookingId);
+    if (!targetBooking) return;
+    const targetRide = rides.find(r => r.id === targetBooking.rideId);
+
+    // Authorization check: Only ride owner can decline
+    const isOwner = Boolean(
+      user?.role === 'driver' &&
+      ((targetRide?.riderId && user?.id && targetRide.riderId === user.id) ||
+       (targetRide?.riderName && user?.name && targetRide.riderName === user.name) ||
+       (targetRide?.phone && user?.phone && targetRide.phone === user.phone))
     );
+
+    if (!isOwner) {
+      console.warn('[declineBooking] Unauthorized attempt to decline booking');
+      return;
+    }
+
+    if (targetBooking.status !== 'pending') {
+      console.warn('[declineBooking] Booking is not pending:', targetBooking.status);
+      return;
+    }
+
+    const updatedBooking: Booking = {
+      ...targetBooking,
+      status: 'cancelled',
+      lifecycleState: 'cancelled',
+    };
+
+    setBookings(prev => prev.map(b => b.id === bookingId ? updatedBooking : b));
+
+    addDriverNotification({
+      type: 'request_status',
+      title: 'Ride Request Declined ✕',
+      description: `Your request from ${targetBooking.passengerPickup} to ${targetBooking.passengerDropoff} was declined by the driver.`,
+      iconName: 'close-circle-outline',
+      iconColor: '#DC2626',
+      targetRole: 'passenger',
+      targetScreen: '/search-ride',
+      targetParams: { rideId: targetBooking.rideId },
+    });
+
+    try {
+      await supabase.from('bookings').update({ status: 'cancelled', lifecycle_state: 'cancelled' }).eq('id', bookingId);
+    } catch (err) {
+      console.warn('[declineBooking] Supabase update notice:', err);
+    }
+
+    supabase.channel('sarathi-global-realtime').send({
+      type: 'broadcast',
+      event: 'ride_declined',
+      payload: { booking: updatedBooking }
+    });
   };
 
   /** Simulate GPS nudge — no backend endpoint for live tracking */
@@ -1219,6 +1516,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isDriver = user?.role === 'driver';
     const senderRole = isDriver ? 'driver' : 'user';
 
+    const booking = bookings.find(b => b.rideId === rideId);
+    const ride = rides.find(r => r.id === rideId);
+    const existingMsgs = driverMessages[rideId] || [];
+
+    const existingPassengerId = existingMsgs.find(m => m.passengerId)?.passengerId ||
+                                existingMsgs.find(m => m.sender === 'user' && m.senderId)?.senderId ||
+                                existingMsgs.find(m => m.senderId && m.senderId !== user?.id && isDriver)?.senderId;
+
+    const existingRiderId = existingMsgs.find(m => m.riderId)?.riderId ||
+                            existingMsgs.find(m => m.sender === 'driver' && m.senderId)?.senderId ||
+                            existingMsgs.find(m => m.senderId && m.senderId !== user?.id && !isDriver)?.senderId;
+
+    const passengerId = isDriver
+      ? (booking?.passengerId || existingPassengerId)
+      : (user?.id || existingPassengerId || booking?.passengerId);
+
+    const riderId = isDriver
+      ? (user?.id || existingRiderId || ride?.riderId)
+      : (ride?.riderId || existingRiderId);
+
+    const receiverId = isDriver ? passengerId : riderId;
+
     const userMsg: DriverMessage = {
       id: `dm-${Date.now()}`,
       rideId,
@@ -1229,25 +1548,28 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       senderName: user?.name || (isDriver ? 'Rider' : 'Passenger'),
       senderPhoto: user?.photo,
       senderPhone: user?.phone,
-      passengerId: isDriver ? undefined : user?.id,
-      riderId: isDriver ? user?.id : undefined,
+      receiverId,
+      passengerId,
+      riderId,
     };
 
     setDriverMessages(prev => {
+      const existingList = prev[rideId] || [];
+      const msgTime = userMsg.timestamp.getTime();
+      const isDuplicate = existingList.some(
+        m => m.id === userMsg.id ||
+             ((m.senderId === userMsg.senderId || (m.senderName && userMsg.senderName && m.senderName === userMsg.senderName)) &&
+              m.text === userMsg.text &&
+              Math.abs(new Date(m.timestamp).getTime() - msgTime) < 3000)
+      );
+      if (isDuplicate) return prev;
       const updated = {
         ...prev,
-        [rideId]: [...(prev[rideId] || []), userMsg],
+        [rideId]: [...existingList, userMsg],
       };
       saveChatMessagesToStorage(updated);
       return updated;
     });
-
-    // Ensure rideId is active in chat threads list
-    startRiderChat(rideId);
-
-    // Look up associated booking & ride details for notification title
-    const booking = bookings.find(b => b.rideId === rideId);
-    const ride = rides.find(r => r.id === rideId);
 
     let notifItem: DriverNotificationItem;
 
@@ -1285,20 +1607,132 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       };
     }
 
-    addDriverNotification(notifItem);
-
-    // Broadcast message & notification over Supabase Realtime WebSocket
+    // Broadcast message over Supabase Realtime WebSocket ONLY (no notification bar item)
     supabase.channel('sarathi-global-realtime').send({
       type: 'broadcast',
       event: 'chat_message',
       payload: userMsg,
     });
-    supabase.channel('sarathi-global-realtime').send({
-      type: 'broadcast',
-      event: 'driver_notification',
-      payload: notifItem,
+
+    // Insert message into Supabase DB chat_messages table (with fallback)
+    supabase
+      .from('chat_messages')
+      .insert({
+        id: userMsg.id,
+        ride_id: rideId,
+        sender_id: user?.id,
+        sender_name: userMsg.senderName,
+        sender_photo: userMsg.senderPhoto,
+        sender_phone: userMsg.senderPhone,
+        receiver_id: receiverId,
+        passenger_id: passengerId,
+        rider_id: riderId,
+        sender_role: senderRole,
+        message_text: text,
+        is_read: false,
+        created_at: userMsg.timestamp.toISOString(),
+      })
+      .then(({ error }: { error: any }) => {
+        if (error && !error.message.includes('schema cache')) {
+          console.warn('[sendDriverMessage] DB insert warning:', error.message);
+        }
+        fetchUserConversations();
+      });
+  };
+
+  const fetchUserConversations = async (): Promise<Record<string, DriverMessage[]>> => {
+    if (!userId) {
+      setDriverMessages({});
+      return {};
+    }
+
+    try {
+      const { data, error } = await supabase
+        .from('chat_messages')
+        .select('*')
+        .or(`sender_id.eq.${userId},receiver_id.eq.${userId},passenger_id.eq.${userId},rider_id.eq.${userId}`)
+        .order('created_at', { ascending: true });
+
+      if (error) {
+        if (!error.message.includes('schema cache')) {
+          console.warn('[fetchUserConversations] Error:', error.message);
+        }
+        return driverMessages;
+      }
+
+      if (data) {
+        const grouped: Record<string, DriverMessage[]> = {};
+        data.forEach((row: any) => {
+          const rideId = row.ride_id;
+          if (!rideId) return;
+
+          const msg: DriverMessage = {
+            id: row.id,
+            rideId,
+            sender: row.sender_role === 'driver' ? 'driver' : 'user',
+            text: row.message_text || '',
+            timestamp: new Date(row.created_at),
+            senderId: row.sender_id,
+            senderName: row.sender_name,
+            senderPhoto: row.sender_photo,
+            senderPhone: row.sender_phone,
+            receiverId: row.receiver_id,
+            passengerId: row.passenger_id,
+            riderId: row.rider_id,
+            isRead: row.is_read !== false,
+          };
+
+          if (!grouped[rideId]) {
+            grouped[rideId] = [];
+          }
+          grouped[rideId].push(msg);
+        });
+
+        setDriverMessages(grouped);
+        return grouped;
+      }
+      return driverMessages;
+    } catch (err) {
+      console.error('[fetchUserConversations] Catch:', err);
+      return driverMessages;
+    }
+  };
+
+  const markConversationAsRead = async (rideId: string) => {
+    if (!userId || !rideId) return;
+
+    try {
+      await supabase
+        .from('chat_messages')
+        .update({ is_read: true })
+        .eq('ride_id', rideId)
+        .eq('receiver_id', userId);
+    } catch (e) {
+      console.warn('[markConversationAsRead] Error:', e);
+    }
+
+    setDriverMessages(prev => {
+      const msgs = prev[rideId];
+      if (!msgs) return prev;
+      const updated = msgs.map(m => (m.receiverId === userId ? { ...m, isRead: true } : m));
+      return { ...prev, [rideId]: updated };
     });
   };
+
+  const unreadChatMessageCount = useMemo(() => {
+    if (!userId) return 0;
+    let count = 0;
+    Object.keys(driverMessages).forEach(rideId => {
+      if (deletedChatRideIds.includes(rideId)) return;
+      const msgs = driverMessages[rideId] || [];
+      msgs.forEach(m => {
+        if (m.receiverId === userId && m.isRead === false) {
+          count++;
+        }
+      });
+    });
+    return count;
+  }, [driverMessages, userId, deletedChatRideIds]);
 
   const sendChatMessage = (text: string) => {
     const userMsg: Message = {
@@ -1310,22 +1744,29 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setMessages(prev => [...prev, userMsg]);
 
-    setTimeout(() => {
+    setTimeout(async () => {
+      let activeRides = rides;
+      try {
+        activeRides = await fetchActiveRides();
+      } catch {
+        // Fallback to local rides state if network check fails
+      }
+      activeRides = activeRides.filter(r => (r.status === 'active' || !r.status) && r.seatsLeft > 0);
       const lowerText = text.toLowerCase();
       let responseText = "";
       let suggestedRides: string[] = [];
 
-      if (rides.length === 0) {
+      if (activeRides.length === 0) {
         responseText = "There are currently no active live rides posted on Sarathi. Drivers can offer rides from the Driver tab!";
       } else if (lowerText.includes('cheap') || lowerText.includes('price') || lowerText.includes('cost')) {
-        const sorted = [...rides].sort((a, b) => a.price - b.price);
+        const sorted = [...activeRides].sort((a, b) => a.price - b.price);
         suggestedRides = [sorted[0].id];
         responseText = `I found the cheapest ride for you! ${sorted[0].riderName} is offering a ride for NPR ${sorted[0].price} going through ${sorted[0].route.join(' → ')}.`;
       } else if (lowerText.includes('soonest') || lowerText.includes('time') || lowerText.includes('leaving')) {
-        suggestedRides = [rides[0].id];
-        responseText = `The ride available is with ${rides[0].riderName} (${rides[0].departureTime}) on a ${rides[0].vehicleName} for NPR ${rides[0].price}. Route: ${rides[0].route.join(' → ')}.`;
+        suggestedRides = [activeRides[0].id];
+        responseText = `The ride available is with ${activeRides[0].riderName} (${activeRides[0].departureTime}) on a ${activeRides[0].vehicleName} for NPR ${activeRides[0].price}. Route: ${activeRides[0].route.join(' → ')}.`;
       } else {
-        const matches = rides.filter(r =>
+        const matches = activeRides.filter(r =>
           r.route.some(landmark => lowerText.includes(landmark.toLowerCase()))
         );
         if (matches.length > 0) {
@@ -1352,12 +1793,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const startRiderChat = (rideId: string) => {
-    setActiveChatRideIds(prev => {
-      if (prev.includes(rideId)) return prev;
-      const updated = [...prev, rideId];
-      AsyncStorage.setItem(ACTIVE_CHATS_STORAGE_KEY, JSON.stringify(updated)).catch(() => null);
-      return updated;
-    });
+    // Deprecated no-op auto creation: chats exist ONLY when messages exist in DB
   };
 
   const startRideWithOTP = (bookingId: string, otp: string): boolean => {
@@ -1382,8 +1818,23 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return false;
   };
 
+  const deleteConversation = async (rideId: string) => {
+    setDeletedChatRideIds(prev => {
+      if (prev.includes(rideId)) return prev;
+      const updated = [...prev, rideId];
+      if (userId) {
+        AsyncStorageLib.setItem(`@sarathi_deleted_chats_${userId}`, JSON.stringify(updated)).catch(() => null);
+      }
+      return updated;
+    });
+  };
+
   const logout = async () => {
-    await supabase.auth.signOut();
+    try {
+      await supabase.auth.signOut();
+    } catch (e) {
+      console.warn('SignOut warning:', e);
+    }
     await AsyncStorageLib.removeItem('@sarathi_token');
     await AsyncStorageLib.removeItem('@sarathi_user_id');
     setUser(null);
@@ -1391,6 +1842,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setAuthToken(null);
     setIsAuthenticated(false);
     setBookings([]);
+    setDriverNotifications([]);
+    setDriverMessages({});
+    setActiveChatRideIds([]);
+    setDeletedChatRideIds([]);
+    setRides([]);
   };
 
 async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise<string> {
@@ -1478,21 +1934,11 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
             return { success: false, error: `Failed to save to database: ${updateErr.message}` };
           }
         }
-
-        if (payload.email && user && payload.email !== user.email) {
-          const { error: emailErr } = await supabase.auth.updateUser({ email: payload.email });
-          if (emailErr) {
-            console.warn('[updateUserProfile] Supabase email update warning:', emailErr.message);
-          } else {
-            await supabase.from('users').update({ email: payload.email }).eq('id', userId);
-          }
-        }
       }
 
       setUser(prev => prev ? {
         ...prev,
         name: payload.name ?? prev.name,
-        email: payload.email ?? prev.email,
         phone: payload.phone ?? prev.phone,
         photo: finalPhotoUrl ?? prev.photo,
       } : null);
@@ -1509,6 +1955,44 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
 
   const switchUserRole = async (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => {
     const isDriverOrRider = targetRole === 'DRIVER' || targetRole === 'RIDER';
+    const currentRole = user?.role ?? 'passenger';
+
+    // Prevent role switching if user has an active trip or booking
+    if (currentRole === 'driver') {
+      const activeDriverRide = rides.find(
+        r => (r.status === 'active' || !r.status) && (r.riderId === user?.id || r.riderName === user?.name || (user?.phone && r.phone === user.phone))
+      );
+      const activeDriverBooking = bookings.find(
+        b =>
+          (b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing') &&
+          b.lifecycleState !== 'completed' &&
+          b.lifecycleState !== 'cancelled'
+      );
+      if (activeDriverRide || activeDriverBooking) {
+        return {
+          success: false,
+          error: 'ACTIVE_TRIP_EXISTS',
+          message: 'You have an active ride offer or trip in progress as a Driver. Please complete or cancel your current trip before switching roles.',
+        };
+      }
+    }
+
+    if (currentRole === 'passenger') {
+      const activePassengerBooking = bookings.find(
+        b =>
+          (b.passengerId === user?.id || b.passengerName === user?.name) &&
+          (b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing') &&
+          b.lifecycleState !== 'completed' &&
+          b.lifecycleState !== 'cancelled'
+      );
+      if (activePassengerBooking) {
+        return {
+          success: false,
+          error: 'ACTIVE_TRIP_EXISTS',
+          message: 'You have an active ride booking in progress as a Passenger. Please complete or cancel your current trip before switching roles.',
+        };
+      }
+    }
 
     if (isDriverOrRider) {
       // Check real DB status from kyc_verifications table
@@ -1640,7 +2124,7 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
 
     // Strict rider restriction: Cannot publish a new ride offer if an active offer or trip exists
     const hasActiveOffer = rides.some(
-      r => (r.riderName === user?.name || (user?.phone && r.phone === user.phone)) && r.seatsLeft > 0
+      r => (r.status === 'active' || !r.status) && (r.riderName === user?.name || (user?.phone && r.phone === user.phone) || (user?.id && r.riderId === user.id)) && r.seatsLeft > 0
     );
     const hasActiveTrip = bookings.some(
       b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing'
@@ -1744,19 +2228,48 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
     }
   };
 
-  /** Driver: delete a ride offer from Supabase */
+  /** Driver: delete a ride offer from Supabase (updates status='cancelled' and falls back to delete) */
   const deleteRide = async (id: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const activeUserId = userId || user?.id;
-      if (activeUserId) {
-        const { error } = await supabase.from('rides').delete().eq('id', id).eq('rider_id', activeUserId);
-        if (error) {
-          console.error('[deleteRide] Supabase error:', error.message);
-          return { success: false, error: error.message };
+      if (!activeUserId) {
+        return { success: false, error: 'User is not authenticated.' };
+      }
+
+      // 1. Primary: Deactivate in Supabase DB by setting status = 'cancelled'
+      let dbSuccess = false;
+      const { error: updateErr } = await supabase
+        .from('rides')
+        .update({ status: 'cancelled' })
+        .eq('id', id)
+        .eq('rider_id', activeUserId);
+
+      if (!updateErr) {
+        dbSuccess = true;
+      } else {
+        console.warn('[deleteRide] Update status warning:', updateErr.message);
+        // Fallback: Try hard delete if status update fails
+        const { error: deleteErr } = await supabase
+          .from('rides')
+          .delete()
+          .eq('id', id)
+          .eq('rider_id', activeUserId);
+
+        if (!deleteErr) {
+          dbSuccess = true;
+        } else {
+          console.error('[deleteRide] Hard delete error:', deleteErr.message);
+          return { success: false, error: deleteErr.message };
         }
       }
-      setRides(prev => prev.filter(r => r.id !== id));
-      return { success: true };
+
+      if (dbSuccess) {
+        setRides(prev => prev.filter(r => r.id !== id));
+        await fetchActiveRides();
+        return { success: true };
+      }
+
+      return { success: false, error: 'Could not deactivate ride in database.' };
     } catch (err: any) {
       console.error('[deleteRide] error:', err);
       return { success: false, error: err.message || 'Failed to delete ride.' };
@@ -1776,7 +2289,18 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
         activeChatRideIds,
         notifications,
         driverNotifications,
-        unreadDriverNotifCount: driverNotifications.filter(n => !n.isRead).length,
+        unreadDriverNotifCount: driverNotifications.filter(n => {
+          if (n.isRead) return false;
+          const activeRole = user?.role === 'driver' || user?.kycVerified === true ? 'driver' : 'passenger';
+          if (n.targetRole && n.targetRole !== activeRole) {
+            if (n.type === 'ride_request' && activeRole === 'driver') {
+              return true;
+            }
+            return false;
+          }
+          return true;
+        }).length,
+        unreadChatMessageCount,
         recentSearches,
         savedPlaces,
         addRecentSearch,
@@ -1809,11 +2333,14 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
         sendChatMessage,
         sendDriverMessage,
         startRiderChat,
+        markConversationAsRead,
+        fetchUserConversations,
         nudgeDriverLocation,
         startRideWithOTP,
         endRideWithOTP,
         verifyPickupOtp,
         verifyCompletionOtp,
+        triggerCompletionOtpPrompt,
         processPayment,
         submitRideRating,
         createRide,
@@ -1821,6 +2348,10 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
         deleteRide,
         acceptBooking,
         declineBooking,
+        deleteConversation,
+        deletedChatRideIds,
+        fetchActiveRides,
+        fetchUserBookings,
         logout,
       }}
     >

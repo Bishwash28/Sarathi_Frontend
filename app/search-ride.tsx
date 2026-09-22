@@ -172,7 +172,7 @@ export default function SearchRideScreen() {
     origCoords?: { lat: number; lng: number } | null,
     destCoords?: { lat: number; lng: number } | null
   ): boolean => {
-    if (r.seatsLeft <= 0) return false;
+    if (r.seatsLeft <= 0 || (r.status && r.status !== 'active')) return false;
 
     // Build normalized list of stop names along the rider's route
     const rStops = [

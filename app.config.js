@@ -6,7 +6,7 @@ module.exports = ({ config }) => ({
   orientation: "portrait",
   icon: "./assets/images/icon.png",
   scheme: "sarathifrontend",
-  userInterfaceStyle: "automatic",
+  userInterfaceStyle: "light",
   ios: {
     supportsTablet: true,
     infoPlist: {
@@ -55,9 +55,9 @@ module.exports = ({ config }) => ({
         image: "./assets/images/icon.png",
         imageWidth: 200,
         resizeMode: "contain",
-        backgroundColor: "#ffffff",
+        backgroundColor: "#FFFFFF",
         dark: {
-          backgroundColor: "#000000",
+          backgroundColor: "#FFFFFF",
         },
       },
     ],

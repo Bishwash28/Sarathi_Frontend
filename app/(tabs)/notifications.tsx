@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import {
+  ActivityIndicator,
   Alert,
   FlatList,
   Image,
@@ -23,10 +24,19 @@ export default function NotificationsScreen() {
     markAllNotificationsAsRead,
     clearNotification,
     acceptBooking,
+    declineBooking,
+    bookings,
+    rides,
     user,
   } = useApp();
 
   const [activeFilter, setActiveFilter] = useState<'all' | 'unread' | 'requests' | 'updates'>('all');
+  const [isLoading, setIsLoading] = useState(true);
+
+  React.useEffect(() => {
+    const timer = setTimeout(() => setIsLoading(false), 300);
+    return () => clearTimeout(timer);
+  }, []);
 
   const isDriverMode = user?.role === 'driver' || user?.kycVerified === true;
   const currentRole = isDriverMode ? 'driver' : 'passenger';
@@ -66,6 +76,16 @@ export default function NotificationsScreen() {
     Alert.alert('Ride Request Accepted! 🎉', 'You have accepted the passenger request. Navigate to Active Trip to view status.');
   };
 
+  const handleDeclineRequest = (bookingId?: string, notifId?: string) => {
+    if (bookingId) {
+      declineBooking(bookingId);
+    }
+    if (notifId) {
+      markNotificationAsRead(notifId);
+    }
+    Alert.alert('Request Declined ✕', 'You have declined this passenger request.');
+  };
+
   const handleCallPassenger = (phone?: string) => {
     if (phone) {
       Linking.openURL(`tel:${phone}`);
@@ -88,6 +108,19 @@ export default function NotificationsScreen() {
   const renderItem = ({ item }: { item: DriverNotificationItem }) => {
     const isRideReq = item.type === 'ride_request';
     const params = item.targetParams || {};
+    const booking = bookings.find(b => b.id === params.bookingId);
+    const ride = rides.find(r => r.id === (params.rideId || booking?.rideId));
+
+    // Ownership & Authorization check: Is current user the driver owner of this ride offer?
+    const isRiderOwner = Boolean(
+      user?.role === 'driver' &&
+      ((ride?.riderId && user?.id && ride.riderId === user.id) ||
+       (ride?.riderName && user?.name && ride.riderName === user.name) ||
+       (ride?.phone && user?.phone && ride.phone === user.phone))
+    );
+
+    const bookingStatus = booking?.status || 'pending';
+    const isPending = bookingStatus === 'pending';
 
     return (
       <View style={[styles.notifCard, !item.isRead && styles.unreadNotifCard]}>
@@ -148,23 +181,93 @@ export default function NotificationsScreen() {
               </Text>
             </View>
 
-            <View style={styles.actionButtonsRow}>
-              <TouchableOpacity
-                style={styles.acceptBtn}
-                onPress={() => handleAcceptRequest(params.bookingId, item.id)}
-                activeOpacity={0.85}
-              >
-                <Ionicons name="checkmark-circle" size={16} color="#FFF" />
-                <Text style={styles.acceptBtnText}>Accept Request</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.declineBtn}
-                onPress={() => clearNotification(item.id)}
-                activeOpacity={0.85}
-              >
-                <Text style={styles.declineBtnText}>Decline</Text>
-              </TouchableOpacity>
-            </View>
+            {/* Action Buttons (Rendered ONLY for Driver Owner when request is pending) */}
+            {isRiderOwner && isPending ? (
+              <View style={styles.actionButtonsRow}>
+                <TouchableOpacity
+                  style={styles.acceptBtn}
+                  onPress={() => handleAcceptRequest(params.bookingId, item.id)}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="checkmark-circle" size={16} color="#FFF" />
+                  <Text style={styles.acceptBtnText}>Accept Request</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.declineBtn}
+                  onPress={() => handleDeclineRequest(params.bookingId, item.id)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.declineBtnText}>Decline</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              /* Non-Actionable Status Badge (Passengers & Completed/Declined Requests) */
+              <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center' }}>
+                <View
+                  style={[
+                    styles.statusChip,
+                    bookingStatus === 'accepted'
+                      ? { backgroundColor: '#DCFCE7', borderColor: '#86EFAC' }
+                      : bookingStatus === 'ongoing'
+                      ? { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }
+                      : bookingStatus === 'completed'
+                      ? { backgroundColor: '#F3E8FF', borderColor: '#D8B4FE' }
+                      : bookingStatus === 'cancelled'
+                      ? { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }
+                      : { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' },
+                  ]}
+                >
+                  <Ionicons
+                    name={
+                      bookingStatus === 'accepted' || bookingStatus === 'ongoing' || bookingStatus === 'completed'
+                        ? 'checkmark-circle'
+                        : bookingStatus === 'cancelled'
+                        ? 'close-circle'
+                        : 'time-outline'
+                    }
+                    size={14}
+                    color={
+                      bookingStatus === 'accepted'
+                        ? '#16A34A'
+                        : bookingStatus === 'ongoing'
+                        ? '#2563EB'
+                        : bookingStatus === 'completed'
+                        ? '#7C3AED'
+                        : bookingStatus === 'cancelled'
+                        ? '#DC2626'
+                        : '#D97706'
+                    }
+                  />
+                  <Text
+                    style={[
+                      styles.statusChipText,
+                      {
+                        color:
+                          bookingStatus === 'accepted'
+                            ? '#15803D'
+                            : bookingStatus === 'ongoing'
+                            ? '#1D4ED8'
+                            : bookingStatus === 'completed'
+                            ? '#6B21A8'
+                            : bookingStatus === 'cancelled'
+                            ? '#B91C1C'
+                            : '#B45309',
+                      },
+                    ]}
+                  >
+                    {bookingStatus === 'accepted'
+                      ? 'REQUEST ACCEPTED'
+                      : bookingStatus === 'ongoing'
+                      ? 'TRIP IN PROGRESS'
+                      : bookingStatus === 'completed'
+                      ? 'TRIP COMPLETED'
+                      : bookingStatus === 'cancelled'
+                      ? 'REQUEST DECLINED'
+                      : 'REQUEST SENT (PENDING)'}
+                  </Text>
+                </View>
+              </View>
+            )}
           </View>
         )}
       </View>
@@ -239,11 +342,18 @@ export default function NotificationsScreen() {
         contentContainerStyle={styles.listContent}
         showsVerticalScrollIndicator={false}
         ListEmptyComponent={
-          <View style={styles.emptyContainer}>
-            <Ionicons name="notifications-off-outline" size={48} color={Colors.textMuted} />
-            <Text style={styles.emptyTitle}>No Notifications</Text>
-            <Text style={styles.emptySubtitle}>You are all caught up! New passenger ride requests will appear here.</Text>
-          </View>
+          isLoading ? (
+            <View style={styles.emptyContainer}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={[styles.emptyTitle, { fontSize: 14 }]}>Loading notifications...</Text>
+            </View>
+          ) : (
+            <View style={styles.emptyContainer}>
+              <Ionicons name="notifications-off-outline" size={48} color={Colors.textMuted} />
+              <Text style={styles.emptyTitle}>No Notifications</Text>
+              <Text style={styles.emptySubtitle}>You are all caught up! New passenger ride requests will appear here.</Text>
+            </View>
+          )
         }
       />
     </SafeAreaView>
@@ -506,5 +616,19 @@ const styles = StyleSheet.create({
     textAlign: 'center',
     marginTop: 4,
     lineHeight: 18,
+  },
+  statusChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 20,
+    borderWidth: 1,
+  },
+  statusChipText: {
+    fontSize: 11,
+    fontWeight: '800',
+    letterSpacing: 0.3,
   },
 });

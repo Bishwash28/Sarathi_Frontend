@@ -60,7 +60,6 @@ export default function RootLayout() {
               <Stack.Screen name="booking-status" options={{ headerShown: false }} />
               <Stack.Screen name="active-trip" options={{ headerShown: false }} />
               <Stack.Screen name="chat-room" options={{ headerShown: false }} />
-              <Stack.Screen name="driver-placeholder" options={{ headerShown: false }} />
               <Stack.Screen name="vehicles" options={{ headerShown: false }} />
               <Stack.Screen name="reset-password" options={{ headerShown: false }} />
             </Stack>

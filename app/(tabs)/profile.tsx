@@ -153,7 +153,6 @@ export default function ProfileScreen() {
     setIsSavingProfile(true);
     const result = await updateUserProfile({
       name: editName.trim(),
-      email: editEmail.trim(),
       phone: editPhone.trim(),
     });
     setIsSavingProfile(false);
@@ -204,6 +203,14 @@ export default function ProfileScreen() {
 
     if (res.success) {
       Alert.alert('Role Switched', `You are now in ${targetLabel} mode.`);
+      return;
+    }
+
+    if (res.error === 'ACTIVE_TRIP_EXISTS') {
+      Alert.alert(
+        'Cannot Switch Role',
+        res.message || 'You have an active ride or booking in progress. Please complete or cancel your current trip before switching roles.'
+      );
       return;
     }
 
@@ -472,10 +479,22 @@ export default function ProfileScreen() {
               <TextInput style={styles.fieldInput} value={editName} onChangeText={setEditName} placeholder="Your name" placeholderTextColor={Colors.textMuted} />
             </View>
 
-            <Text style={styles.fieldLabel}>Email</Text>
-            <View style={styles.fieldRow}>
-              <Ionicons name="mail-outline" size={18} color={Colors.primary} style={styles.fieldIcon} />
-              <TextInput style={styles.fieldInput} value={editEmail} onChangeText={setEditEmail} placeholder="Your email" placeholderTextColor={Colors.textMuted} keyboardType="email-address" autoCapitalize="none" />
+            <View style={styles.fieldHeaderRow}>
+              <Text style={styles.fieldLabel}>Email</Text>
+              <Text style={styles.readOnlyTag}>Cannot be changed</Text>
+            </View>
+            <View style={[styles.fieldRow, styles.fieldRowDisabled]}>
+              <Ionicons name="mail-outline" size={18} color={Colors.textMuted} style={styles.fieldIcon} />
+              <TextInput
+                style={[styles.fieldInput, styles.fieldInputDisabled]}
+                value={editEmail}
+                editable={false}
+                placeholder="Your email"
+                placeholderTextColor={Colors.textMuted}
+                keyboardType="email-address"
+                autoCapitalize="none"
+              />
+              <Ionicons name="lock-closed" size={14} color={Colors.textMuted} />
             </View>
 
             <Text style={styles.fieldLabel}>Phone</Text>
@@ -978,6 +997,11 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: Colors.textPrimary,
   },
+  fieldHeaderRow: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
   fieldLabel: {
     fontSize: 12,
     fontWeight: '700',
@@ -986,6 +1010,13 @@ const styles = StyleSheet.create({
     marginTop: 4,
     textTransform: 'uppercase',
     letterSpacing: 0.5,
+  },
+  readOnlyTag: {
+    fontSize: 10,
+    fontWeight: '600',
+    color: Colors.textMuted,
+    marginBottom: 6,
+    marginTop: 4,
   },
   fieldRow: {
     flexDirection: 'row',
@@ -996,6 +1027,13 @@ const styles = StyleSheet.create({
     borderRadius: 10,
     paddingHorizontal: 12,
     marginBottom: 14,
+  },
+  fieldRowDisabled: {
+    backgroundColor: '#F1F5F9',
+    borderColor: '#E2E8F0',
+  },
+  fieldInputDisabled: {
+    color: Colors.textMuted,
   },
   fieldIcon: {
     marginRight: 8,

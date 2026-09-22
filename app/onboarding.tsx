@@ -68,7 +68,7 @@ export default function OnboardingScreen() {
 
   return (
     <View style={[styles.root, { backgroundColor: slide.bgColor }]}>
-      <StatusBar barStyle={slide.isDarkBg ? 'light-content' : 'dark-content'} translucent backgroundColor="transparent" />
+      <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
 
       {/* Fullscreen Horizontal Swipe List */}
       <FlatList

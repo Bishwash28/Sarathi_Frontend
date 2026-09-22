@@ -348,9 +348,13 @@ export default function HomeScreen() {
         {
           text: 'Delete',
           style: 'destructive',
-          onPress: () => {
-            deleteRide(rideId);
-            Alert.alert('Ride Deleted', 'The ride offer has been removed.');
+          onPress: async () => {
+            const res = await deleteRide(rideId);
+            if (res?.success) {
+              Alert.alert('Ride Deleted', 'The ride offer has been removed from database.');
+            } else {
+              Alert.alert('Delete Failed', res?.error || 'Could not delete ride from database.');
+            }
           },
         },
       ]
@@ -556,7 +560,7 @@ export default function HomeScreen() {
 
             {/* Most Recent Offered Ride Card ONLY */}
             {(() => {
-              const myAllOffers = rides.filter(r => r.riderName === user?.name || r.phone === user?.phone);
+              const myAllOffers = rides.filter(r => (r.riderName === user?.name || r.phone === user?.phone) && (r.status === 'active' || !r.status));
               const latestOffer = myAllOffers.length > 0 ? myAllOffers[0] : null;
 
               if (!latestOffer) return null;

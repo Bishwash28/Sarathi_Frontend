@@ -8,14 +8,19 @@ import { Colors } from '../../constants/Colors';
 import { useApp, Booking, Ride } from '../../context/AppContext';
 
 export default function ActivityScreen() {
-  const { bookings, rides, user, updateRide, deleteRide } = useApp();
+  const { bookings, rides, user, updateRide, deleteRide, fetchUserBookings, fetchActiveRides } = useApp();
   const [activeSection, setActiveSection] = useState<'ongoing' | 'history' | 'my_offers'>('ongoing');
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
 
   useFocusEffect(
     useCallback(() => {
-      setIsRefreshing(false);
-    }, [])
+      (async () => {
+        setIsLoading(true);
+        await Promise.all([fetchUserBookings(), fetchActiveRides()]);
+        setIsLoading(false);
+      })();
+    }, [user?.id])
   );
 
   // Edit Ride Modal State
@@ -24,24 +29,43 @@ export default function ActivityScreen() {
   const [editSeats, setEditSeats] = useState('');
   const [editDepartureTime, setEditDepartureTime] = useState('');
 
-  // Filter offered rides created specifically by this user (rider/driver)
+  // Filter active offered rides created specifically by this user (rider/driver)
   const myOffers = rides.filter(r => {
-    if (user?.id && r.riderId && r.riderId === user.id) return true;
-    if (user?.name && r.riderName && r.riderName === user.name) return true;
-    if (user?.phone && r.phone && r.phone === user.phone) return true;
-    return false;
+    const isOwner =
+      (user?.id && r.riderId && r.riderId === user.id) ||
+      (user?.name && r.riderName && r.riderName === user.name) ||
+      (user?.phone && r.phone && r.phone === user.phone);
+    const isActive = r.status === 'active' || !r.status;
+    return Boolean(isOwner && isActive);
   });
   const myOfferIds = myOffers.map(o => o.id);
 
-  // Group bookings based on user role (Passenger vs Driver)
+  // Group bookings based on user role (Passenger vs Driver) - Independent of notification state
   const isDriver = user?.role === 'driver';
+
   const ongoingBookings = isDriver
-    ? bookings.filter(b => (b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing') && (myOfferIds.length === 0 || myOfferIds.includes(b.rideId)))
-    : bookings.filter(b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing');
+    ? bookings.filter(b => {
+        const isMyRide = myOfferIds.length === 0 || myOfferIds.includes(b.rideId) || rides.some(r => r.id === b.rideId && ((r.riderId && user?.id && r.riderId === user.id) || (r.phone && user?.phone && r.phone === user.phone)));
+        const isActiveStatus = b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing';
+        return isMyRide && isActiveStatus;
+      })
+    : bookings.filter(b => {
+        const isMyBooking = !b.passengerId || b.passengerId === user?.id || (user?.email && b.passengerId === user.email);
+        const isActiveStatus = b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing';
+        return isMyBooking && isActiveStatus;
+      });
 
   const historyBookings = isDriver
-    ? bookings.filter(b => (b.status === 'completed' || b.status === 'cancelled') && (myOfferIds.length === 0 || myOfferIds.includes(b.rideId)))
-    : bookings.filter(b => b.status === 'completed' || b.status === 'cancelled');
+    ? bookings.filter(b => {
+        const isMyRide = myOfferIds.length === 0 || myOfferIds.includes(b.rideId) || rides.some(r => r.id === b.rideId && ((r.riderId && user?.id && r.riderId === user.id) || (r.phone && user?.phone && r.phone === user.phone)));
+        const isPastStatus = b.status === 'completed' || b.status === 'cancelled';
+        return isMyRide && isPastStatus;
+      })
+    : bookings.filter(b => {
+        const isMyBooking = !b.passengerId || b.passengerId === user?.id || (user?.email && b.passengerId === user.email);
+        const isPastStatus = b.status === 'completed' || b.status === 'cancelled';
+        return isMyBooking && isPastStatus;
+      });
 
   const handleBookingPress = (booking: Booking) => {
     if (booking.lifecycleState === 'request_pending') {
@@ -120,14 +144,18 @@ export default function ActivityScreen() {
 
   const renderBookingCard = (item: Booking) => {
     const ride = rides.find(r => r.id === item.rideId);
-    if (!ride) return null;
 
     const isDriver = user?.role === 'driver';
-    const titleName = isDriver ? item.passengerName || item.passengerId.split('@')[0] : ride.riderName;
-    const subText = isDriver ? `Passenger requesting to join` : `${ride.vehicleName} • ${ride.vehicleNumber}`;
+    const titleName = isDriver ? (item.passengerName || item.passengerId.split('@')[0]) : (ride?.riderName || item.riderOriginName || 'Driver');
+    const subText = isDriver ? `Passenger requesting to join` : (ride ? `${ride.vehicleName} • ${ride.vehicleNumber}` : 'Sarathi Trip Segment');
     const avatarUrl = isDriver 
       ? (item.passengerPhoto || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80')
-      : ride.riderPhoto;
+      : (ride?.riderPhoto || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80');
+
+    const routeText = ride
+      ? ride.route.join(' → ')
+      : `${item.passengerPickup || item.riderOriginName || 'Pickup'} → ${item.passengerDropoff || item.riderDestName || 'Drop-off'}`;
+    const farePrice = ride ? ride.price : 150;
 
     return (
       <TouchableOpacity
@@ -152,7 +180,7 @@ export default function ActivityScreen() {
         <View style={styles.routeContainer}>
           <Ionicons name="location-outline" size={16} color={Colors.textMuted} />
           <Text style={styles.routeText} numberOfLines={1}>
-            {ride.route.join(' → ')}
+            {routeText}
           </Text>
         </View>
 
@@ -165,15 +193,21 @@ export default function ActivityScreen() {
               minute: '2-digit'
             })}
           </Text>
-          <Text style={styles.priceText}>NPR {ride.price}</Text>
+          <Text style={styles.priceText}>NPR {farePrice}</Text>
         </View>
 
-        {!isDriver && (item.status === 'pending' || item.status === 'accepted') && (
+        {(item.status === 'accepted' || item.status === 'ongoing') ? (
+          <TouchableOpacity
+            style={styles.openLiveTripBtn}
+            onPress={() => router.push({ pathname: '/active-trip', params: { rideId: item.rideId } })}
+          >
+            <Ionicons name="navigate-circle" size={18} color="#FFF" />
+            <Text style={styles.openLiveTripBtnText}>Open Live Trip Tracking Screen →</Text>
+          </TouchableOpacity>
+        ) : (!isDriver && item.status === 'pending') && (
           <View style={styles.trackingHint}>
             <Ionicons name="navigate-circle" size={16} color={Colors.accent} />
-            <Text style={styles.trackingHintText}>
-              {item.status === 'pending' ? 'View waiting queue' : 'Tap to track driver live'}
-            </Text>
+            <Text style={styles.trackingHintText}>View waiting queue</Text>
           </View>
         )}
       </TouchableOpacity>
@@ -601,6 +635,22 @@ const styles = StyleSheet.create({
   saveBtnText: {
     color: '#FFFFFF',
     fontSize: 15,
+    fontWeight: 'bold',
+  },
+  openLiveTripBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginTop: 10,
+    gap: 6,
+  },
+  openLiveTripBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
     fontWeight: 'bold',
   },
 });

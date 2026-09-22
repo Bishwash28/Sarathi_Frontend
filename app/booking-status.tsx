@@ -50,7 +50,17 @@ export default function BookingStatusScreen() {
   };
 
   return (
-    <View style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
+      <View style={styles.topHeader}>
+        <TouchableOpacity style={styles.backHeaderBtn} onPress={() => router.replace('/(tabs)')} activeOpacity={0.8}>
+          <Ionicons name="arrow-back" size={22} color={Colors.primary} />
+        </TouchableOpacity>
+        <Text style={styles.topHeaderTitle}>Booking Status</Text>
+        <TouchableOpacity style={styles.minimizeBtn} onPress={() => router.replace('/(tabs)')} activeOpacity={0.8}>
+          <Ionicons name="chevron-down-circle-outline" size={18} color={Colors.primary} />
+          <Text style={styles.minimizeText}>Minimize</Text>
+        </TouchableOpacity>
+      </View>
       <View style={styles.container}>
         {/* Status Indicator */}
         <View style={styles.statusBox}>
@@ -135,7 +145,7 @@ export default function BookingStatusScreen() {
           </View>
         )}
       </View>
-    </View>
+    </SafeAreaView>
   );
 }
 
@@ -143,6 +153,44 @@ const styles = StyleSheet.create({
   safeArea: {
     flex: 1,
     backgroundColor: Colors.background,
+  },
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 16,
+    paddingVertical: 12,
+    gap: 12,
+    backgroundColor: '#FFFFFF',
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+  },
+  backHeaderBtn: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: '#F1F5F9',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  topHeaderTitle: {
+    fontSize: 17,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  minimizeBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 'auto',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  minimizeText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
   },
   container: {
     flex: 1,

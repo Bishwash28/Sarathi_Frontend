@@ -1,5 +1,6 @@
-import React, { useEffect } from 'react';
+import React, { useEffect, useState } from 'react';
 import {
+  ActivityIndicator,
   Image,
   KeyboardAvoidingView,
   Platform,
@@ -16,9 +17,18 @@ import { useApp } from '../../context/AppContext';
 
 export default function InboxScreen() {
   const params = useLocalSearchParams<{ rideId?: string }>();
-  const { rides, driverMessages, activeChatRideIds, user, bookings } = useApp();
+  const { rides, driverMessages, user, bookings, deletedChatRideIds, fetchUserConversations } = useApp();
+  const [isLoading, setIsLoading] = useState(true);
 
   const isDriverMode = user?.role === 'driver';
+
+  useEffect(() => {
+    (async () => {
+      setIsLoading(true);
+      await fetchUserConversations();
+      setIsLoading(false);
+    })();
+  }, [user?.id]);
 
   // Automatically navigate to dedicated chat-room if rideId param passed
   useEffect(() => {
@@ -27,23 +37,22 @@ export default function InboxScreen() {
     }
   }, [params.rideId]);
 
-  // Gather all active chat threads from activeChatRideIds, driverMessages keys, and bookings
-  const allChatRideIds = Array.from(new Set([
-    ...activeChatRideIds,
-    ...Object.keys(driverMessages).filter(id => driverMessages[id] && driverMessages[id].length > 0),
-    ...bookings.map(b => b.rideId).filter(Boolean)
-  ]));
+  // Gather active chat threads strictly from DB driverMessages with messages (NO mock/empty threads)
+  const allChatRideIds = Object.keys(driverMessages)
+    .filter(id => driverMessages[id] && driverMessages[id].length > 0)
+    .filter(rideId => !deletedChatRideIds.includes(rideId));
 
   const chatListItems = allChatRideIds
     .filter(rideId => {
-      const existingRide = rides.find(r => r.id === rideId);
       const msgs = driverMessages[rideId] || [];
-      const isRiderOfRide = (existingRide?.riderId && user?.id && existingRide.riderId === user.id) ||
-                            (existingRide?.riderName && user?.name && existingRide.riderName === user.name) ||
-                            (existingRide?.phone && user?.phone && existingRide.phone === user.phone) ||
-                            (msgs.some(m => m.riderId && user?.id && m.riderId === user.id));
+      if (msgs.length === 0) return false;
 
-      return isDriverMode ? isRiderOfRide : !isRiderOfRide;
+      // Verify that logged-in user is an active participant in this specific conversation
+      const isParticipant = msgs.some(
+        m => (user?.id && (m.senderId === user.id || m.receiverId === user.id || m.passengerId === user.id || m.riderId === user.id))
+      );
+
+      return isParticipant;
     })
     .map(rideId => {
       const existingRide = rides.find(r => r.id === rideId);
@@ -55,8 +64,8 @@ export default function InboxScreen() {
       const riderMsg = msgs.find(m => (m.sender === 'driver' || m.riderId) && m.senderId !== user?.id && m.senderName !== user?.name);
 
       const titleName = isDriverMode
-        ? (booking?.passengerName || passengerMsg?.senderName || 'Passenger Inquirer')
-        : (existingRide?.riderName || riderMsg?.senderName || 'Sarathi Rider');
+        ? (booking?.passengerName || passengerMsg?.senderName || 'Passenger')
+        : (existingRide?.riderName || riderMsg?.senderName || 'Driver');
 
       const photoUrl = isDriverMode
         ? (booking?.passengerPhoto || passengerMsg?.senderPhoto || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80')
@@ -66,13 +75,21 @@ export default function InboxScreen() {
         ? `${booking.passengerPickup} → ${booking.passengerDropoff}`
         : (existingRide ? existingRide.route.join(' → ') : 'Sarathi Trip');
 
+      const unreadCount = msgs.filter(m => m.receiverId === user?.id && m.isRead === false).length;
+
       return {
         rideId,
         titleName,
         photoUrl,
         routeSub,
         lastMsg,
+        unreadCount,
       };
+    })
+    .sort((a, b) => {
+      const timeA = a.lastMsg ? new Date(a.lastMsg.timestamp).getTime() : 0;
+      const timeB = b.lastMsg ? new Date(b.lastMsg.timestamp).getTime() : 0;
+      return timeB - timeA;
     });
 
   return (
@@ -96,18 +113,23 @@ export default function InboxScreen() {
 
         {/* Driver / Passenger Chat List View */}
         <ScrollView contentContainerStyle={styles.chatListScroll} showsVerticalScrollIndicator={false}>
-          {chatListItems.length === 0 ? (
+          {isLoading ? (
+            <View style={styles.emptyChatsContainer}>
+              <ActivityIndicator size="large" color={Colors.primary} />
+              <Text style={[styles.emptyChatsTitle, { fontSize: 14, marginTop: 12 }]}>Loading conversations...</Text>
+            </View>
+          ) : chatListItems.length === 0 ? (
             <View style={styles.emptyChatsContainer}>
               <Ionicons name="chatbubbles-outline" size={48} color={Colors.primary} />
-              <Text style={styles.emptyChatsTitle}>No active conversations</Text>
+              <Text style={styles.emptyChatsTitle}>No conversations yet</Text>
               <Text style={styles.emptyChatsSub}>
-                When you request a ride or receive ride requests, your chat conversations will appear here.
+                When you message a rider or passenger regarding a trip, your live conversations will appear here.
               </Text>
             </View>
           ) : (
             <>
               <Text style={styles.subSectionTitle}>
-                {isDriverMode ? 'Passenger Inquiries & Ride Chats:' : 'Active Driver Conversations:'}
+                {isDriverMode ? 'Passenger Conversations:' : 'Driver Conversations:'}
               </Text>
               {chatListItems.map((item) => {
                 const lastMsg = item.lastMsg;
@@ -115,16 +137,18 @@ export default function InboxScreen() {
                 return (
                   <TouchableOpacity
                     key={item.rideId}
-                    style={styles.driverChatItem}
+                    style={[styles.driverChatItem, item.unreadCount > 0 && styles.unreadChatItem]}
                     onPress={() => router.push({ pathname: '/chat-room', params: { rideId: item.rideId } })}
                     activeOpacity={0.8}
                   >
                     <Image source={{ uri: item.photoUrl }} style={styles.driverItemPhoto} />
                     <View style={styles.driverItemInfo}>
                       <View style={styles.driverItemHeader}>
-                        <Text style={styles.driverItemName}>{item.titleName}</Text>
+                        <Text style={[styles.driverItemName, item.unreadCount > 0 && { color: Colors.primary, fontWeight: '800' }]}>
+                          {item.titleName}
+                        </Text>
                         {lastMsg && (
-                          <Text style={styles.driverItemTime}>
+                          <Text style={[styles.driverItemTime, item.unreadCount > 0 && { color: Colors.primary, fontWeight: '700' }]}>
                             {new Date(lastMsg.timestamp).toLocaleTimeString([], {
                               hour: '2-digit',
                               minute: '2-digit',
@@ -135,9 +159,16 @@ export default function InboxScreen() {
                       <Text style={styles.driverItemSub}>
                         {item.routeSub}
                       </Text>
-                      <Text style={styles.driverLastMsg} numberOfLines={1}>
-                        {lastMsg ? lastMsg.text : 'Tap to start conversation'}
-                      </Text>
+                      <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' }}>
+                        <Text style={[styles.driverLastMsg, item.unreadCount > 0 && { color: Colors.textPrimary, fontWeight: '700' }]} numberOfLines={1}>
+                          {lastMsg ? lastMsg.text : 'Tap to view conversation'}
+                        </Text>
+                        {item.unreadCount > 0 && (
+                          <View style={styles.unreadBadgeContainer}>
+                            <Text style={styles.unreadBadgeText}>{item.unreadCount}</Text>
+                          </View>
+                        )}
+                      </View>
                     </View>
                     <Ionicons name="chevron-forward" size={18} color="#94A3B8" />
                   </TouchableOpacity>
@@ -217,6 +248,22 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: '#E2E8F0',
     marginBottom: 10,
+  },
+  unreadChatItem: {
+    borderColor: Colors.primary,
+    backgroundColor: '#EFF6FF',
+  },
+  unreadBadgeContainer: {
+    backgroundColor: Colors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 7,
+    paddingVertical: 2,
+    marginLeft: 6,
+  },
+  unreadBadgeText: {
+    color: '#FFFFFF',
+    fontSize: 10,
+    fontWeight: 'bold',
   },
   driverItemPhoto: {
     width: 44,

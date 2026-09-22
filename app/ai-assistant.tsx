@@ -29,13 +29,13 @@ interface ChatMessage {
 }
 
 export default function AiAssistantScreen() {
-  const { rides, addRecentSearch } = useApp();
+  const { rides, fetchActiveRides, addRecentSearch, user, deviceLocation } = useApp();
 
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: 'welcome-msg',
       sender: 'ai',
-      text: `Search available rides, compare prices, or find the best routes by typing your destination or query below:`,
+      text: `Namaste! Ask me anything about finding rides, route prices, safety features, or how Sarathi works.`,
       timestamp: new Date(),
     },
   ]);
@@ -55,7 +55,8 @@ export default function AiAssistantScreen() {
       timestamp: new Date(),
     };
 
-    setMessages(prev => [...prev, userMsg]);
+    const updatedHistory = [...messages, userMsg];
+    setMessages(updatedHistory);
     setInputText('');
     setIsLoading(true);
 
@@ -63,7 +64,22 @@ export default function AiAssistantScreen() {
     setTimeout(() => flatListRef.current?.scrollToEnd({ animated: true }), 100);
 
     try {
-      const response = await querySarathiAI(textToSend, rides, 'Nepal');
+      let latestRides = rides;
+      if (typeof fetchActiveRides === 'function') {
+        try {
+          latestRides = await fetchActiveRides();
+        } catch {
+          latestRides = rides;
+        }
+      }
+
+      const response = await querySarathiAI({
+        userPrompt: textToSend.trim(),
+        rides: latestRides,
+        userLocation: deviceLocation || 'Nepal',
+        userProfile: user ? { name: user.name, role: user.role, kycStatus: user.kycStatus } : null,
+        conversationHistory: updatedHistory,
+      });
 
       const aiMsg: ChatMessage = {
         id: `ai-${Date.now()}`,
@@ -243,7 +259,7 @@ export default function AiAssistantScreen() {
         {isLoading && (
           <View style={styles.typingContainer}>
             <ActivityIndicator size="small" color={Colors.primary} />
-            <Text style={styles.typingText}>Sarathi AI is analyzing routes & prices...</Text>
+            <Text style={styles.typingText}>Sarathi AI is thinking...</Text>
           </View>
         )}
 

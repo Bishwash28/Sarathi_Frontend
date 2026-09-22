@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { StyleSheet, Text, View, ScrollView, TouchableOpacity, TextInput, Image, KeyboardAvoidingView, Platform, Alert } from 'react-native';
 import { router, useLocalSearchParams } from 'expo-router';
 import { Ionicons } from '@expo/vector-icons';
@@ -11,12 +11,19 @@ import { renderFormattedText } from '../utils/textUtils';
 
 export default function ChatRoomScreen() {
   const { rideId } = useLocalSearchParams<{ rideId?: string }>();
-  const { rides, driverMessages, sendDriverMessage, user, bookings } = useApp();
+  const { rides, driverMessages, sendDriverMessage, user, bookings, deleteConversation, markConversationAsRead } = useApp();
   const [inputText, setInputText] = useState('');
+  const sendingRef = React.useRef(false);
 
   const ride = rides.find(r => r.id === rideId);
   const booking = bookings.find(b => b.rideId === rideId);
   const messages = rideId ? (driverMessages[rideId] || []) : [];
+
+  useEffect(() => {
+    if (rideId) {
+      markConversationAsRead(rideId);
+    }
+  }, [rideId, messages.length]);
 
   const isDriverRole = user?.role === 'driver';
 
@@ -24,12 +31,12 @@ export default function ChatRoomScreen() {
   const riderMsg = messages.find(m => (m.sender === 'driver' || m.riderId) && m.senderId !== user?.id && m.senderName !== user?.name);
 
   const chatTitle = isDriverRole
-    ? (booking?.passengerName || passengerMsg?.senderName || 'Passenger Inquirer')
-    : (ride?.riderName || riderMsg?.senderName || 'Sarathi Rider');
+    ? (booking?.passengerName || passengerMsg?.senderName || 'Passenger')
+    : (ride?.riderName || riderMsg?.senderName || 'Driver');
 
   const chatSub = isDriverRole
-    ? (booking?.passengerPhone || passengerMsg?.senderPhone || 'Sarathi Trip Passenger')
-    : (ride ? `${ride.vehicleName} • ${ride.vehicleNumber}` : (riderMsg?.senderPhone || 'Sarathi Rider'));
+    ? (booking?.passengerPhone || passengerMsg?.senderPhone || 'Sarathi Passenger')
+    : (ride ? `${ride.vehicleName} • ${ride.vehicleNumber}` : (riderMsg?.senderPhone || 'Sarathi Driver'));
 
   const chatAvatar = isDriverRole
     ? (booking?.passengerPhoto || passengerMsg?.senderPhoto || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80')
@@ -39,12 +46,37 @@ export default function ChatRoomScreen() {
     ? (booking?.passengerPhone || passengerMsg?.senderPhone || '+9779841234567')
     : (ride?.phone || riderMsg?.senderPhone || '+9779841234567');
 
+  const handleDeleteConversation = () => {
+    Alert.alert(
+      'Delete this conversation?',
+      'This conversation will be removed from your chat list.',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            if (rideId) {
+              await deleteConversation(rideId);
+            }
+            router.replace('/(tabs)/inbox');
+          },
+        },
+      ]
+    );
+  };
+
   const handleSend = () => {
-    if (!inputText.trim()) return;
+    const textToSend = inputText.trim();
+    if (!textToSend || sendingRef.current) return;
+    sendingRef.current = true;
+    setInputText('');
     if (rideId) {
-      sendDriverMessage(rideId, inputText.trim());
-      setInputText('');
+      sendDriverMessage(rideId, textToSend);
     }
+    setTimeout(() => {
+      sendingRef.current = false;
+    }, 500);
   };
 
   const handleCall = () => {
@@ -102,9 +134,14 @@ export default function ChatRoomScreen() {
             <Text style={styles.headerSub}>{chatSub}</Text>
           </View>
 
-          <TouchableOpacity style={styles.callButton} onPress={handleCall}>
-            <Ionicons name="call" size={18} color="#FFF" />
-          </TouchableOpacity>
+          <View style={{ flexDirection: 'row', gap: 8, alignItems: 'center' }}>
+            <TouchableOpacity style={styles.callButton} onPress={handleCall}>
+              <Ionicons name="call" size={18} color="#FFF" />
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.deleteButton} onPress={handleDeleteConversation}>
+              <Ionicons name="trash-outline" size={18} color="#EF4444" />
+            </TouchableOpacity>
+          </View>
         </View>
 
         {/* Message Thread Scroll View */}
@@ -208,6 +245,14 @@ const styles = StyleSheet.create({
   },
   callButton: {
     backgroundColor: Colors.accent,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  deleteButton: {
+    backgroundColor: '#FEE2E2',
     width: 36,
     height: 36,
     borderRadius: 18,

@@ -27,7 +27,7 @@ export default function RideDetailScreen() {
   const rideId = typeof params.id === 'string' ? params.id : '';
   const foundRide = rides.find(r => r.id === rideId);
 
-  const driverName = foundRide?.riderName || (params.riderName as string) || 'Sarathi Rider';
+  const driverName = foundRide?.riderName || (params.riderName as string) || 'Driver';
   const driverPhotoUrl = foundRide?.riderPhoto || (params.riderPhoto as string) || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80';
   const driverRating = foundRide?.rating || (params.rating ? parseFloat(params.rating as string) : 5.0);
   const driverPhone = foundRide?.phone || (params.phone as string) || '+9779841234567';
@@ -133,6 +133,10 @@ export default function RideDetailScreen() {
           <Ionicons name="arrow-back" size={22} color={Colors.primary} />
         </TouchableOpacity>
         <Text style={styles.headerTitle}>Ride Offer Details</Text>
+        <TouchableOpacity style={styles.minimizeHeaderBtn} onPress={() => router.replace('/(tabs)')} activeOpacity={0.8}>
+          <Ionicons name="chevron-down-circle-outline" size={18} color={Colors.primary} />
+          <Text style={styles.minimizeHeaderText}>Minimize</Text>
+        </TouchableOpacity>
       </View>
 
       <ScrollView
@@ -311,6 +315,21 @@ const styles = StyleSheet.create({
     fontSize: 17,
     fontWeight: 'bold',
     color: Colors.textPrimary,
+  },
+  minimizeHeaderBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    marginLeft: 'auto',
+    backgroundColor: '#F1F5F9',
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 14,
+  },
+  minimizeHeaderText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
   },
   container: {
     flex: 1,
