@@ -16,17 +16,17 @@ export default function BookingStatusScreen() {
   const currentBooking = bookings.find(b => b.rideId === rideId && (b.status === 'pending' || b.status === 'accepted'));
 
   useEffect(() => {
-    // If the booking gets accepted, redirect to active trip
-    if (currentBooking && currentBooking.status === 'accepted') {
+    // If the booking gets accepted, automatically redirect to active trip
+    if (currentBooking && (currentBooking.status === 'accepted' || currentBooking.status === 'ongoing')) {
       const timer = setTimeout(() => {
         router.replace({
           pathname: '/active-trip',
-          params: { rideId }
+          params: { rideId, bookingId: currentBooking.id }
         });
-      }, 1500); // Small delay to let the user see the "Accepted" status
+      }, 300);
       return () => clearTimeout(timer);
     }
-  }, [currentBooking]);
+  }, [currentBooking, rideId]);
 
   if (!currentBooking) {
     return (

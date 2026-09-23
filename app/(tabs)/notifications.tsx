@@ -73,7 +73,11 @@ export default function NotificationsScreen() {
     if (notifId) {
       markNotificationAsRead(notifId);
     }
-    Alert.alert('Ride Request Accepted! 🎉', 'You have accepted the passenger request. Navigate to Active Trip to view status.');
+    const booking = bookings.find(b => b.id === bookingId);
+    router.replace({
+      pathname: '/active-trip',
+      params: { rideId: booking?.rideId, bookingId }
+    });
   };
 
   const handleDeclineRequest = (bookingId?: string, notifId?: string) => {

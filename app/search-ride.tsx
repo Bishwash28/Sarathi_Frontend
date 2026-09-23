@@ -165,6 +165,19 @@ export default function SearchRideScreen() {
     }
   };
 
+  const tokenizeLocation = (str: string): string[] => {
+    if (!str) return [];
+    const ignoreWords = new Set([
+      'nepal', 'province', 'district', 'municipality', 'city', 'vdc', 'ward',
+      'bagmati', 'gandaki', 'lumbini', 'koshi', 'madhesh', 'karnali', 'sudurpashchim'
+    ]);
+    return str
+      .toLowerCase()
+      .replace(/[^a-z0-9\s]/g, ' ')
+      .split(/\s+/)
+      .filter(w => w.length >= 2 && !ignoreWords.has(w));
+  };
+
   const isRideMatching = (
     r: Ride,
     origQuery: string,
@@ -184,10 +197,23 @@ export default function SearchRideScreen() {
       if (!query) return -1;
       const q = query.toLowerCase().trim();
       if (!q) return -1;
-      return rStops.findIndex(stop => {
+
+      // 1. Direct substring match
+      const directIdx = rStops.findIndex(stop => {
         const s = stop.toLowerCase().trim();
         if (!s) return false;
         return s.includes(q) || q.includes(s);
+      });
+      if (directIdx >= 0) return directIdx;
+
+      // 2. Tokenized partial match
+      const qTokens = tokenizeLocation(q);
+      if (qTokens.length === 0) return -1;
+
+      return rStops.findIndex(stop => {
+        const stopTokens = tokenizeLocation(stop);
+        if (stopTokens.length === 0) return false;
+        return qTokens.some(qt => stopTokens.some(st => st.includes(qt) || qt.includes(st)));
       });
     };
 
@@ -200,19 +226,11 @@ export default function SearchRideScreen() {
         // Both stops present on rider's route. Pickup MUST be before dropoff (forward direction)
         return origIdx < destIdx;
       }
-
-      if (origIdx >= 0 && destIdx === -1) {
-        // Pickup found, but dropoff is not on rider's route -> DO NOT MATCH!
-        return false;
-      }
-
-      if (origIdx === -1 && destIdx >= 0) {
-        // Dropoff found, but pickup is not on rider's route -> DO NOT MATCH!
-        return false;
-      }
+      // Note: If text matching is incomplete, do NOT return false immediately.
+      // Let coordinate geometry matching evaluate if coordinates are available.
     }
 
-    // 2. Coordinate geometry matching (if coordinates exist for both passenger and rider)
+    // 2. Coordinate geometry matching (if coordinates exist for passenger origin & destination)
     if (origCoords && destCoords && r.origin && r.destination) {
       const A = r.origin;
       const B = r.destination;
@@ -223,19 +241,22 @@ export default function SearchRideScreen() {
       const dLng = B.lng - A.lng;
       const lenSq = dLat * dLat + dLng * dLng;
 
-      if (lenSq > 0.00001) {
+      if (lenSq > 0.000001) {
         const t_P = ((P.lat - A.lat) * dLat + (P.lng - A.lng) * dLng) / lenSq;
         const t_Q = ((Q.lat - A.lat) * dLat + (Q.lng - A.lng) * dLng) / lenSq;
 
         const perp_P = Math.abs((P.lat - A.lat) * dLng - (P.lng - A.lng) * dLat) / Math.sqrt(lenSq);
         const perp_Q = Math.abs((Q.lat - A.lat) * dLng - (Q.lng - A.lng) * dLat) / Math.sqrt(lenSq);
 
-        // Must be within ~15km (0.15 deg) off route corridor, and P must precede Q (forward direction)
-        const isPOnCorridor = perp_P <= 0.15 && t_P >= -0.1 && t_P <= 1.1;
-        const isQOnCorridor = perp_Q <= 0.15 && t_Q >= -0.1 && t_Q <= 1.1;
-        const isForwardDirection = t_P < t_Q;
+        const distPtoA = Math.hypot(P.lat - A.lat, P.lng - A.lng);
+        const distQtoB = Math.hypot(Q.lat - B.lat, Q.lng - B.lng);
 
-        if (isPOnCorridor && isQOnCorridor && isForwardDirection) {
+        // Within ~18km (0.18 deg) corridor off straight line, or close to endpoints
+        const isPValid = (perp_P <= 0.18 && t_P >= -0.25 && t_P <= 1.25) || distPtoA <= 0.18 || origIdx >= 0;
+        const isQValid = (perp_Q <= 0.18 && t_Q >= -0.25 && t_Q <= 1.25) || distQtoB <= 0.18 || destIdx >= 0;
+        const isForwardDirection = t_P < t_Q || (origIdx >= 0 && destIdx >= 0 && origIdx < destIdx);
+
+        if (isPValid && isQValid && isForwardDirection) {
           return true;
         }
       }
@@ -246,7 +267,7 @@ export default function SearchRideScreen() {
       if (origIdx >= 0) return true;
       if (origCoords && r.origin) {
         const dist = Math.hypot(origCoords.lat - r.origin.lat, origCoords.lng - r.origin.lng);
-        if (dist <= 0.15) return true;
+        if (dist <= 0.18) return true;
       }
       return false;
     }
@@ -255,7 +276,7 @@ export default function SearchRideScreen() {
       if (destIdx >= 0) return true;
       if (destCoords && r.destination) {
         const dist = Math.hypot(destCoords.lat - r.destination.lat, destCoords.lng - r.destination.lng);
-        if (dist <= 0.15) return true;
+        if (dist <= 0.18) return true;
       }
       return false;
     }
@@ -283,7 +304,7 @@ export default function SearchRideScreen() {
           p_dest_lat: destination.coords.lat,
           p_dest_lng: destination.coords.lng,
           p_seats_needed: 1,
-          p_buffer_meters: 10000.0,
+          p_buffer_meters: 15000.0,
         });
 
         if (!error && data && data.length > 0) {
@@ -303,18 +324,12 @@ export default function SearchRideScreen() {
             encodedPolyLine: item.encoded_polyline,
             origin: { lat: Number(item.origin_lat), lng: Number(item.origin_lng) },
             destination: { lat: Number(item.destination_lat), lng: Number(item.destination_lng) },
+            status: item.status || 'active',
           }));
         }
       }
 
-      if (rpcRides.length > 0) {
-        setCandidateRides(rpcRides);
-        setIsSearching(false);
-        snapToHeight(MAX_SHEET_HEIGHT);
-        return;
-      }
-
-      // 2. Fallback Search: Strict corridor & direction filter matching
+      // 2. Client-side Corridor & Proximity matching across context rides
       const origQuery = (origin.text || '').toLowerCase().trim();
       const destQuery = (destination.text || '').toLowerCase().trim();
 
@@ -322,7 +337,15 @@ export default function SearchRideScreen() {
         return isRideMatching(r, origQuery, destQuery, origin.coords, destination.coords);
       });
 
-      setCandidateRides(matchedFallback);
+      // Combine RPC rides and fallback rides without duplicates
+      const rideMap = new Map<string, Ride>();
+      rpcRides.forEach(r => rideMap.set(r.id, r));
+      matchedFallback.forEach(r => {
+        if (!rideMap.has(r.id)) rideMap.set(r.id, r);
+      });
+
+      const combinedRides = Array.from(rideMap.values());
+      setCandidateRides(combinedRides);
       setIsSearching(false);
       snapToHeight(MAX_SHEET_HEIGHT);
     } catch (err: any) {

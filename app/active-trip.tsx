@@ -143,6 +143,9 @@ export default function ActiveTripScreen() {
     const res = verifyCompletionOtp(currentBooking.id, inputCompletionOtp);
     if (!res.success) {
       Alert.alert('Verification Failed', res.error || 'Incorrect OTP');
+    } else {
+      submitRideRating(currentBooking.id, 5, 'Ride completed by driver');
+      router.replace('/(tabs)');
     }
   };
 
@@ -150,6 +153,9 @@ export default function ActiveTripScreen() {
     const res = processPayment(currentBooking.id, selectedPayment);
     if (!res.success) {
       Alert.alert('Payment Failed', res.error || 'Could not process payment');
+    } else {
+      submitRideRating(currentBooking.id, 5, 'Paid cash');
+      router.replace('/(tabs)');
     }
   };
 
@@ -222,6 +228,9 @@ export default function ActiveTripScreen() {
               destCoords={currentBooking.dropCoords || ride.destination || { lat: 27.6710, lng: 85.3120 }}
               originName={currentBooking.passengerPickup || ride.pickupPoint}
               destName={currentBooking.passengerDropoff || ride.route?.[1]}
+              showControls={false}
+              showBadge={false}
+              interactive={false}
             />
           </View>
 
@@ -301,17 +310,9 @@ export default function ActiveTripScreen() {
                   onPress={() => triggerCompletionOtpPrompt(currentBooking.id)}
                 >
                   <Ionicons name="checkmark-done-circle" size={20} color="#FFF" />
-                  <Text style={styles.actionMainButtonText}>Complete Ride (Prompt Ending PIN)</Text>
+                  <Text style={styles.actionMainButtonText}>Complete Ride</Text>
                 </TouchableOpacity>
               )}
-
-              <TouchableOpacity
-                style={[styles.nudgeButton, { marginTop: 12 }]}
-                onPress={() => nudgeDriverLocation(currentBooking.id)}
-              >
-                <Ionicons name="location" size={18} color="#FFF" />
-                <Text style={styles.nudgeButtonText}>Simulate Live GPS Movement</Text>
-              </TouchableOpacity>
             </View>
           )}
 
@@ -361,44 +362,9 @@ export default function ActiveTripScreen() {
             </View>
           )}
 
-          {/* STEP 4: Post-Completion Screen (Role-Based) */}
-          {user?.role === 'driver' && (lifecycle === 'payment_pending' || lifecycle === 'rating_pending' || lifecycle === 'completed') ? (
-            /* Rider / Driver View: Small prompt asking "Want to post another ride?" */
-            <View style={styles.promptCard}>
-              <View style={styles.promptIconCircle}>
-                <Ionicons name="checkmark-circle" size={40} color="#16A34A" />
-              </View>
-              <Text style={styles.promptHeaderTitle}>Ride Completed! 🎉</Text>
-              <Text style={styles.promptQuestionText}>Want to post another ride?</Text>
-
-              <View style={styles.promptButtonRow}>
-                <TouchableOpacity
-                  style={styles.promptNoButton}
-                  onPress={() => {
-                    submitRideRating(currentBooking.id, 5, 'Ride completed by driver');
-                    router.replace('/(tabs)');
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.promptNoButtonText}>No</Text>
-                </TouchableOpacity>
-
-                <TouchableOpacity
-                  style={styles.promptYesButton}
-                  onPress={() => {
-                    submitRideRating(currentBooking.id, 5, 'Ride completed by driver');
-                    router.replace('/(tabs)');
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.promptYesButtonText}>Yes</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ) : (
-            /* Passenger View: Payment Method Screen after completion */
-            lifecycle === 'payment_pending' && (
-              <View style={styles.stepCard}>
+          {/* STEP 4: Post-Completion Passenger Payment View */}
+          {user?.role === 'passenger' && lifecycle === 'payment_pending' && (
+            <View style={styles.stepCard}>
                 <Text style={styles.cardHeaderTitle}>Trip & Fare Summary</Text>
                 <View style={styles.fareRow}>
                   <Text style={styles.fareLabel}>Booking / Trip ID</Text>
@@ -444,7 +410,6 @@ export default function ActiveTripScreen() {
                   <Text style={styles.actionMainButtonText}>Complete Ride & Pay NPR {ride.price || 180}</Text>
                 </TouchableOpacity>
               </View>
-            )
           )}
 
           {/* Participant Summary Footer Panel */}

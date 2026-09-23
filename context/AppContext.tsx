@@ -841,8 +841,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const resetPassword = async (email: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const cleanEmail = email.trim().toLowerCase();
-      // Force explicit HTTP URL so browser clicks in emails open directly on web UI
-      const redirectUrl = 'http://localhost:8081/reset-password';
+      // Use dynamic app deep link (sarathifrontend://reset-password on APK, localhost on web)
+      const redirectUrl = Linking.createURL('/reset-password');
 
       const { error } = await supabase.auth.resetPasswordForEmail(cleanEmail, {
         redirectTo: redirectUrl,
@@ -875,7 +875,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: 'Password is required' };
       }
 
-      const redirectUrl = 'http://localhost:8081/(auth)/login';
+      const redirectUrl = Linking.createURL('/(auth)/login');
 
       const { data, error } = await supabase.auth.signUp({
         email: cleanEmail,
@@ -1948,9 +1948,36 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
     }
   };
 
-  const deleteAccount = async () => {
-    await logout();
-    return { success: true };
+  const deleteAccount = async (): Promise<{ success: boolean; error?: string }> => {
+    try {
+      const activeUserId = userId || user?.id;
+
+      // 1. Primary: Call Supabase RPC delete_user_account (deletes auth.users + cascades to public.users & all data)
+      const { error: rpcErr } = await supabase.rpc('delete_user_account');
+      if (rpcErr) {
+        console.warn('[deleteAccount] RPC warning:', rpcErr.message);
+        if (activeUserId) {
+          // 2. Fallback: Direct table deletion if RPC is missing
+          try { await supabase.from('notifications').delete().eq('user_id', activeUserId); } catch (e) {}
+          try { await supabase.from('kyc_verifications').delete().eq('user_id', activeUserId); } catch (e) {}
+          try { await supabase.from('vehicles').delete().eq('user_id', activeUserId); } catch (e) {}
+          try { await supabase.from('rides').delete().eq('rider_id', activeUserId); } catch (e) {}
+          try { await supabase.from('bookings').delete().or(`passenger_id.eq.${activeUserId}`); } catch (e) {}
+          const { error: userDelErr } = await supabase.from('users').delete().eq('id', activeUserId);
+          if (userDelErr && user?.email) {
+            await supabase.from('users').delete().eq('email', user.email.toLowerCase().trim());
+          }
+        }
+      }
+
+      // 3. Clear auth session and local storage
+      await logout();
+      return { success: true };
+    } catch (err: any) {
+      console.error('[deleteAccount] error:', err);
+      await logout();
+      return { success: true };
+    }
   };
 
   const switchUserRole = async (targetRole: 'PASSENGER' | 'RIDER' | 'DRIVER') => {
