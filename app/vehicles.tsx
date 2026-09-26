@@ -1,7 +1,7 @@
 import { Ionicons } from '@expo/vector-icons';
 import * as ImagePicker from 'expo-image-picker';
-import { router } from 'expo-router';
-import React, { useCallback, useEffect, useState } from 'react';
+import { router, useFocusEffect } from 'expo-router';
+import React, { useCallback, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -97,9 +97,11 @@ export default function VehiclesScreen() {
     }
   }, [user?.id]);
 
-  useEffect(() => {
-    fetchVehiclesFromSupabase();
-  }, [fetchVehiclesFromSupabase]);
+  useFocusEffect(
+    useCallback(() => {
+      fetchVehiclesFromSupabase();
+    }, [fetchVehiclesFromSupabase])
+  );
 
   const handleBack = () => {
     if (router.canGoBack()) {

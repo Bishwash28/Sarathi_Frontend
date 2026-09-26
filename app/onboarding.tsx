@@ -5,6 +5,8 @@ import { Dimensions, FlatList, ImageBackground, NativeScrollEvent, NativeSynthet
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
 
+import { useApp } from '../context/AppContext';
+
 const { width } = Dimensions.get('window');
 
 const slides = [
@@ -35,6 +37,7 @@ const slides = [
 ];
 
 export default function OnboardingScreen() {
+  const { completeOnboarding } = useApp();
   const [currentSlide, setCurrentSlide] = useState(0);
   const slide = slides[currentSlide];
   const flatListRef = useRef<FlatList>(null);
@@ -45,17 +48,19 @@ export default function OnboardingScreen() {
     }
   }, [currentSlide, slide.bgColor]);
 
-  const handleNext = () => {
+  const handleNext = async () => {
     if (currentSlide < slides.length - 1) {
       const nextIndex = currentSlide + 1;
       flatListRef.current?.scrollToIndex({ index: nextIndex, animated: true });
       setCurrentSlide(nextIndex);
     } else {
+      await completeOnboarding();
       router.replace('/(auth)/login');
     }
   };
 
-  const handleSkip = () => {
+  const handleSkip = async () => {
+    await completeOnboarding();
     router.replace('/(auth)/login');
   };
 

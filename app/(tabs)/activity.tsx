@@ -1,11 +1,10 @@
-import React, { useState, useCallback } from 'react';
-import { StyleSheet, Text, View, ScrollView, TouchableOpacity, Image, Alert, Modal, TextInput, ActivityIndicator } from 'react-native';
 import { Ionicons } from '@expo/vector-icons';
-import { router } from 'expo-router';
-import { useFocusEffect } from 'expo-router';
-import AsyncStorage from '@react-native-async-storage/async-storage';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { DepartureTimePicker } from '../../components/DepartureTimePicker';
 import { Colors } from '../../constants/Colors';
-import { useApp, Booking, Ride } from '../../context/AppContext';
+import { Booking, Ride, useApp } from '../../context/AppContext';
 
 export default function ActivityScreen() {
   const { bookings, rides, user, updateRide, deleteRide, fetchUserBookings, fetchActiveRides } = useApp();
@@ -45,28 +44,29 @@ export default function ActivityScreen() {
 
   const ongoingBookings = isDriver
     ? bookings.filter(b => {
-        const isMyRide = myOfferIds.length === 0 || myOfferIds.includes(b.rideId) || rides.some(r => r.id === b.rideId && ((r.riderId && user?.id && r.riderId === user.id) || (r.phone && user?.phone && r.phone === user.phone)));
-        const isActiveStatus = b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing';
-        return isMyRide && isActiveStatus;
-      })
+      const isMyRide = (b.driverId && user?.id && b.driverId === user.id) || myOfferIds.includes(b.rideId);
+      const isActiveStatus = b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing';
+      return isMyRide && isActiveStatus;
+    })
     : bookings.filter(b => {
-        const isMyBooking = !b.passengerId || b.passengerId === user?.id || (user?.email && b.passengerId === user.email);
-        const isActiveStatus = b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing';
-        return isMyBooking && isActiveStatus;
-      });
+      const isMyBooking = (user?.id && b.passengerId === user.id) || (user?.email && b.passengerId === user.email);
+      const isActiveStatus = b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing';
+      return isMyBooking && isActiveStatus;
+    });
 
   const historyBookings = isDriver
     ? bookings.filter(b => {
-        const isMyRide = myOfferIds.length === 0 || myOfferIds.includes(b.rideId) || rides.some(r => r.id === b.rideId && ((r.riderId && user?.id && r.riderId === user.id) || (r.phone && user?.phone && r.phone === user.phone)));
-        const isPastStatus = b.status === 'completed' || b.status === 'cancelled';
-        return isMyRide && isPastStatus;
-      })
+      // FIX: no longer depends on `rides`/`myOfferIds`, which only ever
+      // contain ACTIVE rides — that's why this was always empty before.
+      const isMyRide = (b.driverId && user?.id && b.driverId === user.id) || myOfferIds.includes(b.rideId);
+      const isPastStatus = b.status === 'completed' || b.status === 'cancelled';
+      return isMyRide && isPastStatus;
+    })
     : bookings.filter(b => {
-        const isMyBooking = !b.passengerId || b.passengerId === user?.id || (user?.email && b.passengerId === user.email);
-        const isPastStatus = b.status === 'completed' || b.status === 'cancelled';
-        return isMyBooking && isPastStatus;
-      });
-
+      const isMyBooking = (user?.id && b.passengerId === user.id) || (user?.email && b.passengerId === user.email);
+      const isPastStatus = b.status === 'completed' || b.status === 'cancelled';
+      return isMyBooking && isPastStatus;
+    });
   const handleBookingPress = (booking: Booking) => {
     if (booking.lifecycleState === 'request_pending') {
       router.push({ pathname: '/booking-status', params: { rideId: booking.rideId } });
@@ -143,31 +143,44 @@ export default function ActivityScreen() {
   };
 
   const renderBookingCard = (item: Booking) => {
-    const ride = rides.find(r => r.id === item.rideId);
+    // FIX: determine viewpoint from the booking's own driverId, not a lookup
+    // into `rides` (which won't contain this ride once it's completed/cancelled).
+    const isUserRider = Boolean(item.driverId && user?.id && item.driverId === user.id);
 
-    const isDriver = user?.role === 'driver';
-    const titleName = isDriver ? (item.passengerName || item.passengerId.split('@')[0]) : (ride?.riderName || item.riderOriginName || 'Driver');
-    const subText = isDriver ? `Passenger requesting to join` : (ride ? `${ride.vehicleName} • ${ride.vehicleNumber}` : 'Sarathi Trip Segment');
-    const avatarUrl = isDriver 
+    const titleName = isUserRider
+      ? (item.passengerName || item.passengerId?.split('@')[0] || 'Passenger')
+      : (item.driverName || 'Driver');
+
+    const subText = isUserRider
+      ? 'Passenger request'
+      : `${item.vehicleName || 'Vehicle'}${item.vehicleNumber ? ' • ' + item.vehicleNumber : ''}`;
+
+    const avatarUrl = isUserRider
       ? (item.passengerPhoto || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80')
-      : (ride?.riderPhoto || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80');
+      : (item.driverPhoto || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80');
 
-    const routeText = ride
-      ? ride.route.join(' → ')
-      : `${item.passengerPickup || item.riderOriginName || 'Pickup'} → ${item.passengerDropoff || item.riderDestName || 'Drop-off'}`;
-    const farePrice = ride ? ride.price : 150;
+    const originDestText = `${item.riderOriginName || 'Origin'} ➔ ${item.riderDestName || 'Destination'}`;
+    const pickupDropText = `${item.passengerPickup || 'Pickup'} ➔ ${item.passengerDropoff || 'Drop-off'}`;
+    const farePrice = item.farePrice ?? 150;
 
     return (
       <TouchableOpacity
         key={item.id}
         style={styles.activityCard}
-        onPress={() => !isDriver && handleBookingPress(item)}
-        activeOpacity={isDriver ? 1.0 : 0.8}
+        onPress={() => !isUserRider && handleBookingPress(item)}
+        activeOpacity={isUserRider ? 1.0 : 0.8}
       >
         <View style={styles.cardHeader}>
           <Image source={{ uri: avatarUrl }} style={styles.driverPhoto} />
           <View style={styles.driverInfo}>
-            <Text style={styles.driverName}>{titleName}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.driverName}>{titleName}</Text>
+              <View style={[styles.roleTagBadge, isUserRider ? { backgroundColor: '#DCFCE7' } : { backgroundColor: '#EFF6FF' }]}>
+                <Text style={[styles.roleTagBadgeText, isUserRider ? { color: '#166534' } : { color: '#1E40AF' }]}>
+                  {isUserRider ? 'RIDER' : 'PASSENGER'}
+                </Text>
+              </View>
+            </View>
             <Text style={styles.vehicleText}>{subText}</Text>
           </View>
           <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(item.status)}15` }]}>
@@ -177,21 +190,32 @@ export default function ActivityScreen() {
           </View>
         </View>
 
+        {/* Rider's full route — always shown */}
         <View style={styles.routeContainer}>
-          <Ionicons name="location-outline" size={16} color={Colors.textMuted} />
-          <Text style={styles.routeText} numberOfLines={1}>
-            {routeText}
-          </Text>
+          <Ionicons name="navigate-circle-outline" size={16} color={Colors.textMuted} />
+          <Text style={styles.routeText} numberOfLines={1}>{originDestText}</Text>
         </View>
+
+        {/* Passenger's specific segment — always shown, clearly labeled as distinct from the line above */}
+        <View style={[styles.routeContainer, { marginTop: -4 }]}>
+          <Ionicons name="location-outline" size={16} color={Colors.textMuted} />
+          <Text style={styles.routeText} numberOfLines={1}>{pickupDropText}</Text>
+        </View>
+
+        {/* Cancelled-by line — only for cancelled history entries */}
+        {item.status === 'cancelled' && item.cancelledBy && (
+          <Text style={styles.cancelledByText}>
+            Cancelled by {item.cancelledBy === 'rider' ? 'Rider' : 'Passenger'}
+          </Text>
+        )}
 
         <View style={styles.cardFooter}>
           <Text style={styles.dateText}>
-            {new Date(item.createdAt).toLocaleDateString(undefined, {
-              month: 'short',
-              day: 'numeric',
-              hour: '2-digit',
-              minute: '2-digit'
-            })}
+            {item.status === 'completed' && item.completedAt
+              ? `Completed: ${new Date(item.completedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+              : item.status === 'cancelled' && item.cancelledAt
+                ? `Cancelled: ${new Date(item.cancelledAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                : new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
           </Text>
           <Text style={styles.priceText}>NPR {farePrice}</Text>
         </View>
@@ -204,7 +228,7 @@ export default function ActivityScreen() {
             <Ionicons name="navigate-circle" size={18} color="#FFF" />
             <Text style={styles.openLiveTripBtnText}>Open Live Trip Tracking Screen →</Text>
           </TouchableOpacity>
-        ) : (!isDriver && item.status === 'pending') && (
+        ) : (!isUserRider && item.status === 'pending') && (
           <View style={styles.trackingHint}>
             <Ionicons name="navigate-circle" size={16} color={Colors.accent} />
             <Text style={styles.trackingHintText}>View waiting queue</Text>
@@ -358,12 +382,10 @@ export default function ActivityScreen() {
                 keyboardType="numeric"
               />
 
-              <Text style={styles.inputLabel}>Departure Time</Text>
-              <TextInput
-                style={styles.modalInput}
-                placeholder="Departure time"
+              <DepartureTimePicker
                 value={editDepartureTime}
-                onChangeText={setEditDepartureTime}
+                onChange={(iso) => setEditDepartureTime(iso)}
+                label="Departure Time *"
               />
 
               <TouchableOpacity style={styles.saveBtn} onPress={handleSaveEditRide}>
@@ -464,6 +486,16 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: 'bold',
     color: Colors.textPrimary,
+  },
+  roleTagBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  roleTagBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.5,
   },
   vehicleText: {
     fontSize: 12,
@@ -653,4 +685,11 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: 'bold',
   },
+  cancelledByText: {
+  fontSize: 12,
+  fontWeight: '700',
+  color: '#DC2626',
+  marginTop: 2,
+  marginBottom: 6,
+},
 });

@@ -20,30 +20,42 @@ import { makePhoneCall } from '../utils/phoneUtils';
 
 export default function RideDetailScreen() {
   const params = useLocalSearchParams();
-  const { rides, requestBooking, bookings, startRiderChat } = useApp();
+  const { rides, requestBooking, bookings, startRiderChat, getUserRating } = useApp();
   const [isSubmitting, setIsSubmitting] = useState(false);
 
   // Extract params & match with local ride object
   const rideId = typeof params.id === 'string' ? params.id : '';
   const foundRide = rides.find(r => r.id === rideId);
+  const riderId = foundRide?.riderId || (params.riderId as string) || '';
 
   const driverName = foundRide?.riderName || (params.riderName as string) || 'Driver';
   const driverPhotoUrl = foundRide?.riderPhoto || (params.riderPhoto as string) || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80';
-  const driverRating = foundRide?.rating || (params.rating ? parseFloat(params.rating as string) : 5.0);
+  const riderRatingObj = getUserRating(riderId);
+  const driverRatingText = riderRatingObj.hasRatings ? riderRatingObj.average.toFixed(1) : 'New';
   const driverPhone = foundRide?.phone || (params.phone as string) || '+9779841234567';
 
   const vehicleModel = foundRide?.vehicleName || (params.vehicleName as string) || 'Vehicle';
   const vehiclePlate = foundRide?.vehicleNumber || (params.vehicleNumber as string) || 'BA 99 PA 1234';
 
-  const originName = (params.selectedPickup as string) || foundRide?.pickupPoint || foundRide?.route?.[0] || 'Origin';
-  const destName = (params.selectedDest as string) || (foundRide?.route ? foundRide.route[foundRide.route.length - 1] : 'Destination');
+  const riderStartPoint =
+    (params.riderOrigin && params.riderOrigin !== 'Origin' && params.riderOrigin !== 'Rider Origin' ? (params.riderOrigin as string) : null) ||
+    (foundRide?.pickupPoint && foundRide.pickupPoint !== 'Origin' ? foundRide.pickupPoint : null) ||
+    (foundRide?.route?.[0] && foundRide.route[0] !== 'Origin' ? foundRide.route[0] : null) ||
+    (params.selectedPickup as string) ||
+    'Origin';
 
-  const riderStartPoint = foundRide?.route?.[0] || (params.riderOrigin as string) || originName;
-  const riderEndPoint = foundRide?.route ? foundRide.route[foundRide.route.length - 1] : ((params.riderDest as string) || destName);
+  const riderEndPoint =
+    (params.riderDest && params.riderDest !== 'Destination' && params.riderDest !== 'Rider Destination' ? (params.riderDest as string) : null) ||
+    (foundRide?.route && foundRide.route.length > 0 && foundRide.route[foundRide.route.length - 1] !== 'Destination' ? foundRide.route[foundRide.route.length - 1] : null) ||
+    (params.selectedDest as string) ||
+    riderStartPoint;
+
+  const originName = (params.selectedPickup as string) || riderStartPoint;
+  const destName = (params.selectedDest as string) || riderEndPoint;
 
   const farePrice = foundRide?.price ?? (params.price ? parseFloat(params.price as string) : 150);
   const seatsLeftCount = foundRide?.seatsLeft ?? (params.seatsLeft ? parseInt(params.seatsLeft as string, 10) : 1);
-  const departureTimeText = foundRide?.departureTime || (params.departureTime as string) || 'Leaving soon';
+  const departureTimeText = foundRide?.departureTime || (params.departureTime as string) || new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
   // Coordinate objects for small box map
   const originCoords = {
@@ -82,7 +94,8 @@ export default function RideDetailScreen() {
         originCoords,
         destCoords,
         riderStartPoint,
-        riderEndPoint
+        riderEndPoint,
+        riderId
       );
       Alert.alert(
         'Request Sent! 🎉',
@@ -226,7 +239,7 @@ export default function RideDetailScreen() {
               <Image source={{ uri: driverPhotoUrl }} style={styles.driverAvatar} />
               <View style={styles.starRatingBadge}>
                 <Ionicons name="star" size={10} color="#F59E0B" />
-                <Text style={styles.starRatingText}>{driverRating.toFixed(1)}</Text>
+                <Text style={styles.starRatingText}>{driverRatingText}</Text>
               </View>
             </View>
 

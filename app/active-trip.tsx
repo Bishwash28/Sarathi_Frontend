@@ -67,7 +67,7 @@ export default function ActiveTripScreen() {
               vehicleType: 'bike',
               vehicleName: data.vehicle_name || 'Vehicle',
               vehicleNumber: data.vehicle_number || 'BA 99 PA 1234',
-              departureTime: data.departure_time || 'Leaving soon',
+              departureTime: data.departure_time ? new Date(data.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
               seatsLeft: Number(data.available_seats) || 1,
               price: Number(data.price) || 150,
               route: Array.isArray(data.route) ? data.route : [data.pickup_point || 'Origin', 'Destination'],
@@ -143,9 +143,6 @@ export default function ActiveTripScreen() {
     const res = verifyCompletionOtp(currentBooking.id, inputCompletionOtp);
     if (!res.success) {
       Alert.alert('Verification Failed', res.error || 'Incorrect OTP');
-    } else {
-      submitRideRating(currentBooking.id, 5, 'Ride completed by driver');
-      router.replace('/(tabs)');
     }
   };
 
@@ -153,9 +150,6 @@ export default function ActiveTripScreen() {
     const res = processPayment(currentBooking.id, selectedPayment);
     if (!res.success) {
       Alert.alert('Payment Failed', res.error || 'Could not process payment');
-    } else {
-      submitRideRating(currentBooking.id, 5, 'Paid cash');
-      router.replace('/(tabs)');
     }
   };
 
@@ -168,9 +162,9 @@ export default function ActiveTripScreen() {
   };
   const toggleTag = handleTagToggle;
 
-  const handleSubmitRating = () => {
-    submitRideRating(currentBooking.id, selectedStars, reviewText);
-    Alert.alert('Thank You! 🎉', 'Your rating has been submitted successfully and trip is completed.', [
+  const handleSubmitRating = async () => {
+    await submitRideRating(currentBooking.id, selectedStars, reviewText);
+    Alert.alert('Thank You! 🎉', `Your rating (${selectedStars} ★) has been submitted successfully.`, [
       { text: 'Done', onPress: () => router.replace('/(tabs)') }
     ]);
   };
@@ -235,7 +229,7 @@ export default function ActiveTripScreen() {
           </View>
 
           {/* STEP 1: Pickup OTP State */}
-          {(lifecycle === 'waiting_for_pickup' || lifecycle === 'pickup_otp_required') && (
+          {(lifecycle === 'waiting_for_pickup' || lifecycle === 'pickup_otp_required') && currentBooking.status !== 'completed' && currentBooking.status !== 'cancelled' && (
             <View style={styles.stepCard}>
               {user?.role === 'driver' ? (
                 /* Rider View: OTP Entry Input */
@@ -287,6 +281,50 @@ export default function ActiveTripScreen() {
                   </Text>
                 </>
               )}
+            </View>
+          )}
+
+          {/* STEP: Completed Trip View */}
+          {(lifecycle === 'completed' || currentBooking.status === 'completed') && (
+            <View style={styles.stepCard}>
+              <View style={{ alignItems: 'center', paddingVertical: 12 }}>
+                <View style={[styles.promptIconCircle, { backgroundColor: '#DCFCE7' }]}>
+                  <Ionicons name="checkmark-done-circle" size={40} color="#16A34A" />
+                </View>
+                <Text style={styles.promptHeaderTitle}>Trip Completed! 🎉</Text>
+                <Text style={{ fontSize: 13, color: Colors.textMuted, textAlign: 'center', marginBottom: 16 }}>
+                  This ride has been completed successfully. Thank you for riding with Sarathi!
+                </Text>
+                <TouchableOpacity
+                  style={[styles.actionMainButton, { width: '100%' }]}
+                  onPress={() => router.replace('/(tabs)')}
+                >
+                  <Ionicons name="home-outline" size={20} color="#FFF" />
+                  <Text style={styles.actionMainButtonText}>Return to Home</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          {/* STEP: Cancelled Trip View */}
+          {(lifecycle === 'cancelled' || currentBooking.status === 'cancelled') && (
+            <View style={styles.stepCard}>
+              <View style={{ alignItems: 'center', paddingVertical: 12 }}>
+                <View style={[styles.promptIconCircle, { backgroundColor: '#FEE2E2' }]}>
+                  <Ionicons name="close-circle" size={40} color="#DC2626" />
+                </View>
+                <Text style={[styles.promptHeaderTitle, { color: '#DC2626' }]}>Ride Cancelled by Rider ❌</Text>
+                <Text style={{ fontSize: 13, color: Colors.textMuted, textAlign: 'center', marginBottom: 16, lineHeight: 18 }}>
+                  The rider has cancelled this ride offer. No payment or penalty was charged.
+                </Text>
+                <TouchableOpacity
+                  style={[styles.actionMainButton, { width: '100%', backgroundColor: Colors.primary }]}
+                  onPress={() => router.replace('/(tabs)')}
+                >
+                  <Ionicons name="search" size={20} color="#FFF" />
+                  <Text style={styles.actionMainButtonText}>Find Another Ride</Text>
+                </TouchableOpacity>
+              </View>
             </View>
           )}
 
@@ -410,6 +448,105 @@ export default function ActiveTripScreen() {
                   <Text style={styles.actionMainButtonText}>Complete Ride & Pay NPR {ride.price || 180}</Text>
                 </TouchableOpacity>
               </View>
+          )}
+
+          {/* STEP 5: Rating Submission View */}
+          {lifecycle === 'rating_pending' && (
+            <View style={styles.stepCard}>
+              <View style={{ alignItems: 'center', paddingVertical: 10 }}>
+                <Image
+                  source={{
+                    uri: user?.role === 'driver'
+                      ? (currentBooking.passengerPhoto || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80')
+                      : (ride.riderPhoto || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80')
+                  }}
+                  style={{ width: 72, height: 72, borderRadius: 36, marginBottom: 10, borderWidth: 2, borderColor: Colors.primary }}
+                />
+                <Text style={styles.cardHeaderTitle}>
+                  Rate your trip with {user?.role === 'driver' ? (currentBooking.passengerName || 'Passenger') : ride.riderName}
+                </Text>
+                <Text style={{ fontSize: 13, color: Colors.textMuted, textAlign: 'center', marginBottom: 16, lineHeight: 18 }}>
+                  How was your experience on this trip? Your rating will be recorded and calculated into their profile average rating.
+                </Text>
+
+                {/* 5-Star Rating Selector */}
+                <View style={{ flexDirection: 'row', gap: 12, marginBottom: 12 }}>
+                  {[1, 2, 3, 4, 5].map((star) => (
+                    <TouchableOpacity
+                      key={star}
+                      onPress={() => setSelectedStars(star)}
+                      activeOpacity={0.7}
+                    >
+                      <Ionicons
+                        name={star <= selectedStars ? 'star' : 'star-outline'}
+                        size={36}
+                        color={star <= selectedStars ? '#EAB308' : '#CBD5E1'}
+                      />
+                    </TouchableOpacity>
+                  ))}
+                </View>
+
+                <Text style={{ fontSize: 14, fontWeight: 'bold', color: Colors.textPrimary, marginBottom: 16 }}>
+                  {selectedStars === 5 ? '🌟 Excellent' : selectedStars === 4 ? '😊 Very Good' : selectedStars === 3 ? '👍 Good' : selectedStars === 2 ? '😐 Fair' : '🙁 Poor'} ({selectedStars} / 5 Stars)
+                </Text>
+
+                {/* Quick Feedback Tags */}
+                <View style={{ flexDirection: 'row', flexWrap: 'wrap', justifyContent: 'center', gap: 8, marginBottom: 16 }}>
+                  {['Safe Riding', 'Punctual', 'Clean Vehicle', 'Friendly Behavior', 'Smooth Ride'].map((tag) => {
+                    const isSelected = selectedTags.includes(tag);
+                    return (
+                      <TouchableOpacity
+                        key={tag}
+                        style={{
+                          paddingHorizontal: 12,
+                          paddingVertical: 6,
+                          borderRadius: 20,
+                          borderWidth: 1,
+                          borderColor: isSelected ? Colors.primary : '#E2E8F0',
+                          backgroundColor: isSelected ? '#EFF6FF' : '#F8FAFC',
+                        }}
+                        onPress={() => toggleTag(tag)}
+                      >
+                        <Text style={{ fontSize: 12, fontWeight: '600', color: isSelected ? Colors.primary : Colors.textMuted }}>
+                          {isSelected ? '✓ ' : ''}{tag}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+
+                {/* Optional Review Input */}
+                <TextInput
+                  style={{
+                    width: '100%',
+                    backgroundColor: '#F8FAFC',
+                    borderWidth: 1,
+                    borderColor: '#E2E8F0',
+                    borderRadius: 12,
+                    padding: 12,
+                    fontSize: 13,
+                    color: Colors.textPrimary,
+                    minHeight: 70,
+                    textAlignVertical: 'top',
+                    marginBottom: 16,
+                  }}
+                  placeholder="Add a comment or review (optional)..."
+                  placeholderTextColor={Colors.textMuted}
+                  value={reviewText}
+                  onChangeText={setReviewText}
+                  multiline
+                />
+
+                {/* Submit Rating Button */}
+                <TouchableOpacity
+                  style={[styles.actionMainButton, { width: '100%' }]}
+                  onPress={handleSubmitRating}
+                >
+                  <Ionicons name="checkmark-done" size={20} color="#FFF" />
+                  <Text style={styles.actionMainButtonText}>Submit Rating & Finish</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           )}
 
           {/* Participant Summary Footer Panel */}

@@ -18,6 +18,7 @@ import {
   TouchableOpacity,
   View,
 } from 'react-native';
+import Constants from 'expo-constants';
 import { Colors } from '../../constants/Colors';
 import { useApp } from '../../context/AppContext';
 
@@ -48,7 +49,8 @@ const TopFacebookLoadingBar = () => {
 };
 
 export default function ProfileScreen() {
-  const { user, completeProfile, updateEmergencyContact, logout, updateUserProfile, deleteAccount, switchUserRole, changePassword, adminApproveKyc, adminRejectKyc, refreshKycStatus } = useApp();
+  const { user, getUserRating, completeProfile, updateEmergencyContact, logout, updateUserProfile, deleteAccount, switchUserRole, changePassword, adminApproveKyc, adminRejectKyc, refreshKycStatus } = useApp();
+  const userRating = getUserRating(user?.id);
 
   const [isFetchingProfile, setIsFetchingProfile] = useState(false);
 
@@ -279,7 +281,11 @@ export default function ProfileScreen() {
                   </View>
                   <View style={styles.ratingBadge}>
                     <Ionicons name="star" size={13} color="#FFF" />
-                    <Text style={styles.ratingText}>{user?.rating?.toFixed(1) ?? '5.0'}</Text>
+                    <Text style={styles.ratingText}>
+                      {userRating.hasRatings
+                        ? `${userRating.average.toFixed(1)} (${userRating.count})`
+                        : 'No ratings yet'}
+                    </Text>
                   </View>
                 </View>
               </View>
@@ -456,7 +462,9 @@ export default function ProfileScreen() {
           </TouchableOpacity>
 
           <View style={styles.versionFooter}>
-            <Text style={styles.versionText}>Sarathi v1.0.0</Text>
+            <Text style={styles.versionText}>
+              Sarathi v{Constants.expoConfig?.version || '1.0.0'}
+            </Text>
           </View>
 
         </ScrollView>

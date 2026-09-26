@@ -4,7 +4,13 @@
     "slug": "Sarathi_Frontend",
     "version": "1.0.0",
     "orientation": "portrait",
-    "icon": "./assets/images/icon.png",
+    "updates": {
+      "url": "https://u.expo.dev/bfbdb549-3357-4331-ab13-bcc8c06d88c8"
+    },
+    "runtimeVersion": {
+      "policy": "appVersion"
+    },
+    "icon": "./assets/images/app_icon.png",
     "scheme": "sarathifrontend",
     "userInterfaceStyle": "light",
     "ios": {
@@ -16,10 +22,10 @@
     },
     "android": {
       "adaptiveIcon": {
-        "backgroundColor": "#E6F4FE",
-        "foregroundImage": "./assets/images/icon.png",
-        "backgroundImage": "./assets/images/icon.png",
-        "monochromeImage": "./assets/images/icon.png"
+        "backgroundColor": "#FFFFFF",
+        "foregroundImage": "./assets/images/app_icon.png",
+        "backgroundImage": "./assets/images/app_icon.png",
+        "monochromeImage": "./assets/images/app_icon.png"
       },
       "permissions": [
         "ACCESS_COARSE_LOCATION",

@@ -1,14 +1,17 @@
 import { default as AsyncStorage, default as AsyncStorageLib } from '@react-native-async-storage/async-storage';
-import * as Location from 'expo-location';
 import Constants, { ExecutionEnvironment } from 'expo-constants';
-import { router } from 'expo-router';
-import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
-import { Alert, Platform } from 'react-native';
 import * as Linking from 'expo-linking';
+import * as Location from 'expo-location';
+import { router } from 'expo-router';
 import * as WebBrowser from 'expo-web-browser';
+import React, { createContext, useContext, useEffect, useMemo, useRef, useState } from 'react';
+import { Platform } from 'react-native';
 import { supabase } from '../lib/supabase';
+import { sendLocalPushNotification } from '../utils/pushNotifications';
 
 WebBrowser.maybeCompleteAuthSession();
+
+const isUUID = (str?: string) => Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
 
 // Check if app is running in Expo Go sandbox (SDK 53+ removed remote push from Expo Go)
 const isExpoGo = Constants.executionEnvironment === ExecutionEnvironment.StoreClient;
@@ -78,6 +81,14 @@ export type RideLifecycleState =
   | 'cancelled';
 
 
+export interface RatingItem {
+  id?: string;
+  rated_user: string;
+  rated_by: string;
+  rating: number;
+  created_at?: string;
+}
+
 export interface Ride {
   id: string;
   riderName: string;
@@ -113,9 +124,19 @@ export interface Booking {
   dropCoords?: { lat: number; lng: number };
   riderOriginName?: string;
   riderDestName?: string;
+  driverId?: string;
+  driverName?: string;
+  driverPhoto?: string;
+  driverPhone?: string;
+  vehicleName?: string;
+  vehicleNumber?: string;
+  farePrice?: number;
   status: 'pending' | 'accepted' | 'ongoing' | 'arrived' | 'completed' | 'cancelled';
   lifecycleState: RideLifecycleState;
   createdAt: Date;
+  completedAt?: Date;      // NEW
+  cancelledAt?: Date;      // NEW
+  cancelledBy?: 'passenger' | 'rider'; // NEW
   currentLat?: number;
   currentLng?: number;
   pickupOtp: string;
@@ -176,6 +197,9 @@ interface AppContextType {
   user: UserProfile | null;
   deviceLocation: string;
   isAuthenticated: boolean;
+  isAuthLoading: boolean;
+  hasCompletedOnboarding: boolean;
+  completeOnboarding: () => Promise<void>;
   rides: Ride[];
   bookings: Booking[];
   messages: Message[];
@@ -208,7 +232,7 @@ interface AppContextType {
   refreshKycStatus: () => Promise<{ status: string; rejectionReason?: string }>;
   adminApproveKyc: () => Promise<{ success: boolean; error?: string }>;
   adminRejectKyc: (reason?: string) => Promise<{ success: boolean; error?: string }>;
-  requestBooking: (ridePostId: string, passengerPickup?: string, passengerDropoff?: string, pickupCoords?: { lat: number; lng: number }, dropCoords?: { lat: number; lng: number }, riderOriginName?: string, riderDestName?: string) => Promise<void>;
+  requestBooking: (ridePostId: string, passengerPickup?: string, passengerDropoff?: string, pickupCoords?: { lat: number; lng: number }, dropCoords?: { lat: number; lng: number }, riderOriginName?: string, riderDestName?: string, explicitRiderId?: string) => Promise<void>;
   cancelBooking: (bookingId: string) => void;
   addDriverNotification: (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => void;
   markNotificationAsRead: (id: string) => void;
@@ -226,7 +250,9 @@ interface AppContextType {
   verifyCompletionOtp: (bookingId: string, otp: string) => { success: boolean; error?: string };
   triggerCompletionOtpPrompt: (bookingId: string) => void;
   processPayment: (bookingId: string, method: 'cash' | 'khalti' | 'esewa') => { success: boolean; error?: string };
-  submitRideRating: (bookingId: string, rating: number, comment?: string) => void;
+  ratingsList: RatingItem[];
+  getUserRating: (userId?: string) => { average: number; count: number; hasRatings: boolean };
+  submitRideRating: (bookingId: string, rating: number, comment?: string) => Promise<void>;
   createRide: (ride: Omit<Ride, 'id' | 'riderName' | 'riderPhoto' | 'rating'>) => Promise<{ success: boolean; error?: string }>;
   updateRide: (id: string, updatedFields: Partial<Omit<Ride, 'id'>>) => Promise<{ success: boolean; error?: string }>;
   deleteRide: (id: string) => Promise<{ success: boolean; error?: string }>;
@@ -271,8 +297,170 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   const [authToken, setAuthToken] = useState<string | null>(null);
   const [deviceLocation, setDeviceLocation] = useState<string>('');
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(false);
+  const [isAuthLoading, setIsAuthLoading] = useState<boolean>(true);
+  const [hasCompletedOnboarding, setHasCompletedOnboarding] = useState<boolean>(false);
   const [recentSearches, setRecentSearches] = useState<RecentSearchItem[]>([]);
   const [savedPlaces, setSavedPlaces] = useState<SavedPlaceItem[]>(initialSavedPlaces);
+  const [ratingsList, setRatingsList] = useState<RatingItem[]>([]);
+
+  const completeOnboarding = async () => {
+    setHasCompletedOnboarding(true);
+    try {
+      await AsyncStorageLib.setItem('@sarathi_has_completed_onboarding', 'true');
+    } catch (err) {
+      console.warn('[completeOnboarding] AsyncStorage save error:', err);
+    }
+  };
+
+  /** Dynamic Average Rating Calculation */
+  const getUserRating = React.useCallback((targetUserId?: string): { average: number; count: number; hasRatings: boolean } => {
+    const validTargetIds = new Set<string>();
+    if (targetUserId && targetUserId.trim()) {
+      validTargetIds.add(targetUserId.trim().toLowerCase());
+    } else {
+      if (user?.id && user.id.trim()) validTargetIds.add(user.id.trim().toLowerCase());
+      if (user?.email && user.email.trim()) validTargetIds.add(user.email.trim().toLowerCase());
+      if (user?.name && user.name.trim()) validTargetIds.add(user.name.trim().toLowerCase());
+      if (user?.phone && user.phone.trim()) validTargetIds.add(user.phone.trim().toLowerCase());
+    }
+
+    if (validTargetIds.size === 0) {
+      return { average: 0, count: 0, hasRatings: false };
+    }
+
+    const userRatings = ratingsList.filter(r => {
+      if (!r.rated_user) return false;
+      const ru = r.rated_user.trim().toLowerCase();
+      return validTargetIds.has(ru);
+    });
+
+    const uniqueRatingsMap = new Map<string, RatingItem>();
+    userRatings.forEach(r => {
+      const key = `${r.rated_by}_${r.rating}_${r.created_at || r.id}`;
+      if (!uniqueRatingsMap.has(key)) {
+        uniqueRatingsMap.set(key, r);
+      }
+    });
+
+    const uniqueRatings = Array.from(uniqueRatingsMap.values());
+
+    if (uniqueRatings.length === 0) {
+      return { average: 0, count: 0, hasRatings: false };
+    }
+
+    const sum = uniqueRatings.reduce((acc, curr) => acc + Number(curr.rating || 0), 0);
+    const avg = Math.round((sum / uniqueRatings.length) * 10) / 10;
+    return { average: avg, count: uniqueRatings.length, hasRatings: true };
+  }, [ratingsList, user?.id, user?.email, user?.name, user?.phone]);
+
+  /** Fetch ratings from Supabase & local storage */
+  const fetchRatings = async () => {
+    try {
+      const cached = await AsyncStorage.getItem('sarathi_ratings_list');
+      let cachedList: RatingItem[] = [];
+      if (cached) {
+        try { cachedList = JSON.parse(cached); } catch (e) { }
+      }
+
+      const { data, error } = await supabase.from('ratings').select('*');
+      if (error) {
+        if (cachedList.length > 0) setRatingsList(cachedList);
+      } else if (data) {
+        const map = new Map<string, RatingItem>();
+        cachedList.forEach(item => {
+          const key = `${item.rated_user}_${item.rated_by}_${item.rating}_${item.created_at || ''}`;
+          map.set(key, item);
+        });
+        (data as any[]).forEach(item => {
+          const ratingObj: RatingItem = {
+            id: item.id,
+            rated_user: item.rated_user,
+            rated_by: item.rated_by,
+            rating: Number(item.rating),
+            created_at: item.created_at,
+          };
+          const key = `${item.rated_user}_${item.rated_by}_${item.rating}_${item.created_at || ''}`;
+          map.set(key, ratingObj);
+        });
+        const merged = Array.from(map.values());
+        setRatingsList(merged);
+        await AsyncStorage.setItem('sarathi_ratings_list', JSON.stringify(merged));
+      } else if (cachedList.length > 0) {
+        setRatingsList(cachedList);
+      }
+    } catch (err) {
+      console.error('[fetchRatings] Error:', err);
+    }
+  };
+
+  /** Fetch notifications from Supabase DB */
+  const fetchUserNotifications = async (): Promise<DriverNotificationItem[]> => {
+    const activeUserId = userId || user?.id;
+    if (!activeUserId) {
+      setDriverNotifications([]);
+      return [];
+    }
+
+    try {
+      let notifData: any[] = [];
+      const { data, error } = await supabase
+        .from('notifications')
+        .select('*')
+        .eq('user_id', activeUserId)
+        .order('created_at', { ascending: false });
+
+      if (error && error.message.includes('schema cache')) {
+        // Fallback to chat_messages with sender_role = 'system_notification' if notifications table does not exist
+        const { data: sysData } = await supabase
+          .from('chat_messages')
+          .select('*')
+          .eq('receiver_id', activeUserId)
+          .eq('sender_role', 'system_notification')
+          .order('created_at', { ascending: false });
+        if (sysData) {
+          notifData = sysData.map((row: any) => ({
+            id: row.id,
+            user_id: activeUserId,
+            type: 'ride_request',
+            title: row.sender_name || 'Notification',
+            body: row.message_text,
+            is_read: row.is_read,
+            created_at: row.created_at,
+            data: {},
+          }));
+        }
+      } else if (data) {
+        notifData = data;
+      }
+
+      const mappedNotifs: DriverNotificationItem[] = notifData.map((row: any) => ({
+        id: row.id,
+        type: row.type || 'ride_request',
+        title: row.title || 'Notification',
+        description: row.body || row.message_text || '',
+        timestamp: new Date(row.created_at),
+        isRead: Boolean(row.is_read),
+        iconName: row.data?.iconName || (row.type === 'ride_request' ? 'person-add' : 'notifications'),
+        iconColor: row.data?.iconColor || '#2563EB',
+        targetRole: row.data?.targetRole,
+        targetScreen: row.data?.targetScreen,
+        targetParams: row.data?.targetParams,
+      }));
+
+      setDriverNotifications(mappedNotifs);
+      return mappedNotifs;
+    } catch (err) {
+      console.error('[fetchUserNotifications] Error:', err);
+      return driverNotifications;
+    }
+  };
+
+  useEffect(() => {
+    if (userId) {
+      fetchRatings();
+      fetchUserNotifications();
+    }
+  }, [userId]);
 
   const addRecentSearch = (from: string, to: string) => {
     if (!from || !to || from.trim().toLowerCase() === to.trim().toLowerCase()) return;
@@ -323,12 +511,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     (async () => {
       try {
+        // 0. Check persistent onboarding completion flag from AsyncStorage
+        const onboardingFlag = await AsyncStorageLib.getItem('@sarathi_has_completed_onboarding');
+        if (onboardingFlag === 'true') {
+          setHasCompletedOnboarding(true);
+        }
+
         // 1. Fetch existing Supabase Session & User Profile FIRST
         const { data: { session } } = await supabase.auth.getSession();
         if (session && session.user) {
           setAuthToken(session.access_token);
           setUserId(session.user.id);
-          
+
           const { data: profile, error: profileErr } = await supabase
             .from('users')
             .select('*')
@@ -407,6 +601,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         await fetchActiveRides();
       } catch (error) {
         console.error('Error loading stored state:', error);
+      } finally {
+        setIsAuthLoading(false);
       }
     })();
   }, []);
@@ -480,9 +676,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             const payloadTime = new Date(payload.timestamp).getTime();
             const isDuplicate = existingList.some(
               m => m.id === payload.id ||
-                   ((m.senderId === payload.senderId || (m.senderName && payload.senderName && m.senderName === payload.senderName)) &&
-                    m.text === payload.text &&
-                    Math.abs(new Date(m.timestamp).getTime() - payloadTime) < 3000)
+                ((m.senderId === payload.senderId || (m.senderName && payload.senderName && m.senderName === payload.senderName)) &&
+                  m.text === payload.text &&
+                  Math.abs(new Date(m.timestamp).getTime() - payloadTime) < 3000)
             );
             if (isDuplicate) return prev;
             const updated = {
@@ -523,9 +719,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
       })
       .on('broadcast', { event: 'booking_status_change' }, ({ payload }) => {
-        if (payload && payload.booking) {
-          setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
-          saveActiveBookingToStorage(payload.booking);
+        if (payload) {
+          if (payload.booking) {
+            setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
+            saveActiveBookingToStorage(payload.booking);
+          }
+          if (payload.driverNotification) {
+            setDriverNotifications(prev => [payload.driverNotification, ...prev.filter(n => n.id !== payload.driverNotification.id)]);
+            triggerPushNotification(payload.driverNotification.title, payload.driverNotification.description, {
+              screen: payload.driverNotification.targetScreen,
+              params: payload.driverNotification.targetParams,
+            });
+          }
+          if (payload.passengerNotification) {
+            setDriverNotifications(prev => [payload.passengerNotification, ...prev.filter(n => n.id !== payload.passengerNotification.id)]);
+            triggerPushNotification(payload.passengerNotification.title, payload.passengerNotification.description, {
+              screen: payload.passengerNotification.targetScreen,
+              params: payload.passengerNotification.targetParams,
+            });
+          }
         }
       })
       .subscribe();
@@ -614,7 +826,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           vehicleType: (item.vehicles?.vehicle_type || 'bike') as any,
           vehicleName: item.vehicles?.vehicle_name || 'Vehicle',
           vehicleNumber: item.vehicles?.number_plate || '',
-          departureTime: item.departure_time ? new Date(item.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Leaving soon',
+          departureTime: item.departure_time ? new Date(item.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
           seatsLeft: item.available_seats,
           price: Number(item.price_per_seat),
           route: [item.origin_name, item.destination_name],
@@ -642,18 +854,39 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     try {
       const activeUserId = userId;
-      const userRideIds = rides
-        .filter(r => (r.riderId && r.riderId === activeUserId) || (user?.phone && r.phone === user.phone))
-        .map(r => r.id);
+      const { data: myRides } = await supabase
+        .from('rides')
+        .select('id')
+        .eq('rider_id', activeUserId);
 
-      let query = supabase.from('bookings').select('*');
-      if (userRideIds.length > 0) {
-        query = query.or(`passenger_id.eq.${activeUserId},ride_id.in.(${userRideIds.join(',')})`);
+      const driverRideIds = (myRides || []).map((r: any) => r.id);
+
+      // FIX: nested join now pulls rider (users) + vehicle info attached to
+      // the ride, so this data survives regardless of whether the ride is
+      // still 'active' in the separate `rides` in-memory list.
+      let query = supabase
+        .from('ride_requests')
+        .select('*, users!passenger_id(*), rides!ride_id(*, users!rider_id(*), vehicles!vehicle_id(*))');
+
+      if (driverRideIds.length > 0) {
+        query = query.or(`passenger_id.eq.${activeUserId},ride_id.in.(${driverRideIds.join(',')})`);
       } else {
         query = query.eq('passenger_id', activeUserId);
       }
 
-      const { data, error } = await query.order('created_at', { ascending: false });
+      let { data, error } = await query.order('requested_at', { ascending: false });
+
+      if (error && error.message.includes('schema cache')) {
+        let fallbackQuery = supabase.from('bookings').select('*');
+        if (driverRideIds.length > 0) {
+          fallbackQuery = fallbackQuery.or(`passenger_id.eq.${activeUserId},ride_id.in.(${driverRideIds.join(',')})`);
+        } else {
+          fallbackQuery = fallbackQuery.eq('passenger_id', activeUserId);
+        }
+        const res = await fallbackQuery.order('created_at', { ascending: false });
+        data = res.data;
+        error = res.error;
+      }
 
       if (error) {
         if (!error.message.includes('schema cache')) {
@@ -667,24 +900,38 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           id: item.id,
           rideId: item.ride_id,
           passengerId: item.passenger_id || '',
-          passengerName: item.passenger_name || 'Passenger',
-          passengerPhone: item.passenger_phone || '',
-          passengerPhoto: item.passenger_photo || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80',
-          passengerPickup: item.pickup_name || '',
-          passengerDropoff: item.dropoff_name || '',
-          status: item.status || 'pending',
-          createdAt: item.created_at ? new Date(item.created_at) : new Date(),
-          pickupOtp: item.pickup_otp || '1234',
-          completionOtp: item.completion_otp || '5678',
-          lifecycleState: item.lifecycle_state || 'request_pending',
+          passengerName: item.users?.name || item.passenger_name || 'Passenger',
+          passengerPhone: item.users?.phone || item.passenger_phone || '',
+          passengerPhoto: item.users?.profile_image || item.passenger_photo || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80',
+          passengerPickup: item.pickup_name || item.passenger_pickup || '',
+          passengerDropoff: item.drop_name || item.dropoff_name || item.passenger_dropoff || '',
+          riderOriginName: item.rides?.origin_name || item.rider_origin_name,
+          riderDestName: item.rides?.destination_name || item.rider_dest_name,
+          // NEW: driver + vehicle info now sourced from the nested join,
+          // present on history rows even when the ride itself is no longer active.
+          driverId: item.rides?.rider_id || item.driver_id,
+          driverName: item.rides?.users?.name || item.driver_name || 'Driver',
+          driverPhoto: item.rides?.users?.profile_image || item.driver_photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+          driverPhone: item.rides?.users?.phone || item.driver_phone || '',
+          vehicleName: item.rides?.vehicles?.vehicle_name || item.vehicle_name || 'Vehicle',
+          vehicleNumber: item.rides?.vehicles?.number_plate || item.vehicle_number || '',
+          farePrice: Number(item.fare_amount ?? item.rides?.price_per_seat ?? 150),
+          status: (item.status || 'pending').toLowerCase() as any,
+          cancelledBy: item.cancelled_by || undefined,
+          createdAt: item.requested_at ? new Date(item.requested_at) : (item.created_at ? new Date(item.created_at) : new Date()),
+          completedAt: item.completed_at ? new Date(item.completed_at) : undefined,
+          cancelledAt: item.cancelled_at ? new Date(item.cancelled_at) : undefined,
+          pickupOtp: item.start_pin_code || item.pickup_otp || '1234',
+          completionOtp: item.end_pin_code || item.completion_otp || '5678',
+          lifecycleState: item.lifecycle_state || (
+            item.status === 'pending' ? 'request_pending' :
+              item.status === 'accepted' ? 'waiting_for_pickup' :
+                item.status === 'ongoing' ? 'ride_started' :
+                  item.status === 'completed' ? 'completed' : 'cancelled'
+          ),
         }));
 
-        setBookings(prev => {
-          const map = new Map<string, Booking>();
-          prev.forEach(b => map.set(b.id, b));
-          mappedBookings.forEach(b => map.set(b.id, b));
-          return Array.from(map.values());
-        });
+        setBookings(mappedBookings);
         return mappedBookings;
       }
       return bookings;
@@ -774,66 +1021,104 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         return { success: false, error: error.message };
       }
 
-      if (data?.url) {
-        const res = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
-        if (res.type === 'success' && res.url) {
-          const parsed = Linking.parse(res.url);
-          const hashOrQuery = res.url.includes('#') ? res.url.split('#')[1] : res.url.split('?')[1];
-          if (hashOrQuery) {
-            const params = new URLSearchParams(hashOrQuery);
-            const accessToken = params.get('access_token') || (parsed.queryParams?.access_token as string);
-            const refreshToken = params.get('refresh_token') || (parsed.queryParams?.refresh_token as string);
+      if (!data?.url) {
+        return { success: false, error: 'Failed to generate Google authentication URL.' };
+      }
 
-            if (accessToken && refreshToken) {
-              const { data: sessionData, error: sessionErr } = await supabase.auth.setSession({
-                access_token: accessToken,
-                refresh_token: refreshToken,
-              });
-              if (sessionErr) return { success: false, error: sessionErr.message };
+      const res = await WebBrowser.openAuthSessionAsync(data.url, redirectUrl);
 
-              if (sessionData.session?.user) {
-                const uid = sessionData.session.user.id;
-                setAuthToken(sessionData.session.access_token);
-                setUserId(uid);
+      let session: any = null;
 
-                const { data: profile } = await supabase
-                  .from('users')
-                  .select('*')
-                  .eq('id', uid)
-                  .maybeSingle();
+      if (res.type === 'success' && res.url) {
+        const parsed = Linking.parse(res.url);
+        const hashOrQuery = res.url.includes('#') ? res.url.split('#')[1] : res.url.split('?')[1];
+        if (hashOrQuery) {
+          const params = new URLSearchParams(hashOrQuery);
+          const accessToken = params.get('access_token') || (parsed.queryParams?.access_token as string);
+          const refreshToken = params.get('refresh_token') || (parsed.queryParams?.refresh_token as string);
 
-                const { data: kycData } = await supabase
-                  .from('kyc_verifications')
-                  .select('status, rejection_reason')
-                  .eq('user_id', uid)
-                  .maybeSingle();
-
-                const kycStatusStr = (kycData?.status || 'NOT_SUBMITTED').toUpperCase();
-                const isKycApproved = kycStatusStr === 'APPROVED' || kycStatusStr === 'VERIFIED';
-                const userRole = profile?.current_mode === 'rider' ? 'driver' : 'passenger';
-
-                setUser({
-                  id: uid,
-                  name: profile?.name || sessionData.session.user.user_metadata?.name || sessionData.session.user.email?.split('@')[0] || 'Passenger',
-                  phone: profile?.phone || sessionData.session.user.user_metadata?.phone || '',
-                  email: profile?.email || sessionData.session.user.email || '',
-                  role: userRole,
-                  kycVerified: isKycApproved,
-                  kycStatus: kycStatusStr as any,
-                  kycRejectionReason: kycData?.rejection_reason || undefined,
-                  collegeOrCompany: 'N/A',
-                  emergencyContact: '',
-                  rating: 5.0,
-                  photo: profile?.profile_image || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
-                });
-                setIsAuthenticated(true);
-              }
-            }
+          if (accessToken && refreshToken) {
+            const { data: sessionData, error: sessionErr } = await supabase.auth.setSession({
+              access_token: accessToken,
+              refresh_token: refreshToken,
+            });
+            if (sessionErr) return { success: false, error: sessionErr.message };
+            session = sessionData?.session;
           }
         }
       }
+
+      // Fallback: Check active session in Supabase client if set via deep link listener
+      if (!session) {
+        const { data: activeSessionData } = await supabase.auth.getSession();
+        session = activeSessionData?.session;
+      }
+
+      if (!session || !session.user) {
+        return { success: false, error: 'Google authentication was cancelled or failed.' };
+      }
+
+      const uid = session.user.id;
+      setAuthToken(session.access_token);
+      setUserId(uid);
+
+      // Fetch existing user profile
+      const { data: profile } = await supabase
+        .from('users')
+        .select('*')
+        .eq('id', uid)
+        .maybeSingle();
+
+      const userEmail = session.user.email || profile?.email || '';
+      const userName = profile?.name || session.user.user_metadata?.name || session.user.user_metadata?.full_name || userEmail.split('@')[0] || 'User';
+      const userPhoto = profile?.profile_image || session.user.user_metadata?.avatar_url || session.user.user_metadata?.picture || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80';
+      const userPhone = profile?.phone || session.user.user_metadata?.phone || '';
+
+      // If user profile is not in public.users DB yet, create it
+      if (!profile) {
+        try {
+          await supabase.from('users').upsert({
+            id: uid,
+            email: userEmail,
+            name: userName,
+            phone: userPhone,
+            profile_image: userPhoto,
+            current_mode: 'passenger',
+          });
+        } catch (e) {
+          console.warn('[loginWithGoogle] Profile upsert warning:', e);
+        }
+      }
+
+      const { data: kycData } = await supabase
+        .from('kyc_verifications')
+        .select('status, rejection_reason')
+        .eq('user_id', uid)
+        .maybeSingle();
+
+      const kycStatusStr = (kycData?.status || 'NOT_SUBMITTED').toUpperCase();
+      const isKycApproved = kycStatusStr === 'APPROVED' || kycStatusStr === 'VERIFIED';
+      const userRole = profile?.current_mode === 'rider' ? 'driver' : 'passenger';
+
+      setUser({
+        id: uid,
+        name: userName,
+        phone: userPhone,
+        email: userEmail,
+        role: userRole,
+        kycVerified: isKycApproved,
+        kycStatus: kycStatusStr as any,
+        kycRejectionReason: kycData?.rejection_reason || undefined,
+        collegeOrCompany: 'N/A',
+        emergencyContact: '',
+        rating: 5.0,
+        photo: userPhoto,
+      });
+      setIsAuthenticated(true);
+      await fetchActiveRides();
       return { success: true };
     } catch (err: any) {
+      console.error('[loginWithGoogle] Catch error:', err);
       return { success: false, error: err.message || 'Google login failed' };
     }
   };
@@ -955,53 +1240,97 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   const triggerPushNotification = async (title: string, body: string, data?: Record<string, any>) => {
-    const notif = Notifications;
-    if (isExpoGo || !notif) return;
     try {
-      await notif.scheduleNotificationAsync({
-        content: {
-          title,
-          body,
-          data: data || {},
-          sound: 'default',
-          vibrate: [0, 250, 250, 250],
-        },
-        trigger: null, // deliver immediately
-      });
+      await sendLocalPushNotification({ title, body, data: data || {} });
     } catch (err) {
       console.warn('[PushNotification] Trigger error:', err);
     }
   };
 
-  const addDriverNotification = (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => {
+  const addDriverNotification = async (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>, targetUserId?: string) => {
     const newItem: DriverNotificationItem = {
       ...item,
-      id: `driver-notif-${Date.now()}`,
+      id: `driver-notif-${Date.now()}-${Math.random().toString(36).substring(2, 6)}`,
       timestamp: new Date(),
       isRead: false,
     };
 
-    setDriverNotifications(prev => [newItem, ...prev]);
+    const recipientId = targetUserId || userId || user?.id;
+    const isForCurrentUser = Boolean(!targetUserId || (user?.id && targetUserId === user.id) || (userId && targetUserId === userId));
 
-    // Trigger system Push Notification (heads-up banner with sound & vibration)
-    triggerPushNotification(newItem.title, newItem.description, {
-      screen: newItem.targetScreen,
-      params: newItem.targetParams,
-    });
+    if (isForCurrentUser) {
+      setDriverNotifications(prev => {
+        if (prev.some(n => n.id === newItem.id || (n.title === newItem.title && n.description === newItem.description && Math.abs(n.timestamp.getTime() - newItem.timestamp.getTime()) < 3000))) {
+          return prev;
+        }
+        return [newItem, ...prev];
+      });
+
+      triggerPushNotification(newItem.title, newItem.description, {
+        screen: newItem.targetScreen,
+        params: newItem.targetParams,
+      });
+    }
+
+    if (recipientId) {
+      try {
+        // FIX: use SECURITY DEFINER RPC instead of a direct table insert.
+        // A direct insert here would silently fail under normal RLS
+        // (auth.uid() = user_id) whenever recipientId belongs to the OTHER
+        // party (e.g. passenger notifying the rider). This is what was
+        // causing riders to never receive request notifications, and why
+        // those notifications never came back after logout/login — they
+        // were never actually saved to the DB in the first place.
+        const { error } = await supabase.rpc('create_notification', {
+          p_user_id: recipientId,
+          p_type: newItem.type || 'ride_request',
+          p_title: newItem.title,
+          p_body: newItem.description,
+          p_data: {
+            iconName: newItem.iconName,
+            iconColor: newItem.iconColor,
+            targetRole: newItem.targetRole,
+            targetScreen: newItem.targetScreen,
+            targetParams: newItem.targetParams,
+          },
+        });
+
+        if (error) {
+          console.warn('[addDriverNotification] RPC insert failed:', error.message);
+        }
+      } catch (e) {
+        console.warn('[addDriverNotification] DB save warning:', e);
+      }
+    }
   };
 
-  const markNotificationAsRead = (id: string) => {
+  const markNotificationAsRead = async (id: string) => {
     setDriverNotifications(prev =>
       prev.map(n => (n.id === id ? { ...n, isRead: true } : n))
     );
+    try {
+      await supabase.from('notifications').update({ is_read: true }).eq('id', id);
+      await supabase.from('chat_messages').update({ is_read: true }).eq('id', id);
+    } catch (e) { }
   };
 
-  const markAllNotificationsAsRead = () => {
+  const markAllNotificationsAsRead = async () => {
     setDriverNotifications(prev => prev.map(n => ({ ...n, isRead: true })));
+    const activeUserId = userId || user?.id;
+    if (activeUserId) {
+      try {
+        await supabase.from('notifications').update({ is_read: true }).eq('user_id', activeUserId);
+        await supabase.from('chat_messages').update({ is_read: true }).eq('receiver_id', activeUserId).eq('sender_role', 'system_notification');
+      } catch (e) { }
+    }
   };
 
-  const clearNotification = (id: string) => {
+  const clearNotification = async (id: string) => {
     setDriverNotifications(prev => prev.filter(n => n.id !== id));
+    try {
+      await supabase.from('notifications').delete().eq('id', id);
+      await supabase.from('chat_messages').delete().eq('id', id);
+    } catch (e) { }
   };
 
   const ACTIVE_BOOKING_STORAGE_KEY = '@SARATHI_ACTIVE_BOOKING_V2';
@@ -1068,12 +1397,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     })();
   }, []);
 
+  useEffect(() => {
+    if (!userId) return;
+
+    const notifChannel = supabase
+      .channel(`sarathi-notifications-${userId}`)
+      .on(
+        'postgres_changes',
+        { event: 'INSERT', schema: 'public', table: 'notifications', filter: `user_id=eq.${userId}` },
+        () => {
+          fetchUserNotifications();
+        }
+      )
+      .subscribe();
+
+    return () => {
+      supabase.removeChannel(notifChannel);
+    };
+  }, [userId]);
+
   const activeBooking = bookings.find(
-    b => (user?.id ? (b.passengerId === user.id) : true) &&
-         b.lifecycleState !== 'completed' &&
-         b.lifecycleState !== 'cancelled' &&
-         b.status !== 'completed' &&
-         b.status !== 'cancelled'
+    b => (user?.id ? (b.passengerId === user.id || (user?.email && b.passengerId === user.email)) : false) &&
+      b.lifecycleState !== 'completed' &&
+      b.lifecycleState !== 'cancelled' &&
+      b.status !== 'completed' &&
+      b.status !== 'cancelled'
   ) || null;
 
   // ─── Helper: map backend status strings → local types ───────────────────
@@ -1114,14 +1462,58 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     dropCoords?: { lat: number; lng: number },
     riderOriginName?: string,
     riderDestName?: string,
+    explicitRiderId?: string,
   ): Promise<void> => {
     // Verify ride availability and self-booking restriction
-    const targetRide = rides.find(r => r.id === ridePostId);
+    let targetRide = rides.find(r => r.id === ridePostId);
+    let targetRiderUserId = explicitRiderId || targetRide?.riderId;
+
+    if ((!targetRide || !targetRiderUserId) && isUUID(ridePostId)) {
+      try {
+        const { data: dbRide } = await supabase
+          .from('rides')
+          .select('*, users!rider_id(*), vehicles!vehicle_id(*)')
+          .eq('id', ridePostId)
+          .maybeSingle();
+
+        if (dbRide) {
+          targetRiderUserId = targetRiderUserId || dbRide.rider_id;
+          if (!targetRide) {
+            targetRide = {
+              id: dbRide.id,
+              riderId: dbRide.rider_id,
+              riderName: dbRide.users?.name || 'Driver',
+              riderPhoto: dbRide.users?.profile_image || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
+              phone: dbRide.users?.phone || '',
+              rating: 5.0,
+              vehicleType: (dbRide.vehicles?.vehicle_type || 'bike') as any,
+              vehicleName: dbRide.vehicles?.vehicle_name || 'Vehicle',
+              vehicleNumber: dbRide.vehicles?.number_plate || '',
+              departureTime: dbRide.departure_time ? new Date(dbRide.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+              seatsLeft: dbRide.available_seats,
+              price: Number(dbRide.price_per_seat),
+              route: [dbRide.origin_name, dbRide.destination_name],
+              pickupPoint: dbRide.origin_name,
+              origin: { lat: Number(dbRide.origin_lat), lng: Number(dbRide.origin_lng) },
+              destination: { lat: Number(dbRide.destination_lat), lng: Number(dbRide.destination_lng) },
+              encodedPolyLine: dbRide.encoded_polyline,
+              vehicleId: dbRide.vehicle_id,
+              status: dbRide.status || 'active',
+            };
+            setRides(prev => [...prev.filter(r => r.id !== targetRide!.id), targetRide!]);
+          }
+        }
+      } catch (err) {
+        console.warn('[requestBooking] DB ride fetch warning:', err);
+      }
+    }
+
     if (targetRide) {
       if (targetRide.status === 'completed' || targetRide.status === 'cancelled' || targetRide.seatsLeft <= 0) {
         throw new Error('RIDE_UNAVAILABLE: This ride offer has been completed or has no available seats.');
       }
       const isRiderOwner = Boolean(
+        (targetRiderUserId && user?.id && targetRiderUserId === user.id) ||
         (targetRide.riderId && user?.id && targetRide.riderId === user.id) ||
         (targetRide.riderName && user?.name && targetRide.riderName === user.name) ||
         (targetRide.phone && user?.phone && targetRide.phone === user.phone)
@@ -1132,10 +1524,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     // Prevent passenger from creating concurrent active ride requests
-    const activeBooking = bookings.find(
-      b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing'
+    const activeUserId = userId || user?.id;
+    const existingActiveBooking = bookings.find(
+      b => ((activeUserId && b.passengerId === activeUserId) || (user?.email && b.passengerId === user.email)) &&
+        (b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing')
     );
-    if (activeBooking) {
+    if (existingActiveBooking) {
       throw new Error('ACTIVE_BOOKING_EXISTS: You already have an active ride request or ongoing trip. Please complete or cancel your current ride first.');
     }
 
@@ -1150,7 +1544,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const newBooking: Booking = {
       id: `booking-${Date.now()}`,
       rideId: ridePostId,
-      passengerId: user?.email || 'passenger@sarathi.com',
+      passengerId: user?.id || user?.email || 'passenger@sarathi.com',
       passengerName,
       passengerPhone,
       passengerPhoto,
@@ -1158,8 +1552,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       passengerDropoff: passengerDropoff || 'Drop-off',
       pickupCoords,
       dropCoords,
-      riderOriginName: riderOriginName || 'Rider Origin',
-      riderDestName: riderDestName || 'Rider Destination',
+      riderOriginName: riderOriginName || targetRide?.pickupPoint || targetRide?.route?.[0] || 'Rider Origin',
+      riderDestName: riderDestName || (targetRide?.route ? targetRide.route[targetRide.route.length - 1] : 'Rider Destination'),
+      driverId: targetRiderUserId || targetRide?.riderId,
+      driverName: targetRide?.riderName,
+      driverPhoto: targetRide?.riderPhoto,
+      driverPhone: targetRide?.phone,
+      vehicleName: targetRide?.vehicleName,
+      vehicleNumber: targetRide?.vehicleNumber,
+      farePrice: targetRide?.price || 150,
       status: 'pending',
       lifecycleState: 'request_pending',
       createdAt: new Date(),
@@ -1174,12 +1575,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const riderNotif: DriverNotificationItem = {
       id: `dn-${Date.now()}-driver`,
       type: 'ride_request',
-      title: `New Ride Request from ${passengerName}`,
-      description: `Pickup: ${passengerPickup || 'Pickup'} ➔ Drop: ${passengerDropoff || 'Dropoff'} (${passengerPhone})`,
+      title: 'New Ride Request Incoming! 📍',
+      description: `${passengerName} requested a ride: ${passengerPickup || 'Pickup'} ➔ ${passengerDropoff || 'Dropoff'}`,
       timestamp: new Date(),
       isRead: false,
       iconName: 'person-add',
-      iconColor: '#16A34A',
+      iconColor: '#DC2626',
       targetRole: 'driver',
       targetScreen: '/notifications',
       targetParams: {
@@ -1196,23 +1597,50 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const passengerNotif: DriverNotificationItem = {
       id: `dn-${Date.now()}-passenger`,
       type: 'request_status',
-      title: 'Ride Request Sent! 🎉',
-      description: `Your request (${passengerPickup} ➔ ${passengerDropoff}) has been sent to the rider. Waiting for driver response.`,
+      title: 'Booking Request Sent 🚀',
+      description: `Your request (${passengerPickup} ➔ ${passengerDropoff}) has been sent to the driver. Waiting for driver response.`,
       timestamp: new Date(),
       isRead: false,
-      iconName: 'time-outline',
+      iconName: 'paper-plane',
       iconColor: '#2563EB',
       targetRole: 'passenger',
       targetScreen: '/booking-status',
       targetParams: { rideId: ridePostId },
     };
 
-    addDriverNotification(riderNotif);
-    addDriverNotification(passengerNotif);
     startRiderChat(ridePostId);
 
-    // Persist booking in Supabase DB if table exists
+    // Persist booking in Supabase DB (ride_requests & fallback bookings)
     try {
+      const isUuid = (str?: string) => Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+      const passengerUuid = isUuid(user?.id) ? user!.id : (isUuid(activeUserId) ? activeUserId : null);
+      const rideUuid = isUuid(ridePostId) ? ridePostId : null;
+
+      if (rideUuid && passengerUuid) {
+        const { data: insertedReq } = await supabase.from('ride_requests').insert({
+          ride_id: rideUuid,
+          passenger_id: passengerUuid,
+          pickup_name: passengerPickup || 'Pickup',
+          pickup_lat: pickupCoords?.lat || null,
+          pickup_lng: pickupCoords?.lng || null,
+          drop_name: passengerDropoff || 'Dropoff',
+          drop_lat: dropCoords?.lat || null,
+          drop_lng: dropCoords?.lng || null,
+          seats_requested: 1,
+          fare_amount: targetRide?.price || 150,
+          status: 'pending',
+          start_pin_code: randomPickupOtp,
+          end_pin_code: randomCompletionOtp,
+        }).select().single();
+
+        if (insertedReq) {
+          newBooking.id = insertedReq.id;
+          if (riderNotif.targetParams) {
+            riderNotif.targetParams.bookingId = insertedReq.id;
+          }
+        }
+      }
+
       await supabase.from('bookings').insert({
         id: newBooking.id,
         ride_id: ridePostId,
@@ -1231,7 +1659,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('[requestBooking] Supabase bookings notice:', e);
     }
 
-    // Broadcast over Supabase Realtime WebSocket
+    // Persist notifications scoped strictly to respective user IDs
+    if (targetRiderUserId) {
+      addDriverNotification(riderNotif, targetRiderUserId);
+    } else {
+      addDriverNotification(riderNotif);
+    }
+    addDriverNotification(passengerNotif, user?.id || activeUserId);
+
+    // FIX: broadcast the new request immediately over realtime so the
+    // rider's app updates live if they're currently online, instead of
+    // relying only on the next notifications poll/fetch. Your existing
+    // listener for event 'ride_request' already handles this payload —
+    // it just was never triggered from here before.
     supabase.channel('sarathi-global-realtime').send({
       type: 'broadcast',
       event: 'ride_request',
@@ -1242,6 +1682,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         rideId: ridePostId,
       },
     });
+
+    startRiderChat(ridePostId);
   };
 
   /** Driver: accept a pending booking */
@@ -1254,8 +1696,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isOwner = Boolean(
       user?.role === 'driver' &&
       ((targetRide?.riderId && user?.id && targetRide.riderId === user.id) ||
-       (targetRide?.riderName && user?.name && targetRide.riderName === user.name) ||
-       (targetRide?.phone && user?.phone && targetRide.phone === user.phone))
+        (targetRide?.riderName && user?.name && targetRide.riderName === user.name) ||
+        (targetRide?.phone && user?.phone && targetRide.phone === user.phone))
     );
 
     if (!isOwner) {
@@ -1331,10 +1773,52 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBookings(prev => prev.map(b => (b.id === bookingId ? updatedBooking : b)));
       saveActiveBookingToStorage(updatedBooking);
 
+      const targetRide = rides.find(r => r.id === target.rideId);
+      const riderName = targetRide?.riderName || 'Driver';
+      const passengerName = target.passengerName || 'Passenger';
+      const dropoff = target.passengerDropoff || 'Destination';
+
+      // Driver notification: Ride Started Confirmation
+      const driverStartedNotif: DriverNotificationItem = {
+        id: `dn-started-driver-${Date.now()}`,
+        type: 'request_status',
+        title: 'Ride Started Confirmation 🚀',
+        description: `Pickup PIN verified with ${passengerName}. Ride in progress to ${dropoff}.`,
+        timestamp: new Date(),
+        isRead: false,
+        iconName: 'navigate-circle',
+        iconColor: '#16A34A',
+        targetRole: 'driver',
+        targetScreen: '/active-trip',
+        targetParams: { rideId: target.rideId, bookingId: target.id },
+      };
+
+      // Passenger notification: Ride Started
+      const passengerStartedNotif: DriverNotificationItem = {
+        id: `dn-started-pass-${Date.now()}`,
+        type: 'request_status',
+        title: 'Ride Started 🚀',
+        description: `Your trip with ${riderName} has started! En route to ${dropoff}.`,
+        timestamp: new Date(),
+        isRead: false,
+        iconName: 'navigate-circle',
+        iconColor: '#16A34A',
+        targetRole: 'passenger',
+        targetScreen: '/active-trip',
+        targetParams: { rideId: target.rideId, bookingId: target.id },
+      };
+
+      addDriverNotification(driverStartedNotif);
+      addDriverNotification(passengerStartedNotif);
+
       supabase.channel('sarathi-global-realtime').send({
         type: 'broadcast',
         event: 'booking_status_change',
-        payload: { booking: updatedBooking }
+        payload: {
+          booking: updatedBooking,
+          driverNotification: driverStartedNotif,
+          passengerNotification: passengerStartedNotif,
+        }
       });
 
       return { success: true };
@@ -1369,10 +1853,57 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setRides(prev => prev.map(r => (r.id === target.rideId ? { ...r, status: 'completed' } : r)));
       }
 
+      // NEW: stamp ride_requests as completed right away, independent of payment step
+      supabase.from('ride_requests').update({
+        status: 'completed',
+        completed_at: new Date().toISOString(),
+      }).eq('id', bookingId).then(({ error }) => {
+        if (error) console.warn('[verifyCompletionOtp] ride_requests update warning:', error.message);
+      });
+
+      const passengerName = target.passengerName || 'Passenger';
+
+      // Driver notification: Ride Completed
+      const driverCompletedNotif: DriverNotificationItem = {
+        id: `dn-completed-driver-${Date.now()}`,
+        type: 'request_status',
+        title: 'Ride Completed 🎉',
+        description: `Trip completed successfully with ${passengerName}.`,
+        timestamp: new Date(),
+        isRead: false,
+        iconName: 'checkmark-done-circle',
+        iconColor: '#7C3AED',
+        targetRole: 'driver',
+        targetScreen: '/active-trip',
+        targetParams: { rideId: target.rideId, bookingId: target.id },
+      };
+
+      // Passenger notification: Ride Completed
+      const passengerCompletedNotif: DriverNotificationItem = {
+        id: `dn-completed-pass-${Date.now()}`,
+        type: 'request_status',
+        title: 'Ride Completed 🎉',
+        description: `You have arrived at your destination! Please rate your trip.`,
+        timestamp: new Date(),
+        isRead: false,
+        iconName: 'star',
+        iconColor: '#EAB308',
+        targetRole: 'passenger',
+        targetScreen: '/active-trip',
+        targetParams: { rideId: target.rideId, bookingId: target.id },
+      };
+
+      addDriverNotification(driverCompletedNotif);
+      addDriverNotification(passengerCompletedNotif);
+
       supabase.channel('sarathi-global-realtime').send({
         type: 'broadcast',
         event: 'booking_status_change',
-        payload: { booking: updatedBooking }
+        payload: {
+          booking: updatedBooking,
+          driverNotification: driverCompletedNotif,
+          passengerNotification: passengerCompletedNotif,
+        }
       });
 
       return { success: true };
@@ -1412,6 +1943,11 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
       setRides(prev => prev.map(r => (r.id === target.rideId ? { ...r, status: 'completed' } : r)));
     }
+    if (isUUID(_bookingId)) {
+      supabase.from('ride_requests').update({ status: 'completed' }).eq('id', _bookingId).then(({ error }) => {
+        if (error) console.error('[processPayment] Supabase ride_requests update error:', error.message);
+      });
+    }
     setBookings(prev =>
       prev.map(b =>
         b.id === _bookingId
@@ -1423,32 +1959,132 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   /** Rating submission */
-  const submitRideRating = (_bookingId: string, _rating: number, _comment?: string): void => {
-    const target = bookings.find(b => b.id === _bookingId);
-    if (target?.rideId) {
-      supabase.from('rides').update({ status: 'completed' }).eq('id', target.rideId).then(({ error }) => {
+  const submitRideRating = async (_bookingId: string, _rating: number, _comment?: string): Promise<void> => {
+    const targetBooking = bookings.find(b => b.id === _bookingId);
+    const targetRide = rides.find(r => r.id === targetBooking?.rideId);
+
+    const isDriverView = user?.role === 'driver';
+    const ratedUserId = isDriverView
+      ? (targetBooking?.passengerId || 'passenger')
+      : (targetRide?.riderId || 'driver');
+    const ratedByUserId = user?.id || (isDriverView ? 'driver' : 'passenger');
+
+    const cleanRating = Math.min(5, Math.max(1, Math.round(_rating)));
+    const isUuid = (str?: string) => Boolean(str && /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(str));
+
+    try {
+      if (isUuid(ratedUserId) && isUuid(ratedByUserId)) {
+        const ratingPayload: any = {
+          rated_user: ratedUserId,
+          rated_by: ratedByUserId,
+          rating: cleanRating,
+          review_text: _comment || null,
+        };
+        if (isUuid(_bookingId)) {
+          ratingPayload.ride_request_id = _bookingId;
+        }
+        await supabase.from('ratings').insert([ratingPayload]);
+      }
+    } catch (err) {
+      console.log('[submitRideRating] Supabase insert warning:', err);
+    }
+
+    if (targetBooking?.rideId) {
+      supabase.from('rides').update({ status: 'completed' }).eq('id', targetBooking.rideId).then(({ error }) => {
         if (error) console.error('[submitRideRating] Supabase ride update error:', error.message);
       });
-      setRides(prev => prev.map(r => (r.id === target.rideId ? { ...r, status: 'completed' } : r)));
+      setRides(prev => prev.map(r => (r.id === targetBooking.rideId ? { ...r, status: 'completed', rating: cleanRating } : r)));
     }
+
     setBookings(prev =>
       prev.map(b =>
         b.id === _bookingId
-          ? { ...b, rating: _rating, reviewComment: _comment, lifecycleState: 'completed', status: 'completed' }
+          ? { ...b, rating: cleanRating, reviewComment: _comment, lifecycleState: 'completed', status: 'completed' }
           : b
       )
     );
+
+    // Refresh real ratings list from database
+    await fetchRatings();
+
     saveActiveBookingToStorage(null);
   };
 
   /** Cancel a booking */
   const cancelBooking = async (bookingId: string): Promise<void> => {
+    const targetBooking = bookings.find(b => b.id === bookingId);
+    const isDriver = user?.role === 'driver';
+
+    const updatedBooking: Booking = {
+      ...(targetBooking || ({ id: bookingId } as any)),
+      status: 'cancelled',
+      lifecycleState: 'cancelled',
+      cancelledBy: isDriver ? 'rider' : 'passenger', // NEW
+      cancelledAt: new Date(), // NEW
+    };
+
     setBookings(prev =>
-      prev.map(b =>
-        b.id === bookingId ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b
-      )
+      prev.map(b => (b.id === bookingId ? updatedBooking : b))
     );
     saveActiveBookingToStorage(null);
+
+    const passengerName = targetBooking?.passengerName || 'Passenger';
+    const targetRide = rides.find(r => r.id === targetBooking?.rideId);
+    const riderName = targetRide?.riderName || 'Driver';
+
+    // Driver notification: Passenger Cancelled
+    const driverCancelNotif: DriverNotificationItem = {
+      id: `dn-cancel-driver-${Date.now()}`,
+      type: 'request_status',
+      title: isDriver ? 'Ride Cancelled ❌' : 'Passenger Cancelled Trip ⚠️',
+      description: isDriver
+        ? `You cancelled the ride with ${passengerName}.`
+        : `${passengerName} has cancelled their ride request.`,
+      timestamp: new Date(),
+      isRead: false,
+      iconName: 'close-circle',
+      iconColor: '#DC2626',
+      targetRole: 'driver',
+      targetScreen: '/notifications',
+    };
+
+    // Passenger notification: Driver Cancelled
+    const passengerCancelNotif: DriverNotificationItem = {
+      id: `dn-cancel-pass-${Date.now()}`,
+      type: 'request_status',
+      title: isDriver ? 'Driver Cancelled the Ride ❌' : 'Ride Cancelled ⚠️',
+      description: isDriver
+        ? `${riderName} has cancelled your booked ride.`
+        : `Your booking request has been cancelled.`,
+      timestamp: new Date(),
+      isRead: false,
+      iconName: 'close-circle',
+      iconColor: '#DC2626',
+      targetRole: 'passenger',
+      targetScreen: '/notifications',
+    };
+
+    addDriverNotification(driverCancelNotif, targetRide?.riderId);
+    addDriverNotification(passengerCancelNotif, targetBooking?.passengerId);
+
+    try {
+      await supabase.from('ride_requests').update({
+        status: 'cancelled',
+        cancelled_by: isDriver ? 'rider' : 'passenger', // NEW
+        cancelled_at: new Date().toISOString(),          // NEW
+      }).eq('id', bookingId);
+      await supabase.from('bookings').update({ status: 'cancelled', lifecycle_state: 'cancelled' }).eq('id', bookingId);
+    } catch (e) { }
+
+    supabase.channel('sarathi-global-realtime').send({
+      type: 'broadcast',
+      event: 'booking_status_change',
+      payload: {
+        booking: updatedBooking,
+        driverNotification: driverCancelNotif,
+        passengerNotification: passengerCancelNotif,
+      }
+    });
   };
 
   /** Driver rejects a booking */
@@ -1461,8 +2097,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const isOwner = Boolean(
       user?.role === 'driver' &&
       ((targetRide?.riderId && user?.id && targetRide.riderId === user.id) ||
-       (targetRide?.riderName && user?.name && targetRide.riderName === user.name) ||
-       (targetRide?.phone && user?.phone && targetRide.phone === user.phone))
+        (targetRide?.riderName && user?.name && targetRide.riderName === user.name) ||
+        (targetRide?.phone && user?.phone && targetRide.phone === user.phone))
     );
 
     if (!isOwner) {
@@ -1483,18 +2119,43 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     setBookings(prev => prev.map(b => b.id === bookingId ? updatedBooking : b));
 
-    addDriverNotification({
+    const riderName = targetRide?.riderName || 'Driver';
+    const passengerName = targetBooking.passengerName || 'Passenger';
+
+    // Passenger notification: Driver Cancelled the Ride
+    const passengerDeclineNotif: DriverNotificationItem = {
+      id: `dn-decline-pass-${Date.now()}`,
       type: 'request_status',
-      title: 'Ride Request Declined ✕',
-      description: `Your request from ${targetBooking.passengerPickup} to ${targetBooking.passengerDropoff} was declined by the driver.`,
+      title: 'Driver Cancelled the Ride ❌',
+      description: `${riderName} has cancelled your ride request from ${targetBooking.passengerPickup} to ${targetBooking.passengerDropoff}.`,
+      timestamp: new Date(),
+      isRead: false,
       iconName: 'close-circle-outline',
       iconColor: '#DC2626',
       targetRole: 'passenger',
       targetScreen: '/search-ride',
       targetParams: { rideId: targetBooking.rideId },
-    });
+    };
+
+    // Driver notification: Ride Request Declined
+    const driverDeclineNotif: DriverNotificationItem = {
+      id: `dn-decline-driver-${Date.now()}`,
+      type: 'request_status',
+      title: 'Ride Offer Cancelled ❌',
+      description: `You declined the request from ${passengerName}.`,
+      timestamp: new Date(),
+      isRead: false,
+      iconName: 'close-circle',
+      iconColor: '#64748B',
+      targetRole: 'driver',
+      targetScreen: '/notifications',
+    };
+
+    addDriverNotification(passengerDeclineNotif, targetBooking.passengerId);
+    addDriverNotification(driverDeclineNotif, user?.id);
 
     try {
+      await supabase.from('ride_requests').update({ status: 'cancelled' }).eq('id', bookingId);
       await supabase.from('bookings').update({ status: 'cancelled', lifecycle_state: 'cancelled' }).eq('id', bookingId);
     } catch (err) {
       console.warn('[declineBooking] Supabase update notice:', err);
@@ -1502,8 +2163,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
     supabase.channel('sarathi-global-realtime').send({
       type: 'broadcast',
-      event: 'ride_declined',
-      payload: { booking: updatedBooking }
+      event: 'booking_status_change',
+      payload: {
+        booking: updatedBooking,
+        passengerNotification: passengerDeclineNotif,
+        driverNotification: driverDeclineNotif,
+      }
     });
   };
 
@@ -1521,12 +2186,12 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const existingMsgs = driverMessages[rideId] || [];
 
     const existingPassengerId = existingMsgs.find(m => m.passengerId)?.passengerId ||
-                                existingMsgs.find(m => m.sender === 'user' && m.senderId)?.senderId ||
-                                existingMsgs.find(m => m.senderId && m.senderId !== user?.id && isDriver)?.senderId;
+      existingMsgs.find(m => m.sender === 'user' && m.senderId)?.senderId ||
+      existingMsgs.find(m => m.senderId && m.senderId !== user?.id && isDriver)?.senderId;
 
     const existingRiderId = existingMsgs.find(m => m.riderId)?.riderId ||
-                            existingMsgs.find(m => m.sender === 'driver' && m.senderId)?.senderId ||
-                            existingMsgs.find(m => m.senderId && m.senderId !== user?.id && !isDriver)?.senderId;
+      existingMsgs.find(m => m.sender === 'driver' && m.senderId)?.senderId ||
+      existingMsgs.find(m => m.senderId && m.senderId !== user?.id && !isDriver)?.senderId;
 
     const passengerId = isDriver
       ? (booking?.passengerId || existingPassengerId)
@@ -1558,9 +2223,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       const msgTime = userMsg.timestamp.getTime();
       const isDuplicate = existingList.some(
         m => m.id === userMsg.id ||
-             ((m.senderId === userMsg.senderId || (m.senderName && userMsg.senderName && m.senderName === userMsg.senderName)) &&
-              m.text === userMsg.text &&
-              Math.abs(new Date(m.timestamp).getTime() - msgTime) < 3000)
+          ((m.senderId === userMsg.senderId || (m.senderName && userMsg.senderName && m.senderName === userMsg.senderName)) &&
+            m.text === userMsg.text &&
+            Math.abs(new Date(m.timestamp).getTime() - msgTime) < 3000)
       );
       if (isDuplicate) return prev;
       const updated = {
@@ -1647,10 +2312,24 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
 
     try {
+      const [{ data: myRides }, { data: myBookings }] = await Promise.all([
+        supabase.from('rides').select('id').eq('rider_id', userId),
+        supabase.from('bookings').select('ride_id').eq('passenger_id', userId),
+      ]);
+
+      const myRideIds = (myRides || []).map((r: any) => r.id);
+      const myBookingRideIds = (myBookings || []).map((b: any) => b.ride_id).filter(Boolean);
+      const userRideIds = Array.from(new Set([...myRideIds, ...myBookingRideIds]));
+
+      let filterClause = `sender_id.eq.${userId},receiver_id.eq.${userId},passenger_id.eq.${userId},rider_id.eq.${userId}`;
+      if (userRideIds.length > 0) {
+        filterClause += `,ride_id.in.(${userRideIds.join(',')})`;
+      }
+
       const { data, error } = await supabase
         .from('chat_messages')
         .select('*')
-        .or(`sender_id.eq.${userId},receiver_id.eq.${userId},passenger_id.eq.${userId},rider_id.eq.${userId}`)
+        .or(filterClause)
         .order('created_at', { ascending: true });
 
       if (error) {
@@ -1837,6 +2516,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     }
     await AsyncStorageLib.removeItem('@sarathi_token');
     await AsyncStorageLib.removeItem('@sarathi_user_id');
+    await AsyncStorageLib.removeItem('@SARATHI_ACTIVE_BOOKING_V2');
+    await AsyncStorageLib.removeItem('@SARATHI_CHAT_MESSAGES_V2');
+    await AsyncStorageLib.removeItem('@SARATHI_ACTIVE_CHATS_V2');
     setUser(null);
     setUserId(null);
     setAuthToken(null);
@@ -1849,60 +2531,60 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setRides([]);
   };
 
-async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise<string> {
-  try {
-    if (!imageUri || (!imageUri.startsWith('file:') && !imageUri.startsWith('content:') && !imageUri.startsWith('blob:') && !imageUri.startsWith('data:'))) {
-      return imageUri; // Already a remote web URL
-    }
+  async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise<string> {
+    try {
+      if (!imageUri || (!imageUri.startsWith('file:') && !imageUri.startsWith('content:') && !imageUri.startsWith('blob:') && !imageUri.startsWith('data:'))) {
+        return imageUri; // Already a remote web URL
+      }
 
-    const filePath = `${userId}/${Date.now()}.jpg`;
+      const filePath = `${userId}/${Date.now()}.jpg`;
 
-    let uploadBody: any;
-    let contentType = 'image/jpeg';
+      let uploadBody: any;
+      let contentType = 'image/jpeg';
 
-    if (Platform.OS === 'web') {
-      const response = await fetch(imageUri);
-      uploadBody = await response.blob();
-      if (uploadBody.type) contentType = uploadBody.type;
-    } else {
-      // React Native / Expo Native - read as blob via XMLHttpRequest
-      uploadBody = await new Promise((resolve, reject) => {
-        const xhr = new XMLHttpRequest();
-        xhr.onload = function () {
-          resolve(xhr.response);
-        };
-        xhr.onerror = function (e) {
-          console.error('[XHR error]', e);
-          reject(new TypeError('Network request failed'));
-        };
-        xhr.responseType = 'blob';
-        xhr.open('GET', imageUri, true);
-        xhr.send(null);
-      });
-    }
+      if (Platform.OS === 'web') {
+        const response = await fetch(imageUri);
+        uploadBody = await response.blob();
+        if (uploadBody.type) contentType = uploadBody.type;
+      } else {
+        // React Native / Expo Native - read as blob via XMLHttpRequest
+        uploadBody = await new Promise((resolve, reject) => {
+          const xhr = new XMLHttpRequest();
+          xhr.onload = function () {
+            resolve(xhr.response);
+          };
+          xhr.onerror = function (e) {
+            console.error('[XHR error]', e);
+            reject(new TypeError('Network request failed'));
+          };
+          xhr.responseType = 'blob';
+          xhr.open('GET', imageUri, true);
+          xhr.send(null);
+        });
+      }
 
-    const { data, error } = await supabase.storage
-      .from('avatars')
-      .upload(filePath, uploadBody, {
-        contentType,
-        upsert: true,
-      });
+      const { data, error } = await supabase.storage
+        .from('avatars')
+        .upload(filePath, uploadBody, {
+          contentType,
+          upsert: true,
+        });
 
-    if (error) {
-      console.error('[Supabase Storage] Upload error:', error.message);
+      if (error) {
+        console.error('[Supabase Storage] Upload error:', error.message);
+        return imageUri;
+      }
+
+      const { data: publicUrlData } = supabase.storage
+        .from('avatars')
+        .getPublicUrl(filePath);
+
+      return publicUrlData?.publicUrl || imageUri;
+    } catch (err: any) {
+      console.error('[uploadAvatarToSupabase] error:', err);
       return imageUri;
     }
-
-    const { data: publicUrlData } = supabase.storage
-      .from('avatars')
-      .getPublicUrl(filePath);
-
-    return publicUrlData?.publicUrl || imageUri;
-  } catch (err: any) {
-    console.error('[uploadAvatarToSupabase] error:', err);
-    return imageUri;
   }
-}
 
   const updateUserProfile = async (payload: { name?: string; email?: string; phone?: string; avatarUrl?: string }) => {
     try {
@@ -1958,11 +2640,10 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
         console.warn('[deleteAccount] RPC warning:', rpcErr.message);
         if (activeUserId) {
           // 2. Fallback: Direct table deletion if RPC is missing
-          try { await supabase.from('notifications').delete().eq('user_id', activeUserId); } catch (e) {}
-          try { await supabase.from('kyc_verifications').delete().eq('user_id', activeUserId); } catch (e) {}
-          try { await supabase.from('vehicles').delete().eq('user_id', activeUserId); } catch (e) {}
-          try { await supabase.from('rides').delete().eq('rider_id', activeUserId); } catch (e) {}
-          try { await supabase.from('bookings').delete().or(`passenger_id.eq.${activeUserId}`); } catch (e) {}
+          try { await supabase.from('kyc_verifications').delete().eq('user_id', activeUserId); } catch (e) { }
+          try { await supabase.from('vehicles').delete().eq('user_id', activeUserId); } catch (e) { }
+          try { await supabase.from('rides').delete().eq('rider_id', activeUserId); } catch (e) { }
+          try { await supabase.from('bookings').delete().or(`passenger_id.eq.${activeUserId}`); } catch (e) { }
           const { error: userDelErr } = await supabase.from('users').delete().eq('id', activeUserId);
           if (userDelErr && user?.email) {
             await supabase.from('users').delete().eq('email', user.email.toLowerCase().trim());
@@ -1985,12 +2666,18 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
     const currentRole = user?.role ?? 'passenger';
 
     // Prevent role switching if user has an active trip or booking
+    const activeUserId = userId || user?.id;
     if (currentRole === 'driver') {
+      const myDriverRideIds = rides
+        .filter(r => (r.status === 'active' || !r.status) && ((r.riderId && activeUserId && r.riderId === activeUserId) || (user?.phone && r.phone === user.phone) || (user?.name && r.riderName === user.name)))
+        .map(r => r.id);
+
       const activeDriverRide = rides.find(
-        r => (r.status === 'active' || !r.status) && (r.riderId === user?.id || r.riderName === user?.name || (user?.phone && r.phone === user.phone))
+        r => (r.status === 'active' || !r.status) && ((r.riderId && activeUserId && r.riderId === activeUserId) || (user?.phone && r.phone === user.phone) || (user?.name && r.riderName === user.name))
       );
       const activeDriverBooking = bookings.find(
         b =>
+          myDriverRideIds.includes(b.rideId) &&
           (b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing') &&
           b.lifecycleState !== 'completed' &&
           b.lifecycleState !== 'cancelled'
@@ -2007,7 +2694,7 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
     if (currentRole === 'passenger') {
       const activePassengerBooking = bookings.find(
         b =>
-          (b.passengerId === user?.id || b.passengerName === user?.name) &&
+          ((activeUserId && b.passengerId === activeUserId) || (user?.email && b.passengerId === user.email)) &&
           (b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing') &&
           b.lifecycleState !== 'completed' &&
           b.lifecycleState !== 'cancelled'
@@ -2149,12 +2836,16 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
       return { success: false, error: 'User not authenticated' };
     }
 
+    const myDriverRideIds = rides
+      .filter(r => (r.status === 'active' || !r.status) && (r.riderName === user?.name || (user?.phone && r.phone === user.phone) || (user?.id && r.riderId === user.id)))
+      .map(r => r.id);
+
     // Strict rider restriction: Cannot publish a new ride offer if an active offer or trip exists
     const hasActiveOffer = rides.some(
       r => (r.status === 'active' || !r.status) && (r.riderName === user?.name || (user?.phone && r.phone === user.phone) || (user?.id && r.riderId === user.id)) && r.seatsLeft > 0
     );
     const hasActiveTrip = bookings.some(
-      b => b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing'
+      b => myDriverRideIds.includes(b.rideId) && (b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing')
     );
 
     if (hasActiveOffer || (user?.role === 'driver' && hasActiveTrip)) {
@@ -2209,7 +2900,9 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
         vehicleType: (data.vehicles?.vehicle_type || newRideData.vehicleType || 'scooter') as any,
         vehicleName: data.vehicles?.vehicle_name || newRideData.vehicleName || 'Vehicle',
         vehicleNumber: data.vehicles?.number_plate || newRideData.vehicleNumber || '',
-        departureTime: newRideData.departureTime || 'Leaving soon',
+        departureTime: data.departure_time
+          ? new Date(data.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })
+          : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         seatsLeft: data.available_seats,
         price: Number(data.price_per_seat),
         route: [data.origin_name, data.destination_name],
@@ -2255,7 +2948,7 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
     }
   };
 
-  /** Driver: delete a ride offer from Supabase (updates status='cancelled' and falls back to delete) */
+  /** Driver: delete a ride offer from Supabase (updates status='cancelled' and notifies booked passengers) */
   const deleteRide = async (id: string): Promise<{ success: boolean; error?: string }> => {
     try {
       const activeUserId = userId || user?.id;
@@ -2291,6 +2984,38 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
       }
 
       if (dbSuccess) {
+        // Also mark all associated ride requests as 'cancelled' in DB and notify passengers
+        const { data: affectedRequests } = await supabase
+          .from('ride_requests')
+          .update({ status: 'cancelled' })
+          .eq('ride_id', id)
+          .select('*');
+
+        if (affectedRequests && affectedRequests.length > 0) {
+          for (const req of affectedRequests) {
+            if (req.passenger_id) {
+              addDriverNotification(
+                {
+                  title: 'Ride Cancelled by Rider ❌',
+                  description: `The rider has cancelled the ride offer for trip #${id.slice(0, 8)}.`,
+                  type: 'ride_event',
+                  iconName: 'close-circle-outline',
+                  iconColor: '#EF4444',
+                  targetRole: 'passenger',
+                  targetScreen: '/booking-status',
+                  targetParams: { rideId: id },
+                },
+                req.passenger_id
+              );
+            }
+          }
+        }
+
+        // Update local bookings state so passenger UI triggers cancellation status banner
+        setBookings(prev =>
+          prev.map(b => (b.rideId === id ? { ...b, status: 'cancelled', lifecycleState: 'cancelled' } : b))
+        );
+
         setRides(prev => prev.filter(r => r.id !== id));
         await fetchActiveRides();
         return { success: true };
@@ -2309,6 +3034,9 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
         user,
         deviceLocation,
         isAuthenticated,
+        isAuthLoading,
+        hasCompletedOnboarding,
+        completeOnboarding,
         rides,
         bookings,
         messages,
@@ -2369,6 +3097,8 @@ async function uploadAvatarToSupabase(userId: string, imageUri: string): Promise
         verifyCompletionOtp,
         triggerCompletionOtpPrompt,
         processPayment,
+        ratingsList,
+        getUserRating,
         submitRideRating,
         createRide,
         updateRide,

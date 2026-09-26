@@ -30,7 +30,7 @@ const MED_SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.48); // Medium view (~52%)
 const MAX_SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.80); // Small map (~20%)
 
 export default function SearchRideScreen() {
-  const { rides, addRecentSearch, recentSearches, savedPlaces } = useApp();
+  const { rides, addRecentSearch, recentSearches, savedPlaces, getUserRating } = useApp();
   const params = useLocalSearchParams();
 
   // Search state
@@ -310,13 +310,13 @@ export default function SearchRideScreen() {
         if (!error && data && data.length > 0) {
           rpcRides = data.map((item: any) => ({
             id: item.ride_id,
+            riderId: item.rider_id || item.user_id,
             riderName: item.rider_name || 'Rider',
             riderPhoto: item.rider_photo || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80',
-            rating: 5.0,
             vehicleType: 'scooter',
             vehicleName: item.vehicle_name || 'Vehicle',
             vehicleNumber: item.number_plate || '',
-            departureTime: item.departure_time ? new Date(item.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : 'Leaving soon',
+            departureTime: item.departure_time ? new Date(item.departure_time).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
             seatsLeft: item.available_seats || 1,
             price: Number(item.price_per_seat) || 0,
             route: [item.origin_name, item.destination_name],
@@ -517,6 +517,8 @@ export default function SearchRideScreen() {
                               pathname: '/ride-detail',
                               params: {
                                 id: ride.id,
+                                riderOrigin: ride.pickupPoint || (ride.route ? ride.route[0] : ''),
+                                riderDest: (ride.route && ride.route.length > 0) ? ride.route[ride.route.length - 1] : ride.pickupPoint,
                                 selectedPickup: origin.text,
                                 selectedDest: destination.text,
                                 pickupLat: origin.coords?.lat ?? 0,
@@ -540,7 +542,9 @@ export default function SearchRideScreen() {
                               <Text style={styles.driverNameText}>{ride.riderName}</Text>
                               <View style={styles.ratingBadge}>
                                 <Ionicons name="star" size={12} color="#F59E0B" />
-                                <Text style={styles.ratingText}>{(ride.rating ?? 5).toFixed(1)}</Text>
+                                <Text style={styles.ratingText}>
+                                  {getUserRating(ride.riderId).hasRatings ? getUserRating(ride.riderId).average.toFixed(1) : 'New'}
+                                </Text>
                               </View>
                             </View>
                             <Text style={styles.priceText}>NPR {ride.price}</Text>

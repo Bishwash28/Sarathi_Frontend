@@ -1,13 +1,15 @@
 import { router } from 'expo-router';
-import { useEffect } from 'react';
+import { useEffect, useRef } from 'react';
 import { Animated, Dimensions, Image, StatusBar, StyleSheet, View, Platform } from 'react-native';
 import { Colors } from '../constants/Colors';
 import * as SystemUI from 'expo-system-ui';
+import { useApp } from '../context/AppContext';
 
 const { width, height } = Dimensions.get('window');
 
 export default function SplashScreen() {
-  const fadeAnim = new Animated.Value(0);
+  const fadeAnim = useRef(new Animated.Value(0)).current;
+  const { isAuthenticated, isAuthLoading, hasCompletedOnboarding } = useApp();
 
   useEffect(() => {
     if (Platform.OS === 'android') {
@@ -19,13 +21,23 @@ export default function SplashScreen() {
       duration: 1000,
       useNativeDriver: true,
     }).start();
+  }, []);
+
+  useEffect(() => {
+    if (isAuthLoading) return;
 
     const timer = setTimeout(() => {
-      router.replace('/onboarding');
-    }, 2500);
+      if (!hasCompletedOnboarding) {
+        router.replace('/onboarding');
+      } else if (isAuthenticated) {
+        router.replace('/(tabs)');
+      } else {
+        router.replace('/(auth)/login');
+      }
+    }, 2000);
 
     return () => clearTimeout(timer);
-  }, []);
+  }, [isAuthLoading, hasCompletedOnboarding, isAuthenticated]);
 
   return (
     <View style={styles.container}>

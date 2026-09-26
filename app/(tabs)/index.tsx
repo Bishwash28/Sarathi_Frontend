@@ -22,6 +22,7 @@ import { useApp } from '../../context/AppContext';
 import { useLocationSearch } from '../../hooks/useLocationSearch';
 import { LocationPinPickerMap } from '../../components/LocationPinPickerMap';
 import { LocationSearchInput } from '../../components/LocationSearchInput';
+import { DepartureTimePicker } from '../../components/DepartureTimePicker';
 import { supabase } from '../../lib/supabase';
 
 
@@ -151,9 +152,11 @@ export default function HomeScreen() {
     }
   }, [user?.id]);
 
-  React.useEffect(() => {
-    fetchVehicles();
-  }, [fetchVehicles]);
+  useFocusEffect(
+    React.useCallback(() => {
+      fetchVehicles();
+    }, [fetchVehicles])
+  );
 
   // Edit Ride Modal State
   const [editingRide, setEditingRide] = useState<any | null>(null);
@@ -516,17 +519,10 @@ export default function HomeScreen() {
               </View>
 
               {/* 6. Departure Time */}
-              <Text style={styles.inputLabel}>Departure Time *</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons name="time-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="e.g. Leaving in 15 mins (09:30 AM)"
-                  placeholderTextColor={Colors.textMuted}
-                  value={departureTime}
-                  onChangeText={setDepartureTime}
-                />
-              </View>
+              <DepartureTimePicker
+                value={departureTime}
+                onChange={(iso) => setDepartureTime(iso)}
+              />
 
               {/* 7. Publish Button */}
               {(() => {
@@ -535,22 +531,32 @@ export default function HomeScreen() {
                   destination.text.trim() &&
                   price.trim()
                 );
+                const isDisabled = !isValid || isCalculatingRoute;
+
                 return (
                   <TouchableOpacity
                     style={[
                       styles.createButton,
-                      (!isValid || isCalculatingRoute) && { backgroundColor: '#94A3B8', opacity: 0.75 },
+                      isDisabled ? styles.createButtonDisabled : styles.createButtonActive,
                     ]}
                     onPress={handleCreateOffer}
-                    disabled={!isValid || isCalculatingRoute}
-                    activeOpacity={0.9}
+                    disabled={isDisabled}
+                    activeOpacity={0.88}
                   >
                     {isCalculatingRoute ? (
-                      <Text style={styles.createText}>Calculating Route...</Text>
+                      <Text style={[styles.createText, isDisabled && styles.createTextDisabled]}>
+                        Calculating Route...
+                      </Text>
                     ) : (
                       <>
-                        <Text style={styles.createText}>Publish Route Offer</Text>
-                        <Ionicons name="paper-plane" size={18} color="#FFF" />
+                        <Text style={[styles.createText, isDisabled && styles.createTextDisabled]}>
+                          Publish Route Offer
+                        </Text>
+                        <Ionicons
+                          name="paper-plane"
+                          size={18}
+                          color={isDisabled ? '#94A3B8' : '#FFF'}
+                        />
                       </>
                     )}
                   </TouchableOpacity>
@@ -883,16 +889,11 @@ export default function HomeScreen() {
                 />
               </View>
 
-              <Text style={styles.inputLabel}>Departure Time</Text>
-              <View style={styles.inputContainer}>
-                <Ionicons name="time-outline" size={20} color={Colors.textMuted} style={styles.inputIcon} />
-                <TextInput
-                  style={styles.input}
-                  placeholder="Departure time"
-                  value={editDepartureTime}
-                  onChangeText={setEditDepartureTime}
-                />
-              </View>
+              <DepartureTimePicker
+                value={editDepartureTime}
+                onChange={(iso) => setEditDepartureTime(iso)}
+                label="Departure Time *"
+              />
 
               <TouchableOpacity style={styles.createButton} onPress={handleSaveEditRide} activeOpacity={0.9}>
                 <Text style={styles.createText}>Save Changes</Text>
@@ -1655,24 +1656,38 @@ const styles = StyleSheet.create({
     gap: 12,
   },
   createButton: {
-    backgroundColor: Colors.primary,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
-    height: 50,
-    borderRadius: 14,
+    height: 52,
+    borderRadius: 16,
     marginTop: 20,
+  },
+  createButtonActive: {
+    backgroundColor: Colors.primary,
     shadowColor: Colors.primary,
     shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.25,
+    shadowOpacity: 0.3,
     shadowRadius: 8,
     elevation: 4,
+  },
+  createButtonDisabled: {
+    backgroundColor: '#F1F5F9',
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+    shadowColor: 'transparent',
+    shadowOpacity: 0,
+    elevation: 0,
   },
   createText: {
     color: '#FFF',
     fontSize: 15,
     fontWeight: 'bold',
+  },
+  createTextDisabled: {
+    color: '#94A3B8',
+    fontWeight: '600',
   },
   modalOverlay: {
     flex: 1,

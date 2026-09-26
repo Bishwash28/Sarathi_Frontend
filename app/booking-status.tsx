@@ -10,10 +10,25 @@ import { useApp } from '../context/AppContext';
 
 export default function BookingStatusScreen() {
   const { rideId } = useLocalSearchParams();
-  const { bookings, rides, cancelBooking, acceptBooking } = useApp();
+  const { bookings, rides, cancelBooking, acceptBooking, getUserRating } = useApp();
 
   const ride = rides.find(r => r.id === rideId);
-  const currentBooking = bookings.find(b => b.rideId === rideId && (b.status === 'pending' || b.status === 'accepted'));
+  const currentBooking = bookings.find(b => (b.rideId === rideId || b.id === rideId));
+
+  const driverName = ride?.riderName || currentBooking?.driverName || 'Driver';
+  const driverPhoto = ride?.riderPhoto || currentBooking?.driverPhoto;
+  const vehicleName = ride?.vehicleName || currentBooking?.vehicleName || 'Vehicle';
+  const vehiclePlate = ride?.vehicleNumber || currentBooking?.vehicleNumber;
+  const driverRatingObj = getUserRating(ride?.riderId || currentBooking?.driverId);
+  const ratingDisplayStr = driverRatingObj.hasRatings ? driverRatingObj.average.toFixed(1) : 'New';
+
+  const driverRouteCorridor = (ride?.route && ride.route.length > 0)
+    ? ride.route.join(' → ')
+    : (currentBooking?.riderOriginName && currentBooking?.riderDestName && currentBooking.riderOriginName !== 'Rider Origin'
+        ? `${currentBooking.riderOriginName} → ${currentBooking.riderDestName}`
+        : (currentBooking?.passengerPickup && currentBooking?.passengerDropoff ? `${currentBooking.passengerPickup} → ${currentBooking.passengerDropoff}` : 'En route...'));
+
+  const farePriceDisplay = ride?.price ?? currentBooking?.farePrice ?? 150;
 
   useEffect(() => {
     // If the booking gets accepted, automatically redirect to active trip
@@ -21,7 +36,7 @@ export default function BookingStatusScreen() {
       const timer = setTimeout(() => {
         router.replace({
           pathname: '/active-trip',
-          params: { rideId, bookingId: currentBooking.id }
+          params: { rideId: currentBooking.rideId || rideId, bookingId: currentBooking.id }
         });
       }, 300);
       return () => clearTimeout(timer);
@@ -45,10 +60,6 @@ export default function BookingStatusScreen() {
     router.replace('/(tabs)');
   };
 
-  const handleAcceptDemo = () => {
-    acceptBooking(currentBooking.id);
-  };
-
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.topHeader}>
@@ -64,12 +75,22 @@ export default function BookingStatusScreen() {
       <View style={styles.container}>
         {/* Status Indicator */}
         <View style={styles.statusBox}>
-          {currentBooking.status === 'pending' ? (
+          {currentBooking.status === 'cancelled' ? (
+            <>
+              <View style={styles.acceptedIconContainer}>
+                <Ionicons name="close-circle" size={80} color={Colors.error} />
+              </View>
+              <Text style={[styles.statusTitle, { color: Colors.error }]}>Ride Cancelled by Rider ❌</Text>
+              <Text style={styles.statusSubtitle}>
+                {driverName} has cancelled this ride request ({currentBooking.passengerPickup} ➔ {currentBooking.passengerDropoff}). You can search for other available rides.
+              </Text>
+            </>
+          ) : currentBooking.status === 'pending' ? (
             <>
               <ActivityIndicator size="large" color={Colors.accent} style={styles.spinner} />
               <Text style={styles.statusTitle}>Waiting for Driver</Text>
               <Text style={styles.statusSubtitle}>
-                Sending request to {ride?.riderName || 'your driver'}. We will notify you when they respond.
+                Sending request to {driverName}. We will notify you when they respond.
               </Text>
             </>
           ) : (
@@ -79,7 +100,7 @@ export default function BookingStatusScreen() {
               </View>
               <Text style={[styles.statusTitle, { color: Colors.success }]}>Ride Accepted!</Text>
               <Text style={styles.statusSubtitle}>
-                {ride?.riderName || 'Your driver'} has confirmed your ride request! Redirecting to live tracking...
+                {driverName} has confirmed your ride request! Redirecting to live tracking...
               </Text>
             </>
           )}
@@ -87,18 +108,20 @@ export default function BookingStatusScreen() {
 
         {/* Card for Rider Info */}
         <View style={styles.driverCard}>
-          {ride?.riderPhoto ? (
-            <Image source={{ uri: ride.riderPhoto }} style={styles.driverPhoto} />
+          {driverPhoto ? (
+            <Image source={{ uri: driverPhoto }} style={styles.driverPhoto} />
           ) : (
             <View style={[styles.driverPhoto, { backgroundColor: Colors.surface, alignItems: 'center', justifyContent: 'center' }]}>
               <Ionicons name="person-circle" size={40} color={Colors.textMuted} />
             </View>
           )}
           <View style={styles.driverInfo}>
-            <Text style={styles.driverName}>{ride?.riderName || 'Driver'}</Text>
+            <Text style={styles.driverName}>{driverName}</Text>
             <View style={styles.ratingRow}>
               <Ionicons name="star" size={14} color="#F59E0B" />
-              <Text style={styles.ratingText}>{ride?.rating ?? 5} • {ride?.vehicleName || 'Vehicle'}</Text>
+              <Text style={styles.ratingText}>
+                {ratingDisplayStr} • {vehicleName}{vehiclePlate ? ` (${vehiclePlate})` : ''}
+              </Text>
             </View>
           </View>
         </View>
@@ -109,7 +132,7 @@ export default function BookingStatusScreen() {
             <Ionicons name="git-commit-outline" size={18} color={Colors.primary} />
             <View style={{ flex: 1 }}>
               <Text style={{ fontSize: 11, color: Colors.textMuted, fontWeight: '700' }}>DRIVER ROUTE CORRIDOR</Text>
-              <Text style={styles.routeText}>{ride?.route?.join(' → ') || (currentBooking.passengerPickup && currentBooking.passengerDropoff ? `${currentBooking.passengerPickup} → ${currentBooking.passengerDropoff}` : 'En route...')}</Text>
+              <Text style={styles.routeText}>{driverRouteCorridor}</Text>
             </View>
           </View>
           
@@ -121,7 +144,7 @@ export default function BookingStatusScreen() {
                 <View style={{ flex: 1 }}>
                   <Text style={{ fontSize: 11, color: Colors.textMuted, fontWeight: '700' }}>PASSENGER REQUESTED STOPS</Text>
                   <Text style={[styles.routeText, { color: Colors.primary }]}>
-                    Pickup: {currentBooking.passengerPickup || ride?.route?.[0] || ''} → Dropoff: {currentBooking.passengerDropoff || ride?.route?.[ride.route.length - 1] || ''}
+                    Pickup: {currentBooking.passengerPickup || 'Pickup'} → Dropoff: {currentBooking.passengerDropoff || 'Dropoff'}
                   </Text>
                 </View>
               </View>
@@ -131,19 +154,36 @@ export default function BookingStatusScreen() {
           <View style={styles.divider} />
           <View style={styles.priceRow}>
             <Text style={styles.priceLabel}>Estimated Price</Text>
-            <Text style={styles.priceValue}>NPR {ride?.price ?? 'N/A'}</Text>
+            <Text style={styles.priceValue}>NPR {farePriceDisplay}</Text>
           </View>
         </View>
 
         {/* Action Buttons */}
-        {currentBooking.status === 'pending' && (
+        {currentBooking.status === 'cancelled' ? (
+          <View style={{ width: '100%', gap: 10 }}>
+            <TouchableOpacity
+              style={[styles.cancelButton, { backgroundColor: Colors.primary, borderColor: Colors.primary }]}
+              onPress={() => router.replace('/search-ride')}
+            >
+              <Ionicons name="search-outline" size={20} color="#FFF" />
+              <Text style={[styles.cancelButtonText, { color: '#FFF' }]}>Find Another Ride</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.cancelButton, { borderColor: '#CBD5E1', backgroundColor: '#F8FAFC' }]}
+              onPress={() => router.replace('/(tabs)')}
+            >
+              <Ionicons name="home-outline" size={20} color={Colors.textPrimary} />
+              <Text style={[styles.cancelButtonText, { color: Colors.textPrimary }]}>Return Home</Text>
+            </TouchableOpacity>
+          </View>
+        ) : currentBooking.status === 'pending' ? (
           <View style={{ width: '100%', gap: 10 }}>
             <TouchableOpacity style={styles.cancelButton} onPress={handleCancel}>
               <Ionicons name="close-circle-outline" size={20} color={Colors.error} />
               <Text style={styles.cancelButtonText}>Cancel Booking Request</Text>
             </TouchableOpacity>
           </View>
-        )}
+        ) : null}
       </View>
     </SafeAreaView>
   );

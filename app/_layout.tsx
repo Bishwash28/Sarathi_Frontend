@@ -18,10 +18,10 @@ export default function RootLayout() {
       SystemUI.setBackgroundColorAsync(Colors.background);
     }
 
-    // Handle deep links (e.g. password recovery link from email)
+    // Handle deep links (e.g. password recovery link from email or Google OAuth redirect)
     const subscription = Linking.addEventListener('url', async (event) => {
       const url = event.url;
-      if (url && (url.includes('type=recovery') || url.includes('reset-password') || url.includes('access_token'))) {
+      if (url) {
         const hash = url.includes('#') ? url.split('#')[1] : url.split('?')[1];
         if (hash) {
           const params = new URLSearchParams(hash);
@@ -34,7 +34,18 @@ export default function RootLayout() {
             });
           }
         }
-        router.push('/(auth)/reset-password');
+
+        // Only navigate to reset-password if explicitly a password recovery email link and NOT Google OAuth
+        const isGoogleAuth = url.includes('provider=google') || url.includes('google');
+        const isPasswordRecovery = (url.includes('type=recovery') || url.includes('reset-password')) && !isGoogleAuth;
+
+        if (isPasswordRecovery) {
+          const { data: { session } } = await supabase.auth.getSession();
+          const provider = session?.user?.app_metadata?.provider || session?.user?.user_metadata?.provider;
+          if (provider !== 'google') {
+            router.push('/(auth)/reset-password');
+          }
+        }
       }
     });
 

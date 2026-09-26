@@ -41,15 +41,19 @@ export default function NotificationsScreen() {
   const isDriverMode = user?.role === 'driver' || user?.kycVerified === true;
   const currentRole = isDriverMode ? 'driver' : 'passenger';
 
-  const filteredNotifications = driverNotifications.filter((n) => {
+  const userRoleNotifications = driverNotifications.filter((n) => {
     if (n.targetRole && n.targetRole !== currentRole) {
-      // Allow ride_request notifications to be visible to riders even if active mode is passenger
       if (n.type === 'ride_request' && isDriverMode) {
-        // Allow through
-      } else {
-        return false;
+        return true;
       }
+      return false;
     }
+    return true;
+  });
+
+  const unreadCount = userRoleNotifications.filter((n) => !n.isRead).length;
+
+  const filteredNotifications = userRoleNotifications.filter((n) => {
     if (activeFilter === 'unread') return !n.isRead;
     if (activeFilter === 'requests') return n.type === 'ride_request' || n.type === 'request_status';
     if (activeFilter === 'updates') return n.type === 'kyc' || n.type === 'announcement' || n.type === 'payment';
@@ -126,13 +130,22 @@ export default function NotificationsScreen() {
     const bookingStatus = booking?.status || 'pending';
     const isPending = bookingStatus === 'pending';
 
+    const handleMessagePassenger = () => {
+      const targetRideId = params.rideId || booking?.rideId;
+      if (targetRideId) {
+        router.push({ pathname: '/chat-room', params: { rideId: targetRideId } });
+      } else {
+        Alert.alert('Chat Unavailable', 'Chat room is not accessible for this notification.');
+      }
+    };
+
     return (
       <View style={[styles.notifCard, !item.isRead && styles.unreadNotifCard]}>
         {!item.isRead && <View style={styles.unreadBlueBadge} />}
 
         <View style={styles.cardMainHeader}>
           <View style={[styles.iconContainer, { backgroundColor: `${item.iconColor}15` }]}>
-            <Ionicons name={item.iconName as any} size={22} color={item.iconColor} />
+            <Ionicons name={item.iconName as any} size={20} color={item.iconColor} />
           </View>
 
           <View style={styles.textContainer}>
@@ -140,7 +153,7 @@ export default function NotificationsScreen() {
               <Text style={[styles.notifTitle, !item.isRead && styles.unreadTitle]}>{item.title}</Text>
               <Text style={styles.timestampText}>{formatTimeAgo(item.timestamp)}</Text>
             </View>
-            <Text style={styles.notifDesc} numberOfLines={3}>
+            <Text style={styles.notifDesc} numberOfLines={2}>
               {item.description}
             </Text>
           </View>
@@ -154,7 +167,7 @@ export default function NotificationsScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Detailed Passenger Request Card (Shown for ride_request notifications) */}
+        {/* Compact Passenger Request Details & Action Grid */}
         {isRideReq && (
           <View style={styles.passengerDetailsCard}>
             <View style={styles.passengerProfileRow}>
@@ -164,114 +177,120 @@ export default function NotificationsScreen() {
               />
               <View style={{ flex: 1 }}>
                 <Text style={styles.passengerNameText}>{params.passengerName || 'Sarathi Passenger'}</Text>
-                <Text style={styles.passengerPhoneText}>{params.passengerPhone || '+977 9841234567'}</Text>
+                <Text style={styles.routePointItem}>
+                  📍 <Text style={{ fontWeight: '700', color: Colors.textPrimary }}>{params.passengerPickup || 'Pickup'}</Text> → <Text style={{ fontWeight: '700', color: Colors.textPrimary }}>{params.passengerDropoff || 'Drop-off'}</Text>
+                </Text>
               </View>
-              <TouchableOpacity
-                style={styles.callPassBtn}
-                onPress={() => handleCallPassenger(params.passengerPhone)}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="call" size={14} color="#16A34A" />
-                <Text style={styles.callPassBtnText}>Call</Text>
-              </TouchableOpacity>
             </View>
 
-            <View style={styles.routePointsBox}>
-              <Text style={styles.routePointItem}>
-                📍 Pickup: <Text style={{ fontWeight: '800', color: Colors.textPrimary }}>{params.passengerPickup || 'Pickup Point'}</Text>
-              </Text>
-              <Text style={styles.routePointItem}>
-                🏁 Drop-off: <Text style={{ fontWeight: '800', color: Colors.textPrimary }}>{params.passengerDropoff || 'Destination Point'}</Text>
-              </Text>
-            </View>
-
-            {/* Action Buttons (Rendered ONLY for Driver Owner when request is pending) */}
-            {isRiderOwner && isPending ? (
-              <View style={styles.actionButtonsRow}>
+            {/* Quick Action Grid: Call, Message, Accept, Decline */}
+            <View style={styles.actionGridContainer}>
+              <View style={styles.contactRow}>
                 <TouchableOpacity
-                  style={styles.acceptBtn}
-                  onPress={() => handleAcceptRequest(params.bookingId, item.id)}
-                  activeOpacity={0.85}
+                  style={styles.contactBtn}
+                  onPress={() => handleCallPassenger(params.passengerPhone)}
+                  activeOpacity={0.8}
                 >
-                  <Ionicons name="checkmark-circle" size={16} color="#FFF" />
-                  <Text style={styles.acceptBtnText}>Accept Request</Text>
+                  <Ionicons name="call-outline" size={14} color="#15803D" />
+                  <Text style={styles.contactBtnText}>Call</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={styles.declineBtn}
-                  onPress={() => handleDeclineRequest(params.bookingId, item.id)}
-                  activeOpacity={0.85}
+                  style={[styles.contactBtn, { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }]}
+                  onPress={handleMessagePassenger}
+                  activeOpacity={0.8}
                 >
-                  <Text style={styles.declineBtnText}>Decline</Text>
+                  <Ionicons name="chatbubble-ellipses-outline" size={14} color="#1D4ED8" />
+                  <Text style={[styles.contactBtnText, { color: '#1D4ED8' }]}>Message</Text>
                 </TouchableOpacity>
               </View>
-            ) : (
-              /* Non-Actionable Status Badge (Passengers & Completed/Declined Requests) */
-              <View style={{ marginTop: 10, flexDirection: 'row', alignItems: 'center' }}>
-                <View
-                  style={[
-                    styles.statusChip,
-                    bookingStatus === 'accepted'
-                      ? { backgroundColor: '#DCFCE7', borderColor: '#86EFAC' }
-                      : bookingStatus === 'ongoing'
-                      ? { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }
-                      : bookingStatus === 'completed'
-                      ? { backgroundColor: '#F3E8FF', borderColor: '#D8B4FE' }
-                      : bookingStatus === 'cancelled'
-                      ? { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }
-                      : { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' },
-                  ]}
-                >
-                  <Ionicons
-                    name={
-                      bookingStatus === 'accepted' || bookingStatus === 'ongoing' || bookingStatus === 'completed'
-                        ? 'checkmark-circle'
-                        : bookingStatus === 'cancelled'
-                        ? 'close-circle'
-                        : 'time-outline'
-                    }
-                    size={14}
-                    color={
-                      bookingStatus === 'accepted'
-                        ? '#16A34A'
-                        : bookingStatus === 'ongoing'
-                        ? '#2563EB'
-                        : bookingStatus === 'completed'
-                        ? '#7C3AED'
-                        : bookingStatus === 'cancelled'
-                        ? '#DC2626'
-                        : '#D97706'
-                    }
-                  />
-                  <Text
+
+              {isRiderOwner && isPending ? (
+                <View style={styles.actionButtonsRow}>
+                  <TouchableOpacity
+                    style={styles.acceptBtn}
+                    onPress={() => handleAcceptRequest(params.bookingId, item.id)}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="checkmark-circle" size={15} color="#FFF" />
+                    <Text style={styles.acceptBtnText}>Accept</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.declineBtn}
+                    onPress={() => handleDeclineRequest(params.bookingId, item.id)}
+                    activeOpacity={0.85}
+                  >
+                    <Ionicons name="close-circle-outline" size={15} color="#DC2626" />
+                    <Text style={styles.declineBtnText}>Reject</Text>
+                  </TouchableOpacity>
+                </View>
+              ) : (
+                <View style={{ marginTop: 6, flexDirection: 'row', alignItems: 'center' }}>
+                  <View
                     style={[
-                      styles.statusChipText,
-                      {
-                        color:
-                          bookingStatus === 'accepted'
-                            ? '#15803D'
-                            : bookingStatus === 'ongoing'
-                            ? '#1D4ED8'
-                            : bookingStatus === 'completed'
-                            ? '#6B21A8'
-                            : bookingStatus === 'cancelled'
-                            ? '#B91C1C'
-                            : '#B45309',
-                      },
+                      styles.statusChip,
+                      bookingStatus === 'accepted'
+                        ? { backgroundColor: '#DCFCE7', borderColor: '#86EFAC' }
+                        : bookingStatus === 'ongoing'
+                        ? { backgroundColor: '#EFF6FF', borderColor: '#BFDBFE' }
+                        : bookingStatus === 'completed'
+                        ? { backgroundColor: '#F3E8FF', borderColor: '#D8B4FE' }
+                        : bookingStatus === 'cancelled'
+                        ? { backgroundColor: '#FEE2E2', borderColor: '#FCA5A5' }
+                        : { backgroundColor: '#FEF3C7', borderColor: '#FDE68A' },
                     ]}
                   >
-                    {bookingStatus === 'accepted'
-                      ? 'REQUEST ACCEPTED'
-                      : bookingStatus === 'ongoing'
-                      ? 'TRIP IN PROGRESS'
-                      : bookingStatus === 'completed'
-                      ? 'TRIP COMPLETED'
-                      : bookingStatus === 'cancelled'
-                      ? 'REQUEST DECLINED'
-                      : 'REQUEST SENT (PENDING)'}
-                  </Text>
+                    <Ionicons
+                      name={
+                        bookingStatus === 'accepted' || bookingStatus === 'ongoing' || bookingStatus === 'completed'
+                          ? 'checkmark-circle'
+                          : bookingStatus === 'cancelled'
+                          ? 'close-circle'
+                          : 'time-outline'
+                      }
+                      size={13}
+                      color={
+                        bookingStatus === 'accepted'
+                          ? '#16A34A'
+                          : bookingStatus === 'ongoing'
+                          ? '#2563EB'
+                          : bookingStatus === 'completed'
+                          ? '#7C3AED'
+                          : bookingStatus === 'cancelled'
+                          ? '#DC2626'
+                          : '#D97706'
+                      }
+                    />
+                    <Text
+                      style={[
+                        styles.statusChipText,
+                        {
+                          color:
+                            bookingStatus === 'accepted'
+                              ? '#15803D'
+                              : bookingStatus === 'ongoing'
+                              ? '#1D4ED8'
+                              : bookingStatus === 'completed'
+                              ? '#6B21A8'
+                              : bookingStatus === 'cancelled'
+                              ? '#B91C1C'
+                              : '#B45309',
+                        },
+                      ]}
+                    >
+                      {bookingStatus === 'accepted'
+                        ? 'ACCEPTED'
+                        : bookingStatus === 'ongoing'
+                        ? 'IN PROGRESS'
+                        : bookingStatus === 'completed'
+                        ? 'COMPLETED'
+                        : bookingStatus === 'cancelled'
+                        ? 'REJECTED'
+                        : 'PENDING'}
+                    </Text>
+                  </View>
                 </View>
-              </View>
-            )}
+              )}
+            </View>
           </View>
         )}
       </View>
@@ -284,13 +303,13 @@ export default function NotificationsScreen() {
       <View style={styles.header}>
         <View style={styles.titleContainer}>
           <Text style={styles.headerTitle}>Notifications</Text>
-          {unreadDriverNotifCount > 0 && (
+          {unreadCount > 0 && (
             <View style={styles.unreadCountBadge}>
-              <Text style={styles.unreadCountText}>{unreadDriverNotifCount} New</Text>
+              <Text style={styles.unreadCountText}>{unreadCount} New</Text>
             </View>
           )}
         </View>
-        {unreadDriverNotifCount > 0 ? (
+        {unreadCount > 0 ? (
           <TouchableOpacity onPress={markAllNotificationsAsRead}>
             <Text style={styles.markAllText}>Mark all read</Text>
           </TouchableOpacity>
@@ -306,7 +325,7 @@ export default function NotificationsScreen() {
           onPress={() => setActiveFilter('all')}
         >
           <Text style={[styles.filterChipText, activeFilter === 'all' && styles.activeFilterChipText]}>
-            All ({driverNotifications.length})
+            All ({userRoleNotifications.length})
           </Text>
         </TouchableOpacity>
 
@@ -315,7 +334,7 @@ export default function NotificationsScreen() {
           onPress={() => setActiveFilter('unread')}
         >
           <Text style={[styles.filterChipText, activeFilter === 'unread' && styles.activeFilterChipText]}>
-            Unread ({unreadDriverNotifCount})
+            Unread ({unreadCount})
           </Text>
         </TouchableOpacity>
 
@@ -569,37 +588,68 @@ const styles = StyleSheet.create({
   routePointItem: {
     fontSize: 12,
     color: Colors.textMuted,
+    marginTop: 2,
+  },
+  actionGridContainer: {
+    gap: 8,
+    marginTop: 8,
+  },
+  contactRow: {
+    flexDirection: 'row',
+    gap: 8,
+  },
+  contactBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    backgroundColor: '#DCFCE7',
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#86EFAC',
+  },
+  contactBtnText: {
+    fontSize: 12,
+    fontWeight: 'bold',
+    color: '#15803D',
   },
   actionButtonsRow: {
     flexDirection: 'row',
-    gap: 10,
+    gap: 8,
   },
   acceptBtn: {
     flex: 1,
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
-    gap: 6,
+    gap: 5,
     backgroundColor: '#16A34A',
-    paddingVertical: 10,
-    borderRadius: 10,
+    paddingVertical: 8,
+    borderRadius: 8,
   },
   acceptBtnText: {
     color: '#FFF',
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: 'bold',
   },
   declineBtn: {
-    paddingHorizontal: 16,
-    paddingVertical: 10,
-    borderRadius: 10,
-    backgroundColor: '#F1F5F9',
+    flex: 1,
+    flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    gap: 5,
+    paddingVertical: 8,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
   },
   declineBtnText: {
-    color: Colors.textMuted,
-    fontSize: 13,
+    color: '#DC2626',
+    fontSize: 12,
     fontWeight: 'bold',
   },
   emptyContainer: {

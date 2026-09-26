@@ -112,6 +112,8 @@ export default function AiAssistantScreen() {
       pathname: '/ride-detail',
       params: {
         id: ride.id,
+        riderOrigin: ride.pickupPoint || (ride.route ? ride.route[0] : ''),
+        riderDest: (ride.route && ride.route.length > 0) ? ride.route[ride.route.length - 1] : ride.pickupPoint,
         selectedPickup: ride.pickupPoint,
         selectedDest: ride.route[ride.route.length - 1] || ride.pickupPoint,
         pickupLat: ride.origin?.lat ?? 0,

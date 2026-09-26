@@ -30,6 +30,17 @@ export default function ChatRoomScreen() {
   const passengerMsg = messages.find(m => (m.sender === 'user' || m.passengerId) && m.senderId !== user?.id && m.senderName !== user?.name);
   const riderMsg = messages.find(m => (m.sender === 'driver' || m.riderId) && m.senderId !== user?.id && m.senderName !== user?.name);
 
+  // Role-based Route Context derivation
+  const passengerRouteText = booking?.passengerPickup && booking?.passengerDropoff
+    ? `${booking.passengerPickup} → ${booking.passengerDropoff}`
+    : null;
+
+  const driverRouteText = ride?.route && ride.route.length >= 2
+    ? ride.route.join(' → ')
+    : (ride?.pickupPoint ? `${ride.pickupPoint} → Destination` : null);
+
+  const routeContextText = isDriverRole ? passengerRouteText : driverRouteText;
+
   const chatTitle = isDriverRole
     ? (booking?.passengerName || passengerMsg?.senderName || 'Passenger')
     : (ride?.riderName || riderMsg?.senderName || 'Driver');
@@ -84,9 +95,10 @@ export default function ChatRoomScreen() {
   };
 
   const renderMessageItem = (item: DriverMessage) => {
-    const isMe = (item.senderId && user?.id && item.senderId === user.id) ||
-                 (item.senderName && user?.name && item.senderName === user.name) ||
-                 (isDriverRole ? item.sender === 'driver' : item.sender === 'user');
+    const isMe = Boolean(
+      (item.senderId && user?.id && item.senderId === user.id) ||
+      (item.senderName && user?.name && item.senderName.trim().toLowerCase() === user.name.trim().toLowerCase())
+    );
 
     return (
       <View key={item.id} style={[styles.messageRow, isMe ? styles.userRow : styles.driverRow]}>
@@ -131,6 +143,9 @@ export default function ChatRoomScreen() {
 
           <View style={styles.headerInfo}>
             <Text style={styles.headerName}>{chatTitle}</Text>
+            {routeContextText ? (
+              <Text style={styles.headerRoute} numberOfLines={1}>{routeContextText}</Text>
+            ) : null}
             <Text style={styles.headerSub}>{chatSub}</Text>
           </View>
 
@@ -237,6 +252,12 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: 'bold',
     color: Colors.textPrimary,
+  },
+  headerRoute: {
+    fontSize: 11,
+    color: Colors.primary,
+    fontWeight: '600',
+    marginTop: 1,
   },
   headerSub: {
     fontSize: 11,

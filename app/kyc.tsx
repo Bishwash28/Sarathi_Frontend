@@ -142,20 +142,96 @@ export default function KYCScreen() {
 
     setIsSubmitting(true);
     try {
+      if (!user?.id) {
+        Alert.alert('Error', 'User is not authenticated.');
+        setIsSubmitting(false);
+        return;
+      }
+
+      // Helper function to upload local mobile image URI to Supabase Storage or convert to data URI
+      const uploadKycImage = async (uri: string, prefix: string): Promise<string> => {
+        if (!uri || (!uri.startsWith('file:') && !uri.startsWith('content:') && !uri.startsWith('blob:') && !uri.startsWith('data:'))) {
+          return uri; // Already a remote web URL
+        }
+
+        const filePath = `${user.id}/${prefix}_${Date.now()}.jpg`;
+        let uploadBody: any;
+        let contentType = 'image/jpeg';
+        let base64DataUri = '';
+
+        try {
+          if (Platform.OS === 'web') {
+            const resp = await fetch(uri);
+            uploadBody = await resp.blob();
+            if (uploadBody.type) contentType = uploadBody.type;
+          } else {
+            uploadBody = await new Promise((resolve, reject) => {
+              const xhr = new XMLHttpRequest();
+              xhr.onload = () => {
+                const reader = new FileReader();
+                reader.onloadend = () => {
+                  if (typeof reader.result === 'string') {
+                    base64DataUri = reader.result;
+                  }
+                };
+                reader.readAsDataURL(xhr.response);
+                resolve(xhr.response);
+              };
+              xhr.onerror = (e) => reject(new TypeError('Network request failed'));
+              xhr.responseType = 'blob';
+              xhr.open('GET', uri, true);
+              xhr.send(null);
+            });
+          }
+        } catch (readErr) {
+          console.warn('[KYC Upload] Blob conversion warning:', readErr);
+        }
+
+        // Try primary bucket: 'kyc-documents'
+        const { error: storageErr } = await supabase.storage
+          .from('kyc-documents')
+          .upload(filePath, uploadBody, { contentType, upsert: true });
+
+        if (!storageErr) {
+          const { data: publicUrlData } = supabase.storage.from('kyc-documents').getPublicUrl(filePath);
+          return publicUrlData?.publicUrl || uri;
+        }
+
+        // Try secondary bucket: 'avatars'
+        const { error: avatarStorageErr } = await supabase.storage
+          .from('avatars')
+          .upload(filePath, uploadBody, { contentType, upsert: true });
+
+        if (!avatarStorageErr) {
+          const { data: publicUrlData } = supabase.storage.from('avatars').getPublicUrl(filePath);
+          return publicUrlData?.publicUrl || uri;
+        }
+
+        // Fallback: Return Base64 Data URI if storage bucket is missing in Supabase dashboard
+        if (base64DataUri && base64DataUri.startsWith('data:image')) {
+          return base64DataUri;
+        }
+
+        return uri;
+      };
+
+      const uploadedIdFrontUrl = await uploadKycImage(idFrontUri, 'id_front');
+      const uploadedLicenseFrontUrl = await uploadKycImage(licenseFrontUri, 'license_front');
+
       // Check for existing record ID to safely update instead of inserting duplicate key
       const { data: existingRecord } = await supabase
         .from('kyc_verifications')
         .select('id')
-        .eq('user_id', user?.id)
+        .eq('user_id', user.id)
         .maybeSingle();
 
       const kycPayload: any = {
-        user_id: user?.id,
+        user_id: user.id,
         id_type: selectedDocType.toLowerCase(),
         id_number: 'UPLOADED_DOCUMENT',
         license_number: 'UPLOADED_LICENSE',
-        id_front_image: idFrontUri,
-        license_front_image: licenseFrontUri,
+        id_front_image: uploadedIdFrontUrl,
+        license_front_image: uploadedLicenseFrontUrl,
         status: 'pending',
         rejection_reason: null,
         submitted_at: new Date().toISOString(),
