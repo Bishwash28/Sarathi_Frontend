@@ -90,7 +90,7 @@ USER CONTEXT:
 
 CRITICAL RULES & POLICIES:
 1. PAYMENT POLICY: Sarathi currently supports CASH PAYMENT ONLY. There is NO online payment, digital wallet (eSewa, Khalti), or card payment functionality for now. If a user asks about payment methods, clearly explain that Sarathi currently supports cash payment directly to the rider upon trip arrival, and digital payments will be added in a future update. Never show, suggest, or simulate online payment methods.
-2. DYNAMIC INTENT ANALYSIS: Understand and answer ANY question related to Sarathi dynamically based on the user's specific question, active rides data, user role, and conversation history. Never force a predefined or hardcoded answer.
+2. DYNAMIC INTENT ANALYSIS: Understand and answer ANY question related to Sarathi dynamically based on the user's specific question, active rides data, user role, and conversation history. Never force a predefined or hardcoded answer. Vary your phrasing naturally across turns — do not repeat the exact same sentence structure every time, even for similar questions.
 3. CONVERSATION CONTEXT: Maintain multi-turn conversation context. Use previous messages to understand follow-up questions (e.g. "which one is cheaper?", "what time does he leave?", "can I book it?").
 4. OUT-OF-CONTEXT QUESTIONS: If the user asks a question completely unrelated to Sarathi, ride-sharing, or commuting in Nepal (e.g. coding, world capitals, cooking recipes, movies, math problems), politely explain that you are focused on helping with Sarathi ride-sharing and route navigation in Nepal, and gently guide the user back to Sarathi travel topics.
 5. SARATHI POLICIES & OFF-FLOW QUESTIONS:
@@ -130,11 +130,25 @@ Return a valid JSON object with:
 
   // Attempt live Gemini API Call if key is present
   if (GEMINI_API_KEY && !GEMINI_API_KEY.includes('YOUR_')) {
-    const candidateModels = ['gemini-1.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'];
+    // FIX: gemini-1.5-* models were deprecated in 2025, and gemini-2.0-flash /
+    // gemini-2.0-flash-001 / gemini-2.0-flash-lite were fully retired by Google
+    // on June 1, 2026. Every call to the old list below was returning HTTP 404,
+    // silently swallowed by the catch block, so the app ALWAYS fell through to
+    // the hardcoded local fallback — that's why replies felt repetitive.
+    // Current stable lineup (as of this writing). Google's error response
+    // confirmed gemini-2.5-flash-lite is retired specifically for NEW API
+    // keys in favor of gemini-3.5-flash-lite — since that's the key you're
+    // using, gemini-2.5-flash may hit the same restriction, so the 3.x line
+    // leads here with 2.5-flash kept only as a last-resort fallback.
+    const candidateModels = ['gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemini-2.5-flash'];
 
     for (const modelName of candidateModels) {
       const controller = new AbortController();
-      const timeoutId = setTimeout(() => controller.abort(), 3000);
+      // FIX: bumped again to 20000ms, and now measuring actual elapsed time
+      // around the call so we can tell a genuine slow-network timeout apart
+      // from anything firing the abort prematurely.
+      const timeoutId = setTimeout(() => controller.abort(), 20000);
+      const startedAt = Date.now();
       try {
         const response = await fetch(
           `https://generativelanguage.googleapis.com/v1beta/models/${modelName}:generateContent?key=${GEMINI_API_KEY}`,
@@ -145,7 +159,11 @@ Return a valid JSON object with:
             body: JSON.stringify({
               contents: contentsPayload,
               generationConfig: {
-                temperature: 0.4,
+                temperature: 0.7, // was 0.4 — a bit more variety in phrasing
+                // FIX: forces the model to return strict JSON instead of
+                // occasionally wrapping the reply in prose or markdown fences,
+                // which used to make JSON.parse throw and silently fall back.
+                responseMimeType: 'application/json',
               },
             }),
           }
@@ -166,11 +184,26 @@ Return a valid JSON object with:
               prefillDestination: parsed.prefillDestination,
             };
           }
+          // FIX: log instead of silently falling through with no trace
+          console.warn(`[querySarathiAI] ${modelName} returned no candidate text`, json);
+        } else {
+          // FIX: log the actual failure reason (404, 429, etc.) so future
+          // model retirements or quota issues are visible instead of silent
+          const errBody = await response.text().catch(() => '');
+          console.warn(`[querySarathiAI] ${modelName} HTTP ${response.status}: ${errBody}`);
         }
-      } catch (err) {
+      } catch (err: any) {
         clearTimeout(timeoutId);
+        // FIX: log elapsed time alongside the error — if this is close to
+        // 20000ms it's a genuine slow-network timeout; if it's much shorter
+        // (e.g. under a second or two), something else is aborting early.
+        const elapsedMs = Date.now() - startedAt;
+        console.warn(`[querySarathiAI] ${modelName} request failed after ${elapsedMs}ms:`, err?.message || err);
       }
     }
+  } else if (__DEV__) {
+    // FIX: makes it obvious in dev if the API key never made it into the bundle
+    console.warn('[querySarathiAI] GEMINI_API_KEY is missing or placeholder — using local fallback only.');
   }
 
   // Fallback Engine if API call is unavailable or timed out
@@ -178,7 +211,10 @@ Return a valid JSON object with:
 }
 
 /**
- * Intelligent dynamic local search & conversational fallback engine
+ * Intelligent dynamic local search & conversational fallback engine.
+ * This only runs if the live Gemini call above fails entirely (no key,
+ * network down, or every model attempt errored) — it is NOT meant to be
+ * the primary way replies are generated once the fix above takes effect.
  */
 function parseLocalAiFallback(
   userPrompt: string,
@@ -190,10 +226,17 @@ function parseLocalAiFallback(
   const userName = userProfile?.name ? userProfile.name.split(' ')[0] : 'there';
   const isDriver = userProfile?.role === 'driver';
 
+  // Small helper so repeated fallback hits (e.g. if the network is down for
+  // a whole session) don't feel identical every single time.
+  const pick = (variants: string[]) => variants[Math.floor(Math.random() * variants.length)];
+
   // 1. Payment Policy Queries — CASH ONLY
   if (q.includes('pay') || q.includes('payment') || q.includes('cash') || q.includes('esewa') || q.includes('khalti') || q.includes('card') || q.includes('wallet') || q.includes('bank')) {
     return {
-      reply: `Sarathi currently supports cash payment only. You can pay your rider directly in cash when you reach your destination. Digital payment options (eSewa, Khalti, and cards) will be introduced in a future update!`,
+      reply: pick([
+        `Sarathi currently supports cash payment only. You can pay your rider directly in cash when you reach your destination. Digital payment options (eSewa, Khalti, and cards) will be introduced in a future update!`,
+        `Right now Sarathi is cash-only — just settle up with your rider in person once you arrive. eSewa, Khalti, and card support are on the roadmap!`,
+      ]),
       recommendedRideIds: [],
     };
   }
@@ -373,4 +416,3 @@ function parseLocalAiFallback(
     recommendedRideIds: [],
   };
 }
-

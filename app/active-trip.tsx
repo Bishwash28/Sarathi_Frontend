@@ -173,7 +173,11 @@ export default function ActiveTripScreen() {
 
   const handleCallParticipant = () => {
     const isDriver = user?.role === 'driver';
-    const targetPhone = isDriver ? (currentBooking.passengerPhone || '+9779841234567') : (ride.phone || '+9779841234567');
+    const targetPhone = isDriver ? (currentBooking.passengerPhone || '') : (ride.phone || '');
+    if (!targetPhone) {
+      Alert.alert('No Contact Number', 'Phone number is unavailable for this user.');
+      return;
+    }
     makePhoneCall(targetPhone);
   };
 
@@ -561,7 +565,7 @@ export default function ActiveTripScreen() {
             />
             <View style={{ flex: 1 }}>
               <Text style={styles.driverName}>
-                {user?.role === 'driver' ? (currentBooking.passengerName || 'Passenger') : ride.riderName}
+                {user?.role === 'driver' ? (currentBooking.passengerName || 'User') : (ride.riderName || 'User')}
               </Text>
               <Text style={styles.vehicleInfo}>
                 {user?.role === 'driver' ? (currentBooking.passengerPhone || 'Passenger Contact') : `${ride.vehicleName} • ${ride.vehicleNumber}`}

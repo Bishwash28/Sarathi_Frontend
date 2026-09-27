@@ -169,6 +169,7 @@ export interface DriverMessage {
   receiverId?: string;
   passengerId?: string;
   riderId?: string;
+  roleContext?: string;
   isRead?: boolean;
 }
 
@@ -234,7 +235,7 @@ interface AppContextType {
   adminRejectKyc: (reason?: string) => Promise<{ success: boolean; error?: string }>;
   requestBooking: (ridePostId: string, passengerPickup?: string, passengerDropoff?: string, pickupCoords?: { lat: number; lng: number }, dropCoords?: { lat: number; lng: number }, riderOriginName?: string, riderDestName?: string, explicitRiderId?: string) => Promise<void>;
   cancelBooking: (bookingId: string) => void;
-  addDriverNotification: (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>) => void;
+  addDriverNotification: (item: Omit<DriverNotificationItem, 'id' | 'timestamp' | 'isRead'>, targetUserId?: string) => void;
   markNotificationAsRead: (id: string) => void;
   markAllNotificationsAsRead: () => void;
   clearNotification: (id: string) => void;
@@ -658,86 +659,86 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   useEffect(() => {
     const realtimeChannel = supabase.channel('sarathi-global-realtime');
 
+    const myIds = [userId, user?.id].filter(Boolean) as string[];
+
+    const isForMe = (recipientIds?: Array<string | undefined | null>): boolean => {
+      if (!recipientIds || recipientIds.length === 0) return false;
+      return recipientIds.some(id => id != null && myIds.includes(id));
+    };
+
     realtimeChannel
       .on('broadcast', { event: 'chat_message' }, ({ payload }) => {
-        if (payload && payload.rideId) {
-          const isParticipant =
-            !payload.senderId ||
-            !userId ||
-            payload.senderId === userId ||
-            payload.receiverId === userId ||
-            payload.passengerId === userId ||
-            payload.riderId === userId;
+        if (!payload || !payload.rideId) return;
+        if (!isForMe([payload.senderId, payload.receiverId, payload.passengerId, payload.riderId])) return;
 
-          if (!isParticipant) return;
-
-          setDriverMessages(prev => {
-            const existingList = prev[payload.rideId] || [];
-            const payloadTime = new Date(payload.timestamp).getTime();
-            const isDuplicate = existingList.some(
-              m => m.id === payload.id ||
-                ((m.senderId === payload.senderId || (m.senderName && payload.senderName && m.senderName === payload.senderName)) &&
-                  m.text === payload.text &&
-                  Math.abs(new Date(m.timestamp).getTime() - payloadTime) < 3000)
-            );
-            if (isDuplicate) return prev;
-            const updated = {
-              ...prev,
-              [payload.rideId]: [...existingList, { ...payload, timestamp: new Date(payload.timestamp) }],
-            };
-            saveChatMessagesToStorage(updated);
-            return updated;
-          });
-          startRiderChat(payload.rideId);
-        }
+        setDriverMessages(prev => {
+          const existingList = prev[payload.rideId] || [];
+          const payloadTime = new Date(payload.timestamp).getTime();
+          const isDuplicate = existingList.some(
+            m => m.id === payload.id ||
+              ((m.senderId === payload.senderId || (m.senderName && payload.senderName && m.senderName === payload.senderName)) &&
+                m.text === payload.text &&
+                Math.abs(new Date(m.timestamp).getTime() - payloadTime) < 3000)
+          );
+          if (isDuplicate) return prev;
+          const updated = {
+            ...prev,
+            [payload.rideId]: [...existingList, { ...payload, timestamp: new Date(payload.timestamp) }],
+          };
+          saveChatMessagesToStorage(updated);
+          return updated;
+        });
+        startRiderChat(payload.rideId);
       })
       .on('broadcast', { event: 'ride_request' }, ({ payload }) => {
-        if (payload) {
-          if (payload.booking) {
-            setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
-          }
-          if (payload.riderNotification) {
-            setDriverNotifications(prev => [payload.riderNotification, ...prev.filter(n => n.id !== payload.riderNotification.id)]);
-          }
-          if (payload.passengerNotification) {
-            setDriverNotifications(prev => [payload.passengerNotification, ...prev.filter(n => n.id !== payload.passengerNotification.id)]);
-          }
-          if (payload.rideId) {
-            setActiveChatRideIds(prev => (prev.includes(payload.rideId) ? prev : [...prev, payload.rideId]));
-          }
+        if (!payload) return;
+        if (!isForMe(payload.recipientIds)) return;
+
+        if (payload.booking) {
+          setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
+        }
+        if (payload.riderNotification && payload.riderNotification.recipientId && myIds.includes(payload.riderNotification.recipientId)) {
+          setDriverNotifications(prev => [payload.riderNotification, ...prev.filter(n => n.id !== payload.riderNotification.id)]);
+        }
+        if (payload.passengerNotification && payload.passengerNotification.recipientId && myIds.includes(payload.passengerNotification.recipientId)) {
+          setDriverNotifications(prev => [payload.passengerNotification, ...prev.filter(n => n.id !== payload.passengerNotification.id)]);
+        }
+        if (payload.rideId) {
+          setActiveChatRideIds(prev => (prev.includes(payload.rideId) ? prev : [...prev, payload.rideId]));
         }
       })
       .on('broadcast', { event: 'driver_notification' }, ({ payload }) => {
-        if (payload) {
-          setDriverNotifications(prev => [payload, ...prev.filter(n => n.id !== payload.id)]);
-        }
+        if (!payload) return;
+        if (!payload.recipientId || !myIds.includes(payload.recipientId)) return;
+        setDriverNotifications(prev => [payload, ...prev.filter(n => n.id !== payload.id)]);
       })
       .on('broadcast', { event: 'ride_accepted' }, ({ payload }) => {
-        if (payload && payload.booking) {
+        if (!payload || !payload.booking) return;
+        if (!isForMe(payload.recipientIds)) return;
+        setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
+        saveActiveBookingToStorage(payload.booking);
+      })
+      .on('broadcast', { event: 'booking_status_change' }, ({ payload }) => {
+        if (!payload) return;
+        if (!isForMe(payload.recipientIds)) return;
+
+        if (payload.booking) {
           setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
           saveActiveBookingToStorage(payload.booking);
         }
-      })
-      .on('broadcast', { event: 'booking_status_change' }, ({ payload }) => {
-        if (payload) {
-          if (payload.booking) {
-            setBookings(prev => [...prev.filter(b => b.id !== payload.booking.id), payload.booking]);
-            saveActiveBookingToStorage(payload.booking);
-          }
-          if (payload.driverNotification) {
-            setDriverNotifications(prev => [payload.driverNotification, ...prev.filter(n => n.id !== payload.driverNotification.id)]);
-            triggerPushNotification(payload.driverNotification.title, payload.driverNotification.description, {
-              screen: payload.driverNotification.targetScreen,
-              params: payload.driverNotification.targetParams,
-            });
-          }
-          if (payload.passengerNotification) {
-            setDriverNotifications(prev => [payload.passengerNotification, ...prev.filter(n => n.id !== payload.passengerNotification.id)]);
-            triggerPushNotification(payload.passengerNotification.title, payload.passengerNotification.description, {
-              screen: payload.passengerNotification.targetScreen,
-              params: payload.passengerNotification.targetParams,
-            });
-          }
+        if (payload.driverNotification && payload.driverNotification.recipientId && myIds.includes(payload.driverNotification.recipientId)) {
+          setDriverNotifications(prev => [payload.driverNotification, ...prev.filter(n => n.id !== payload.driverNotification.id)]);
+          triggerPushNotification(payload.driverNotification.title, payload.driverNotification.description, {
+            screen: payload.driverNotification.targetScreen,
+            params: payload.driverNotification.targetParams,
+          });
+        }
+        if (payload.passengerNotification && payload.passengerNotification.recipientId && myIds.includes(payload.passengerNotification.recipientId)) {
+          setDriverNotifications(prev => [payload.passengerNotification, ...prev.filter(n => n.id !== payload.passengerNotification.id)]);
+          triggerPushNotification(payload.passengerNotification.title, payload.passengerNotification.description, {
+            screen: payload.passengerNotification.targetScreen,
+            params: payload.passengerNotification.targetParams,
+          });
         }
       })
       .subscribe();
@@ -745,7 +746,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     return () => {
       supabase.removeChannel(realtimeChannel);
     };
-  }, []);
+  }, [userId]);
 
   // ── NATIVE PUSH NOTIFICATIONS SETUP & TAP NAVIGATION LISTENER ──
   useEffect(() => {
@@ -811,7 +812,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         .order('created_at', { ascending: false });
 
       if (error) {
-        console.warn('[fetchActiveRides] Error:', error.message);
+        if (!error.message?.includes('522')) {
+          console.warn('[fetchActiveRides] Error:', error.message);
+        }
         return rides;
       }
 
@@ -1533,8 +1536,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       throw new Error('ACTIVE_BOOKING_EXISTS: You already have an active ride request or ongoing trip. Please complete or cancel your current ride first.');
     }
 
-    const passengerName = user?.name || 'Sarathi Passenger';
-    const passengerPhone = user?.phone || '+9779841234567';
+    const passengerName = user?.name || 'User';
+    const passengerPhone = user?.phone || '';
+    const passengerRating = user?.rating || 0;
     const passengerPhoto = user?.photo || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80';
 
     // Generate random 4-digit OTPs for Pickup and Completion
@@ -1572,7 +1576,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setBookings(prev => [...prev.filter(b => b.id !== newBooking.id), newBooking]);
     await saveActiveBookingToStorage(newBooking);
 
-    const riderNotif: DriverNotificationItem = {
+    const riderNotif: DriverNotificationItem & { recipientId?: string } = {   // ← type changed
       id: `dn-${Date.now()}-driver`,
       type: 'ride_request',
       title: 'New Ride Request Incoming! 📍',
@@ -1592,9 +1596,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         passengerPickup,
         passengerDropoff,
       },
+      recipientId: targetRiderUserId,   // ← new line added
     };
 
-    const passengerNotif: DriverNotificationItem = {
+    const passengerNotif: DriverNotificationItem & { recipientId?: string } = {   // ← type changed
       id: `dn-${Date.now()}-passenger`,
       type: 'request_status',
       title: 'Booking Request Sent 🚀',
@@ -1606,6 +1611,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       targetRole: 'passenger',
       targetScreen: '/booking-status',
       targetParams: { rideId: ridePostId },
+      recipientId: user?.id || activeUserId,   // ← new line added
     };
 
     startRiderChat(ridePostId);
@@ -1680,6 +1686,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         riderNotification: riderNotif,
         passengerNotification: passengerNotif,
         rideId: ridePostId,
+        recipientIds: [targetRiderUserId, user?.id || activeUserId].filter(Boolean),   // ← new line added
       },
     });
 
@@ -1687,15 +1694,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   };
 
   /** Driver: accept a pending booking */
+  /** Driver: accept a pending booking */
   const acceptBooking = async (bookingId: string): Promise<void> => {
     const targetBooking = bookings.find(b => b.id === bookingId);
     if (!targetBooking) return;
     const targetRide = rides.find(r => r.id === targetBooking.rideId);
 
-    // Authorization check: Only ride owner can accept
     const isOwner = Boolean(
       user?.role === 'driver' &&
       ((targetRide?.riderId && user?.id && targetRide.riderId === user.id) ||
+        (targetBooking.driverId && user?.id && targetBooking.driverId === user.id) ||
         (targetRide?.riderName && user?.name && targetRide.riderName === user.name) ||
         (targetRide?.phone && user?.phone && targetRide.phone === user.phone))
     );
@@ -1719,28 +1727,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     setBookings(prev => prev.map(b => b.id === bookingId ? updatedBooking : b));
     await saveActiveBookingToStorage(updatedBooking);
 
-    // Reduce seat count on matching ride
     setRides(prev => prev.map(r => r.id === targetBooking.rideId ? { ...r, seatsLeft: Math.max(0, r.seatsLeft - 1) } : r));
-
-    // Send Acceptance notification to Passenger
-    addDriverNotification({
-      type: 'request_status',
-      title: 'Ride Request Accepted! 🎉',
-      description: `The rider accepted your trip from ${targetBooking.passengerPickup} to ${targetBooking.passengerDropoff}. Your Pickup OTP is ${targetBooking.pickupOtp}.`,
-      iconName: 'checkmark-circle-outline',
-      iconColor: '#16A34A',
-      targetRole: 'passenger',
-      targetScreen: '/active-trip',
-      targetParams: { rideId: targetBooking.rideId },
-    });
 
     if (targetBooking.rideId) {
       startRiderChat(targetBooking.rideId);
     }
 
-    // Persist booking update to Supabase DB
     try {
-      await supabase.from('bookings').update({ status: 'accepted', lifecycle_state: 'waiting_for_pickup' }).eq('id', bookingId);
+      await supabase.from('ride_requests').update({ status: 'accepted', accepted_at: new Date().toISOString() }).eq('id', bookingId);
       if (targetBooking.rideId) {
         await supabase.from('rides').update({ available_seats: Math.max(0, (targetRide?.seatsLeft || 1) - 1) }).eq('id', targetBooking.rideId);
       }
@@ -1748,21 +1742,34 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       console.warn('[acceptBooking] Supabase notice:', e);
     }
 
-    // Broadcast WebSocket event over Supabase Realtime so BOTH users redirect live to /active-trip!
     supabase.channel('sarathi-global-realtime').send({
       type: 'broadcast',
       event: 'ride_accepted',
-      payload: { booking: updatedBooking }
+      payload: {
+        booking: updatedBooking,
+        recipientIds: [updatedBooking.passengerId, updatedBooking.driverId, user?.id].filter(Boolean),
+      }
     });
   };
+
 
   /** Driver: verify pickup OTP */
   const verifyPickupOtp = (bookingId: string, otp: string): { success: boolean; error?: string } => {
     const target = bookings.find(b => b.id === bookingId);
     if (!target) return { success: false, error: 'Booking not found' };
 
+    const targetRide = rides.find(r => r.id === target.rideId);
+
+    const isRideOwner = Boolean(
+      user?.id && ((target.driverId && target.driverId === user.id) || (targetRide?.riderId && targetRide.riderId === user.id))
+    );
+    if (!isRideOwner) {
+      console.warn('[verifyPickupOtp] Unauthorized attempt on a ride that is not yours');
+      return { success: false, error: 'You are not authorized to verify this ride.' };
+    }
+
     const cleanInput = otp.trim();
-    if (cleanInput === target.pickupOtp || cleanInput === '4821' || cleanInput === '1234') {
+    if (cleanInput === target.pickupOtp) {
       const updatedBooking: Booking = {
         ...target,
         status: 'ongoing',
@@ -1773,13 +1780,15 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       setBookings(prev => prev.map(b => (b.id === bookingId ? updatedBooking : b)));
       saveActiveBookingToStorage(updatedBooking);
 
-      const targetRide = rides.find(r => r.id === target.rideId);
+      supabase.from('ride_requests').update({ status: 'ongoing', started_at: new Date().toISOString() }).eq('id', bookingId).then(({ error }) => {
+        if (error) console.warn('[verifyPickupOtp] ride_requests update warning:', error.message);
+      });
+
       const riderName = targetRide?.riderName || 'Driver';
       const passengerName = target.passengerName || 'Passenger';
       const dropoff = target.passengerDropoff || 'Destination';
 
-      // Driver notification: Ride Started Confirmation
-      const driverStartedNotif: DriverNotificationItem = {
+      const driverStartedNotif: DriverNotificationItem & { recipientId?: string } = {
         id: `dn-started-driver-${Date.now()}`,
         type: 'request_status',
         title: 'Ride Started Confirmation 🚀',
@@ -1791,10 +1800,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetRole: 'driver',
         targetScreen: '/active-trip',
         targetParams: { rideId: target.rideId, bookingId: target.id },
+        recipientId: target.driverId || targetRide?.riderId || user?.id,
       };
 
-      // Passenger notification: Ride Started
-      const passengerStartedNotif: DriverNotificationItem = {
+      const passengerStartedNotif: DriverNotificationItem & { recipientId?: string } = {
         id: `dn-started-pass-${Date.now()}`,
         type: 'request_status',
         title: 'Ride Started 🚀',
@@ -1806,11 +1815,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetRole: 'passenger',
         targetScreen: '/active-trip',
         targetParams: { rideId: target.rideId, bookingId: target.id },
+        recipientId: target.passengerId,
       };
 
-      addDriverNotification(driverStartedNotif);
-      addDriverNotification(passengerStartedNotif);
-
+      // Broadcast status change to real-time subscribers
       supabase.channel('sarathi-global-realtime').send({
         type: 'broadcast',
         event: 'booking_status_change',
@@ -1818,6 +1826,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           booking: updatedBooking,
           driverNotification: driverStartedNotif,
           passengerNotification: passengerStartedNotif,
+          recipientIds: [target.driverId, target.passengerId, targetRide?.riderId].filter(Boolean),
         }
       });
 
@@ -1834,8 +1843,18 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const target = bookings.find(b => b.id === bookingId);
     if (!target) return { success: false, error: 'Booking not found' };
 
+    const targetRide = rides.find(r => r.id === target.rideId);
+
+    const isRideOwner = Boolean(
+      user?.id && ((target.driverId && target.driverId === user.id) || (targetRide?.riderId && targetRide.riderId === user.id))
+    );
+    if (!isRideOwner) {
+      console.warn('[verifyCompletionOtp] Unauthorized attempt on a ride that is not yours');
+      return { success: false, error: 'You are not authorized to verify this ride.' };
+    }
+
     const cleanInput = otp.trim();
-    if (cleanInput === target.completionOtp || cleanInput === '7392' || cleanInput === '5678') {
+    if (cleanInput === target.completionOtp) {
       const updatedBooking: Booking = {
         ...target,
         status: 'completed',
@@ -1853,7 +1872,6 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         setRides(prev => prev.map(r => (r.id === target.rideId ? { ...r, status: 'completed' } : r)));
       }
 
-      // NEW: stamp ride_requests as completed right away, independent of payment step
       supabase.from('ride_requests').update({
         status: 'completed',
         completed_at: new Date().toISOString(),
@@ -1863,8 +1881,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
       const passengerName = target.passengerName || 'Passenger';
 
-      // Driver notification: Ride Completed
-      const driverCompletedNotif: DriverNotificationItem = {
+      const driverCompletedNotif: DriverNotificationItem & { recipientId?: string } = {
         id: `dn-completed-driver-${Date.now()}`,
         type: 'request_status',
         title: 'Ride Completed 🎉',
@@ -1876,10 +1893,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetRole: 'driver',
         targetScreen: '/active-trip',
         targetParams: { rideId: target.rideId, bookingId: target.id },
+        recipientId: target.driverId || targetRide?.riderId || user?.id,
       };
 
-      // Passenger notification: Ride Completed
-      const passengerCompletedNotif: DriverNotificationItem = {
+      const passengerCompletedNotif: DriverNotificationItem & { recipientId?: string } = {
         id: `dn-completed-pass-${Date.now()}`,
         type: 'request_status',
         title: 'Ride Completed 🎉',
@@ -1891,11 +1908,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         targetRole: 'passenger',
         targetScreen: '/active-trip',
         targetParams: { rideId: target.rideId, bookingId: target.id },
+        recipientId: target.passengerId,
       };
 
-      addDriverNotification(driverCompletedNotif);
-      addDriverNotification(passengerCompletedNotif);
-
+      // Broadcast completion status change to subscribers
       supabase.channel('sarathi-global-realtime').send({
         type: 'broadcast',
         event: 'booking_status_change',
@@ -1903,6 +1919,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
           booking: updatedBooking,
           driverNotification: driverCompletedNotif,
           passengerNotification: passengerCompletedNotif,
+          recipientIds: [target.driverId, target.passengerId, targetRide?.riderId].filter(Boolean),
         }
       });
 
@@ -1919,6 +1936,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     const target = bookings.find(b => b.id === bookingId);
     if (!target) return;
 
+    const targetRide = rides.find(r => r.id === target.rideId);
+
+    const isRideOwner = Boolean(
+      user?.id && ((target.driverId && target.driverId === user.id) || (targetRide?.riderId && targetRide.riderId === user.id))
+    );
+    if (!isRideOwner) {
+      console.warn('[triggerCompletionOtpPrompt] Unauthorized attempt on a ride that is not yours');
+      return;
+    }
+
     const updatedBooking: Booking = {
       ...target,
       lifecycleState: 'completion_otp_required',
@@ -1930,13 +1957,25 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     supabase.channel('sarathi-global-realtime').send({
       type: 'broadcast',
       event: 'booking_status_change',
-      payload: { booking: updatedBooking }
+      payload: {
+        booking: updatedBooking,
+        recipientIds: [target.driverId, target.passengerId, targetRide?.riderId].filter(Boolean),
+      }
     });
   };
 
   /** Payment — mark complete */
   const processPayment = (_bookingId: string, _method: 'cash' | 'khalti' | 'esewa'): { success: boolean; error?: string } => {
     const target = bookings.find(b => b.id === _bookingId);
+
+    const isParticipant = Boolean(
+      target && user?.id && (target.passengerId === user.id || target.driverId === user.id)
+    );
+    if (!isParticipant) {
+      console.warn('[processPayment] Unauthorized attempt on a booking that is not yours');
+      return { success: false, error: 'Not authorized for this booking.' };
+    }
+
     if (target?.rideId) {
       supabase.from('rides').update({ status: 'completed' }).eq('id', target.rideId).then(({ error }) => {
         if (error) console.error('[processPayment] Supabase ride update error:', error.message);
@@ -2013,14 +2052,27 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
   /** Cancel a booking */
   const cancelBooking = async (bookingId: string): Promise<void> => {
     const targetBooking = bookings.find(b => b.id === bookingId);
+    const targetRide = rides.find(r => r.id === targetBooking?.rideId);
     const isDriver = user?.role === 'driver';
+
+    const isParticipant = Boolean(
+      targetBooking && user?.id && (
+        targetBooking.passengerId === user.id ||
+        targetBooking.driverId === user.id ||
+        (targetRide?.riderId && targetRide.riderId === user.id)
+      )
+    );
+    if (!isParticipant) {
+      console.warn('[cancelBooking] Unauthorized attempt to cancel a booking that is not yours');
+      return;
+    }
 
     const updatedBooking: Booking = {
       ...(targetBooking || ({ id: bookingId } as any)),
       status: 'cancelled',
       lifecycleState: 'cancelled',
-      cancelledBy: isDriver ? 'rider' : 'passenger', // NEW
-      cancelledAt: new Date(), // NEW
+      cancelledBy: isDriver ? 'rider' : 'passenger',
+      cancelledAt: new Date(),
     };
 
     setBookings(prev =>
@@ -2029,11 +2081,9 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
     saveActiveBookingToStorage(null);
 
     const passengerName = targetBooking?.passengerName || 'Passenger';
-    const targetRide = rides.find(r => r.id === targetBooking?.rideId);
     const riderName = targetRide?.riderName || 'Driver';
 
-    // Driver notification: Passenger Cancelled
-    const driverCancelNotif: DriverNotificationItem = {
+    const driverCancelNotif: DriverNotificationItem & { recipientId?: string } = {
       id: `dn-cancel-driver-${Date.now()}`,
       type: 'request_status',
       title: isDriver ? 'Ride Cancelled ❌' : 'Passenger Cancelled Trip ⚠️',
@@ -2046,10 +2096,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       iconColor: '#DC2626',
       targetRole: 'driver',
       targetScreen: '/notifications',
+      recipientId: targetRide?.riderId || targetBooking?.driverId,
     };
 
-    // Passenger notification: Driver Cancelled
-    const passengerCancelNotif: DriverNotificationItem = {
+    const passengerCancelNotif: DriverNotificationItem & { recipientId?: string } = {
       id: `dn-cancel-pass-${Date.now()}`,
       type: 'request_status',
       title: isDriver ? 'Driver Cancelled the Ride ❌' : 'Ride Cancelled ⚠️',
@@ -2062,18 +2112,16 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       iconColor: '#DC2626',
       targetRole: 'passenger',
       targetScreen: '/notifications',
+      recipientId: targetBooking?.passengerId,
     };
 
-    addDriverNotification(driverCancelNotif, targetRide?.riderId);
-    addDriverNotification(passengerCancelNotif, targetBooking?.passengerId);
-
+    // Remove duplicate notification dispatch on cancel/decline
     try {
       await supabase.from('ride_requests').update({
         status: 'cancelled',
-        cancelled_by: isDriver ? 'rider' : 'passenger', // NEW
-        cancelled_at: new Date().toISOString(),          // NEW
+        cancelled_by: isDriver ? 'rider' : 'passenger',
+        cancelled_at: new Date().toISOString(),
       }).eq('id', bookingId);
-      await supabase.from('bookings').update({ status: 'cancelled', lifecycle_state: 'cancelled' }).eq('id', bookingId);
     } catch (e) { }
 
     supabase.channel('sarathi-global-realtime').send({
@@ -2083,10 +2131,10 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         booking: updatedBooking,
         driverNotification: driverCancelNotif,
         passengerNotification: passengerCancelNotif,
+        recipientIds: [targetRide?.riderId, targetBooking?.driverId, targetBooking?.passengerId].filter(Boolean),
       }
     });
   };
-
   /** Driver rejects a booking */
   const declineBooking = async (bookingId: string): Promise<void> => {
     const targetBooking = bookings.find(b => b.id === bookingId);
@@ -2115,6 +2163,8 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       ...targetBooking,
       status: 'cancelled',
       lifecycleState: 'cancelled',
+      cancelledBy: 'rider',
+      cancelledAt: new Date(),
     };
 
     setBookings(prev => prev.map(b => b.id === bookingId ? updatedBooking : b));
@@ -2134,14 +2184,14 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       iconColor: '#DC2626',
       targetRole: 'passenger',
       targetScreen: '/search-ride',
-      targetParams: { rideId: targetBooking.rideId },
+      targetParams: { rideId: targetBooking.rideId, bookingId: targetBooking.id },
     };
 
     // Driver notification: Ride Request Declined
     const driverDeclineNotif: DriverNotificationItem = {
       id: `dn-decline-driver-${Date.now()}`,
       type: 'request_status',
-      title: 'Ride Offer Cancelled ❌',
+      title: 'Ride Request Declined ❌',
       description: `You declined the request from ${passengerName}.`,
       timestamp: new Date(),
       isRead: false,
@@ -2149,13 +2199,19 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       iconColor: '#64748B',
       targetRole: 'driver',
       targetScreen: '/notifications',
+      targetParams: { rideId: targetBooking.rideId, bookingId: targetBooking.id },
     };
 
-    addDriverNotification(passengerDeclineNotif, targetBooking.passengerId);
-    addDriverNotification(driverDeclineNotif, user?.id);
+    if (targetBooking.passengerId) {
+      addDriverNotification(passengerDeclineNotif, targetBooking.passengerId);
+    }
 
     try {
-      await supabase.from('ride_requests').update({ status: 'cancelled' }).eq('id', bookingId);
+      await supabase.from('ride_requests').update({
+        status: 'cancelled',
+        cancelled_by: 'rider',
+        cancelled_at: new Date().toISOString(),
+      }).eq('id', bookingId);
       await supabase.from('bookings').update({ status: 'cancelled', lifecycle_state: 'cancelled' }).eq('id', bookingId);
     } catch (err) {
       console.warn('[declineBooking] Supabase update notice:', err);
@@ -2168,6 +2224,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         booking: updatedBooking,
         passengerNotification: passengerDeclineNotif,
         driverNotification: driverDeclineNotif,
+        recipientIds: [targetBooking.passengerId, targetRide?.riderId, user?.id].filter(Boolean),
       }
     });
   };
@@ -2202,6 +2259,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       : (ride?.riderId || existingRiderId);
 
     const receiverId = isDriver ? passengerId : riderId;
+    const roleContext = 'RIDER_PASSENGER';
 
     const userMsg: DriverMessage = {
       id: `dm-${Date.now()}`,
@@ -2216,6 +2274,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       receiverId,
       passengerId,
       riderId,
+      roleContext,
     };
 
     setDriverMessages(prev => {
@@ -2292,6 +2351,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         receiver_id: receiverId,
         passenger_id: passengerId,
         rider_id: riderId,
+        role_context: roleContext,
         sender_role: senderRole,
         message_text: text,
         is_read: false,
@@ -2303,6 +2363,20 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
         }
         fetchUserConversations();
       });
+
+    // Also upsert into conversations table to track the conversation role_context, rider_id & passenger_id
+    if (riderId && passengerId) {
+      supabase
+        .from('conversations')
+        .upsert({
+          ride_id: rideId,
+          rider_id: riderId,
+          passenger_id: passengerId,
+          role_context: roleContext,
+          updated_at: new Date().toISOString(),
+        }, { onConflict: 'ride_id' })
+        .then(() => null, () => null);
+    }
   };
 
   const fetchUserConversations = async (): Promise<Record<string, DriverMessage[]>> => {
@@ -2358,6 +2432,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
             receiverId: row.receiver_id,
             passengerId: row.passenger_id,
             riderId: row.rider_id,
+            roleContext: row.role_context || 'RIDER_PASSENGER',
             isRead: row.is_read !== false,
           };
 
@@ -2400,10 +2475,31 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
 
   const unreadChatMessageCount = useMemo(() => {
     if (!userId) return 0;
+    const isDriverMode = user?.role === 'driver';
     let count = 0;
     Object.keys(driverMessages).forEach(rideId => {
       if (deletedChatRideIds.includes(rideId)) return;
       const msgs = driverMessages[rideId] || [];
+      if (msgs.length === 0) return;
+
+      const existingRide = rides.find(r => r.id === rideId);
+      const booking = bookings.find(b => b.rideId === rideId);
+
+      const convRiderId = existingRide?.riderId ||
+        msgs.find(m => m.riderId)?.riderId ||
+        msgs.find(m => m.sender === 'driver')?.senderId;
+
+      const convPassengerId = booking?.passengerId ||
+        msgs.find(m => m.passengerId)?.passengerId ||
+        msgs.find(m => m.sender === 'user')?.senderId;
+
+      // Filter unread message count based on active role context
+      const isVisibleInCurrentRole = isDriverMode
+        ? (convRiderId === userId || convRiderId === user?.id)
+        : (convPassengerId === userId || convPassengerId === user?.id);
+
+      if (!isVisibleInCurrentRole) return;
+
       msgs.forEach(m => {
         if (m.receiverId === userId && m.isRead === false) {
           count++;
@@ -2411,7 +2507,7 @@ export const AppProvider: React.FC<{ children: React.ReactNode }> = ({ children 
       });
     });
     return count;
-  }, [driverMessages, userId, deletedChatRideIds]);
+  }, [driverMessages, userId, deletedChatRideIds, user?.role, rides, bookings]);
 
   const sendChatMessage = (text: string) => {
     const userMsg: Message = {

@@ -7,7 +7,7 @@ import { Colors } from '../../constants/Colors';
 import { Booking, Ride, useApp } from '../../context/AppContext';
 
 export default function ActivityScreen() {
-  const { bookings, rides, user, updateRide, deleteRide, fetchUserBookings, fetchActiveRides } = useApp();
+  const { bookings, rides, user, updateRide, deleteRide, fetchUserBookings, fetchActiveRides, acceptBooking, declineBooking } = useApp();
   const [activeSection, setActiveSection] = useState<'ongoing' | 'history' | 'my_offers'>('ongoing');
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoading, setIsLoading] = useState(true);
@@ -163,13 +163,19 @@ export default function ActivityScreen() {
     const pickupDropText = `${item.passengerPickup || 'Pickup'} ➔ ${item.passengerDropoff || 'Drop-off'}`;
     const farePrice = item.farePrice ?? 150;
 
+    const isCompleted = item.status === 'completed';
+    const isCancelled = item.status === 'cancelled';
+
     return (
-      <TouchableOpacity
+      <View
         key={item.id}
-        style={styles.activityCard}
-        onPress={() => !isUserRider && handleBookingPress(item)}
-        activeOpacity={isUserRider ? 1.0 : 0.8}
+        style={[
+          styles.activityCard,
+          isCompleted && styles.completedActivityCard,
+          isCancelled && styles.cancelledActivityCard,
+        ]}
       >
+        {/* Top Header Row */}
         <View style={styles.cardHeader}>
           <Image source={{ uri: avatarUrl }} style={styles.driverPhoto} />
           <View style={styles.driverInfo}>
@@ -177,77 +183,125 @@ export default function ActivityScreen() {
               <Text style={styles.driverName}>{titleName}</Text>
               <View style={[styles.roleTagBadge, isUserRider ? { backgroundColor: '#DCFCE7' } : { backgroundColor: '#EFF6FF' }]}>
                 <Text style={[styles.roleTagBadgeText, isUserRider ? { color: '#166534' } : { color: '#1E40AF' }]}>
-                  {isUserRider ? 'RIDER' : 'PASSENGER'}
+                  {isUserRider ? 'PASSENGER' : 'RIDER'}
                 </Text>
               </View>
             </View>
             <Text style={styles.vehicleText}>{subText}</Text>
           </View>
-          <View style={[styles.statusBadge, { backgroundColor: `${getStatusColor(item.status)}15` }]}>
-            <Text style={[styles.statusText, { color: getStatusColor(item.status) }]}>
+          <View style={[
+            styles.statusBadge,
+            isCompleted ? { backgroundColor: '#DCFCE7' } : isCancelled ? { backgroundColor: '#FEE2E2' } : { backgroundColor: `${getStatusColor(item.status)}12` }
+          ]}>
+            <Text style={[
+              styles.statusText,
+              isCompleted ? { color: '#15803D' } : isCancelled ? { color: '#DC2626' } : { color: getStatusColor(item.status) }
+            ]}>
               {item.status.toUpperCase()}
             </Text>
           </View>
         </View>
 
-        {/* Rider's full route — always shown */}
-        <View style={styles.routeContainer}>
-          <Ionicons name="navigate-circle-outline" size={16} color={Colors.textMuted} />
-          <Text style={styles.routeText} numberOfLines={1}>{originDestText}</Text>
+        {/* Compact Route Pills Container */}
+        <View style={styles.compactRouteWrapper}>
+          <View style={[styles.routePillBox, isCompleted ? styles.completedRoutePill : isCancelled ? styles.cancelledRoutePill : null]}>
+            <Ionicons name="navigate-circle-outline" size={13} color={isCompleted ? '#16A34A' : isCancelled ? '#EF4444' : '#9333EA'} />
+            <Text style={[styles.routePillText, isCancelled && { color: '#991B1B' }]} numberOfLines={1}>{originDestText}</Text>
+          </View>
+
+          <View style={[styles.routePillBox, isCompleted ? styles.completedRoutePill : isCancelled ? styles.cancelledRoutePill : null]}>
+            <Ionicons name="location-outline" size={13} color={isCompleted ? '#059669' : isCancelled ? '#DC2626' : '#DB2777'} />
+            <Text style={[styles.routePillText, isCancelled && { color: '#991B1B' }]} numberOfLines={1}>{pickupDropText}</Text>
+          </View>
         </View>
 
-        {/* Passenger's specific segment — always shown, clearly labeled as distinct from the line above */}
-        <View style={[styles.routeContainer, { marginTop: -4 }]}>
-          <Ionicons name="location-outline" size={16} color={Colors.textMuted} />
-          <Text style={styles.routeText} numberOfLines={1}>{pickupDropText}</Text>
-        </View>
-
-        {/* Cancelled-by line — only for cancelled history entries */}
-        {item.status === 'cancelled' && item.cancelledBy && (
+        {/* Cancelled-by note if applicable */}
+        {isCancelled && item.cancelledBy && (
           <Text style={styles.cancelledByText}>
             Cancelled by {item.cancelledBy === 'rider' ? 'Rider' : 'Passenger'}
           </Text>
         )}
 
+        {/* Bottom Metadata Bar */}
         <View style={styles.cardFooter}>
           <Text style={styles.dateText}>
-            {item.status === 'completed' && item.completedAt
-              ? `Completed: ${new Date(item.completedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
-              : item.status === 'cancelled' && item.cancelledAt
-                ? `Cancelled: ${new Date(item.cancelledAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+            {isCompleted && item.completedAt
+              ? `${new Date(item.completedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+              : isCancelled && item.cancelledAt
+                ? `${new Date(item.cancelledAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
                 : new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
           </Text>
-          <Text style={styles.priceText}>NPR {farePrice}</Text>
+          <Text style={[styles.priceText, isCancelled && { color: '#94A3B8', textDecorationLine: 'line-through' }]}>NPR {farePrice}</Text>
         </View>
 
-        {(item.status === 'accepted' || item.status === 'ongoing') ? (
+        {item.status === 'pending' && isUserRider ? (
+          <View style={styles.riderActionRow}>
+            <TouchableOpacity
+              style={styles.declineActionBtn}
+              onPress={() => {
+                declineBooking(item.id);
+                Alert.alert('Request Declined ✕', 'You have declined this passenger request.');
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="close-circle-outline" size={15} color="#DC2626" />
+              <Text style={styles.declineActionBtnText}>Decline</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.acceptActionBtn}
+              onPress={() => {
+                acceptBooking(item.id);
+                router.push({
+                  pathname: '/active-trip',
+                  params: { rideId: item.rideId, bookingId: item.id }
+                });
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="checkmark-circle-outline" size={15} color="#FFF" />
+              <Text style={styles.acceptActionBtnText}>Accept Request</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (item.status === 'accepted' || item.status === 'ongoing') ? (
           <TouchableOpacity
             style={styles.openLiveTripBtn}
             onPress={() => router.push({ pathname: '/active-trip', params: { rideId: item.rideId } })}
           >
-            <Ionicons name="navigate-circle" size={18} color="#FFF" />
-            <Text style={styles.openLiveTripBtnText}>Open Live Trip Tracking Screen →</Text>
+            <Ionicons name="navigate-circle" size={16} color="#FFF" />
+            <Text style={styles.openLiveTripBtnText}>Open Live Trip Tracking →</Text>
           </TouchableOpacity>
         ) : (!isUserRider && item.status === 'pending') && (
           <View style={styles.trackingHint}>
-            <Ionicons name="navigate-circle" size={16} color={Colors.accent} />
+            <Ionicons name="navigate-circle" size={14} color={Colors.accent} />
             <Text style={styles.trackingHintText}>View waiting queue</Text>
           </View>
         )}
-      </TouchableOpacity>
+      </View>
     );
   };
 
   const renderOfferCard = (ride: Ride) => (
-    <View key={ride.id} style={styles.offerCard}>
+    <View key={ride.id} style={styles.activityCard}>
       <View style={styles.cardHeader}>
         <View style={{ flex: 1 }}>
           <Text style={styles.driverName} numberOfLines={1}>{ride.route.join(' → ')}</Text>
           <Text style={styles.vehicleText}>{ride.vehicleName} • {ride.seatsLeft} seat(s) left</Text>
         </View>
+        <View style={[styles.statusBadge, { backgroundColor: '#DCFCE7' }]}>
+          <Text style={[styles.statusText, { color: '#166534' }]}>ACTIVE OFFER</Text>
+        </View>
+      </View>
+
+      <View style={styles.routePillBox}>
+        <Ionicons name="time-outline" size={15} color="#2563EB" />
+        <Text style={styles.routePillText}>Departure: {ride.departureTime}</Text>
+      </View>
+
+      <View style={styles.cardFooter}>
+        <Text style={styles.dateText}>Offer ID: #{ride.id.slice(0, 8)}</Text>
         <Text style={styles.priceText}>NPR {ride.price}</Text>
       </View>
-      <Text style={styles.dateText}>Departure: {ride.departureTime}</Text>
 
       <View style={styles.offerActionsRow}>
         <TouchableOpacity style={styles.editBtn} onPress={() => handleOpenEditRide(ride)}>
@@ -457,33 +511,40 @@ const styles = StyleSheet.create({
     backgroundColor: Colors.accent,
   },
   listScroll: {
-    paddingHorizontal: 20,
-    paddingBottom: 20,
+    paddingHorizontal: 16,
+    paddingBottom: 110,
   },
   activityCard: {
-    backgroundColor: Colors.background,
-    paddingVertical: 16,
-    paddingHorizontal: 4,
-    marginBottom: 8,
-    borderBottomWidth: 1,
-    borderBottomColor: '#F1F5F9',
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
   },
   cardHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 12,
+    marginBottom: 8,
   },
   driverPhoto: {
-    width: 40,
-    height: 40,
-    borderRadius: 20,
-    marginRight: 12,
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
   },
   driverInfo: {
     flex: 1,
   },
   driverName: {
-    fontSize: 15,
+    fontSize: 14,
     fontWeight: 'bold',
     color: Colors.textPrimary,
   },
@@ -495,12 +556,12 @@ const styles = StyleSheet.create({
   roleTagBadgeText: {
     fontSize: 9,
     fontWeight: '800',
-    letterSpacing: 0.5,
+    letterSpacing: 0.4,
   },
   vehicleText: {
-    fontSize: 12,
+    fontSize: 11,
     color: Colors.textMuted,
-    marginTop: 2,
+    marginTop: 1,
   },
   statusBadge: {
     paddingVertical: 4,
@@ -508,35 +569,59 @@ const styles = StyleSheet.create({
     borderRadius: 6,
   },
   statusText: {
-    fontSize: 11,
-    fontWeight: 'bold',
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
   },
-  routeContainer: {
+  completedActivityCard: {
+    borderColor: '#D1FAE5',
+    backgroundColor: '#FAFDFB',
+  },
+  cancelledActivityCard: {
+    borderColor: '#FEE2E2',
+    backgroundColor: '#FFFAFA',
+  },
+  compactRouteWrapper: {
+    gap: 5,
+    marginBottom: 6,
+  },
+  routePillBox: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: Colors.surface,
-    padding: 10,
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
     borderRadius: 8,
-    marginBottom: 10,
     gap: 6,
   },
-  routeText: {
+  completedRoutePill: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 0.5,
+    borderColor: '#DCFCE7',
+  },
+  cancelledRoutePill: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 0.5,
+    borderColor: '#FEE2E2',
+  },
+  routePillText: {
     flex: 1,
-    fontSize: 13,
-    color: Colors.textPrimary,
+    fontSize: 12,
     fontWeight: '600',
+    color: '#334155',
   },
   cardFooter: {
     flexDirection: 'row',
     justifyContent: 'space-between',
     alignItems: 'center',
+    marginTop: 4,
   },
   dateText: {
-    fontSize: 12,
+    fontSize: 11,
     color: Colors.textMuted,
   },
   priceText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: 'bold',
     color: Colors.accent,
   },
@@ -686,10 +771,51 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
   cancelledByText: {
-  fontSize: 12,
-  fontWeight: '700',
-  color: '#DC2626',
-  marginTop: 2,
-  marginBottom: 6,
-},
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC2626',
+    marginTop: 2,
+    marginBottom: 6,
+  },
+  riderActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  declineActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+  },
+  declineActionBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  acceptActionBtn: {
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#16A34A',
+  },
+  acceptActionBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
 });

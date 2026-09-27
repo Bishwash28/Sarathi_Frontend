@@ -1,13 +1,12 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router } from 'expo-router';
-import React, { useState, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import {
-  ActivityIndicator,
+  Animated,
   FlatList,
   Image,
   KeyboardAvoidingView,
   Platform,
-  ScrollView,
   StyleSheet,
   Text,
   TextInput,
@@ -26,6 +25,58 @@ interface ChatMessage {
   text: string;
   timestamp: Date;
   recommendedRideIds?: string[];
+}
+
+/**
+ * Messenger-style animated 3-dot typing indicator.
+ * Each dot bounces up/down in sequence, looping continuously while visible.
+ */
+function TypingDots() {
+  const dot1 = useRef(new Animated.Value(0)).current;
+  const dot2 = useRef(new Animated.Value(0)).current;
+  const dot3 = useRef(new Animated.Value(0)).current;
+
+  useEffect(() => {
+    const makeBounce = (value: Animated.Value, delay: number) =>
+      Animated.loop(
+        Animated.sequence([
+          Animated.delay(delay),
+          Animated.timing(value, {
+            toValue: -6,
+            duration: 260,
+            useNativeDriver: true,
+          }),
+          Animated.timing(value, {
+            toValue: 0,
+            duration: 260,
+            useNativeDriver: true,
+          }),
+          Animated.delay(600 - delay),
+        ])
+      );
+
+    const anim1 = makeBounce(dot1, 0);
+    const anim2 = makeBounce(dot2, 150);
+    const anim3 = makeBounce(dot3, 300);
+
+    anim1.start();
+    anim2.start();
+    anim3.start();
+
+    return () => {
+      anim1.stop();
+      anim2.stop();
+      anim3.stop();
+    };
+  }, [dot1, dot2, dot3]);
+
+  return (
+    <View style={styles.typingDotsRow}>
+      <Animated.View style={[styles.typingDot, { transform: [{ translateY: dot1 }] }]} />
+      <Animated.View style={[styles.typingDot, { transform: [{ translateY: dot2 }] }]} />
+      <Animated.View style={[styles.typingDot, { transform: [{ translateY: dot3 }] }]} />
+    </View>
+  );
 }
 
 export default function AiAssistantScreen() {
@@ -253,17 +304,24 @@ export default function AiAssistantScreen() {
               </Text>
             </View>
           }
+          ListFooterComponent={
+            isLoading ? (
+              // Messenger-style typing bubble: same avatar + bubble shape as
+              // a normal AI message, but containing the 3 bouncing dots
+              // instead of "Sarathi AI is thinking..." text.
+              <View style={[styles.msgContainer, styles.aiMsgContainer]}>
+                <View style={styles.aiBadgeIconCircle}>
+                  <Ionicons name="sparkles" size={14} color="#FFF" />
+                </View>
+                <View style={[styles.msgBubble, styles.aiBubble, styles.typingBubble]}>
+                  <TypingDots />
+                </View>
+              </View>
+            ) : null
+          }
           contentContainerStyle={styles.messagesList}
           showsVerticalScrollIndicator={false}
         />
-
-        {/* Typing Indicator */}
-        {isLoading && (
-          <View style={styles.typingContainer}>
-            <ActivityIndicator size="small" color={Colors.primary} />
-            <Text style={styles.typingText}>Sarathi AI is thinking...</Text>
-          </View>
-        )}
 
         {/* Input Bar */}
         <View style={styles.inputBar}>
@@ -555,17 +613,21 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: '#FFFFFF',
   },
-  typingContainer: {
+  // Typing bubble — sized like a small AI message bubble, just holding the dots
+  typingBubble: {
+    paddingVertical: 14,
+    paddingHorizontal: 16,
+  },
+  typingDotsRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 8,
-    paddingHorizontal: 20,
-    paddingVertical: 8,
+    gap: 4,
   },
-  typingText: {
-    fontSize: 12,
-    color: Colors.textMuted,
-    fontStyle: 'italic',
+  typingDot: {
+    width: 7,
+    height: 7,
+    borderRadius: 3.5,
+    backgroundColor: '#9CA3AF',
   },
   inputBar: {
     flexDirection: 'row',

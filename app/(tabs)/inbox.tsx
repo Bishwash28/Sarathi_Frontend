@@ -47,12 +47,28 @@ export default function InboxScreen() {
       const msgs = driverMessages[rideId] || [];
       if (msgs.length === 0) return false;
 
-      // Verify that logged-in user is an active participant in this specific conversation
-      const isParticipant = msgs.some(
-        m => (user?.id && (m.senderId === user.id || m.receiverId === user.id || m.passengerId === user.id || m.riderId === user.id))
-      );
+      const existingRide = rides.find(r => r.id === rideId);
+      const booking = bookings.find(b => b.rideId === rideId);
 
-      return isParticipant;
+      const convRiderId = existingRide?.riderId ||
+        msgs.find(m => m.riderId)?.riderId ||
+        msgs.find(m => m.sender === 'driver')?.senderId;
+
+      const convPassengerId = booking?.passengerId ||
+        msgs.find(m => m.passengerId)?.passengerId ||
+        msgs.find(m => m.sender === 'user')?.senderId;
+
+      const currentUserId = user?.id;
+      if (!currentUserId) return false;
+
+      // Role-based visibility logic:
+      // When user is currently in Rider mode ('driver'), show ONLY conversations where user was the rider.
+      // When user is currently in Passenger mode ('passenger'), show ONLY conversations where user was the passenger.
+      if (isDriverMode) {
+        return convRiderId === currentUserId;
+      } else {
+        return convPassengerId === currentUserId;
+      }
     })
     .map(rideId => {
       const existingRide = rides.find(r => r.id === rideId);

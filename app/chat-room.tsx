@@ -25,12 +25,24 @@ export default function ChatRoomScreen() {
     }
   }, [rideId, messages.length]);
 
-  const isDriverRole = user?.role === 'driver';
+  const convRiderId = ride?.riderId ||
+    messages.find(m => m.riderId)?.riderId ||
+    messages.find(m => m.sender === 'driver')?.senderId;
+
+  const convPassengerId = booking?.passengerId ||
+    messages.find(m => m.passengerId)?.passengerId ||
+    messages.find(m => m.sender === 'user')?.senderId;
+
+  // Determine user's role in THIS specific conversation/ride
+  const isRiderInThisChat = Boolean(
+    (user?.id && convRiderId === user.id) ||
+    (user?.id && convPassengerId && convPassengerId !== user.id && user?.role === 'driver')
+  );
 
   const passengerMsg = messages.find(m => (m.sender === 'user' || m.passengerId) && m.senderId !== user?.id && m.senderName !== user?.name);
   const riderMsg = messages.find(m => (m.sender === 'driver' || m.riderId) && m.senderId !== user?.id && m.senderName !== user?.name);
 
-  // Role-based Route Context derivation
+  // Role-based Route Context derivation for this specific chat
   const passengerRouteText = booking?.passengerPickup && booking?.passengerDropoff
     ? `${booking.passengerPickup} → ${booking.passengerDropoff}`
     : null;
@@ -39,23 +51,23 @@ export default function ChatRoomScreen() {
     ? ride.route.join(' → ')
     : (ride?.pickupPoint ? `${ride.pickupPoint} → Destination` : null);
 
-  const routeContextText = isDriverRole ? passengerRouteText : driverRouteText;
+  const routeContextText = isRiderInThisChat ? passengerRouteText : driverRouteText;
 
-  const chatTitle = isDriverRole
-    ? (booking?.passengerName || passengerMsg?.senderName || 'Passenger')
-    : (ride?.riderName || riderMsg?.senderName || 'Driver');
+  const chatTitle = isRiderInThisChat
+    ? (booking?.passengerName || passengerMsg?.senderName || 'User')
+    : (ride?.riderName || riderMsg?.senderName || 'User');
 
-  const chatSub = isDriverRole
-    ? (booking?.passengerPhone || passengerMsg?.senderPhone || 'Sarathi Passenger')
-    : (ride ? `${ride.vehicleName} • ${ride.vehicleNumber}` : (riderMsg?.senderPhone || 'Sarathi Driver'));
+  const chatSub = isRiderInThisChat
+    ? (booking?.passengerPhone || passengerMsg?.senderPhone || 'User')
+    : (ride ? `${ride.vehicleName} • ${ride.vehicleNumber}` : (riderMsg?.senderPhone || 'User'));
 
-  const chatAvatar = isDriverRole
+  const chatAvatar = isRiderInThisChat
     ? (booking?.passengerPhoto || passengerMsg?.senderPhoto || 'https://images.unsplash.com/photo-1535713875002-d1d0cf377fde?auto=format&fit=crop&w=200&h=200&q=80')
     : (ride?.riderPhoto || riderMsg?.senderPhoto || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80');
 
-  const phoneToCall = isDriverRole
-    ? (booking?.passengerPhone || passengerMsg?.senderPhone || '+9779841234567')
-    : (ride?.phone || riderMsg?.senderPhone || '+9779841234567');
+  const phoneToCall = isRiderInThisChat
+    ? (booking?.passengerPhone || passengerMsg?.senderPhone || '')
+    : (ride?.phone || riderMsg?.senderPhone || '');
 
   const handleDeleteConversation = () => {
     Alert.alert(

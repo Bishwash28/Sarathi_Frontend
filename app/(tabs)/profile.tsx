@@ -57,6 +57,9 @@ export default function ProfileScreen() {
   useFocusEffect(
     useCallback(() => {
       refreshKycStatus();
+      return () => {
+        setManageAccountExpanded(false);
+      };
     }, [])
   );
 
@@ -85,7 +88,7 @@ export default function ProfileScreen() {
   const [changePasswordModalVisible, setChangePasswordModalVisible] = useState(false);
   const [newPassword, setNewPassword] = useState('');
   const [isChangingPassword, setIsChangingPassword] = useState(false);
-  const [manageAccountExpanded, setManageAccountExpanded] = useState(true);
+  const [manageAccountExpanded, setManageAccountExpanded] = useState(false);
   const [editName, setEditName] = useState('');
   const [editEmail, setEditEmail] = useState('');
   const [editPhone, setEditPhone] = useState('');
@@ -244,7 +247,15 @@ export default function ProfileScreen() {
       <KeyboardAvoidingView style={styles.keyboardContainer} behavior={Platform.OS === 'ios' ? 'padding' : undefined}>
 
         {/* ── Scrollable content ─────────────────────────────────────────── */}
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+          onTouchStart={() => {
+            if (manageAccountExpanded) {
+              setManageAccountExpanded(false);
+            }
+          }}
+        >
 
           {/* ── Profile Header Card ─────────────────────────────────────────── */}
           <View style={styles.profileHeaderCard}>
@@ -402,18 +413,13 @@ export default function ProfileScreen() {
               </>
             )}
 
-            <TouchableOpacity style={styles.settingRow} onPress={() => Alert.alert('Notifications', 'Notification preferences updated.')} activeOpacity={0.7}>
-              <Ionicons name="notifications-outline" size={20} color={Colors.primary} />
-              <Text style={styles.settingRowText}>Notifications</Text>
-              <Ionicons name="chevron-forward" size={18} color={Colors.textMuted} />
-            </TouchableOpacity>
-
-            <View style={styles.divider} />
-
             {/* Manage Account Accordion / Group */}
             <TouchableOpacity
               style={styles.settingRow}
-              onPress={() => setManageAccountExpanded(!manageAccountExpanded)}
+              onPress={(e) => {
+                e.stopPropagation?.();
+                setManageAccountExpanded(!manageAccountExpanded);
+              }}
               activeOpacity={0.7}
             >
               <Ionicons name="person-circle-outline" size={20} color={Colors.primary} />
@@ -426,9 +432,19 @@ export default function ProfileScreen() {
             </TouchableOpacity>
 
             {manageAccountExpanded && (
-              <View style={styles.subSettingContainer}>
+              <View
+                style={styles.subSettingContainer}
+                onTouchStart={(e) => e.stopPropagation?.()}
+              >
                 {/* 1. Edit Profile */}
-                <TouchableOpacity style={styles.subSettingRow} onPress={openEditModal} activeOpacity={0.7}>
+                <TouchableOpacity
+                  style={styles.subSettingRow}
+                  onPress={() => {
+                    setManageAccountExpanded(false);
+                    openEditModal();
+                  }}
+                  activeOpacity={0.7}
+                >
                   <Ionicons name="pencil-outline" size={18} color={Colors.primary} />
                   <Text style={styles.subSettingRowText}>Edit Profile</Text>
                   <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
@@ -437,7 +453,14 @@ export default function ProfileScreen() {
                 <View style={styles.subDivider} />
 
                 {/* 2. Change Password */}
-                <TouchableOpacity style={styles.subSettingRow} onPress={() => setChangePasswordModalVisible(true)} activeOpacity={0.7}>
+                <TouchableOpacity
+                  style={styles.subSettingRow}
+                  onPress={() => {
+                    setManageAccountExpanded(false);
+                    setChangePasswordModalVisible(true);
+                  }}
+                  activeOpacity={0.7}
+                >
                   <Ionicons name="key-outline" size={18} color={Colors.primary} />
                   <Text style={styles.subSettingRowText}>Change Password</Text>
                   <Ionicons name="chevron-forward" size={16} color={Colors.textMuted} />
@@ -446,7 +469,14 @@ export default function ProfileScreen() {
                 <View style={styles.subDivider} />
 
                 {/* 3. Delete Account */}
-                <TouchableOpacity style={styles.subSettingRow} onPress={handleDeleteAccount} activeOpacity={0.7}>
+                <TouchableOpacity
+                  style={styles.subSettingRow}
+                  onPress={() => {
+                    setManageAccountExpanded(false);
+                    handleDeleteAccount();
+                  }}
+                  activeOpacity={0.7}
+                >
                   <Ionicons name="trash-outline" size={18} color="#DC2626" />
                   <Text style={[styles.subSettingRowText, { color: '#DC2626' }]}>Delete Account</Text>
                   <Ionicons name="chevron-forward" size={16} color="#DC2626" />
