@@ -1,6 +1,6 @@
 import { Ionicons } from '@expo/vector-icons';
 import { router, useLocalSearchParams } from 'expo-router';
-import React, { useState, useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import {
   ActivityIndicator,
   Alert,
@@ -17,17 +17,23 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { Colors } from '../constants/Colors';
-import { useApp, Ride } from '../context/AppContext';
+import { Ride, useApp } from '../context/AppContext';
 import { supabase } from '../lib/supabase';
+import * as Location from 'expo-location';
 
-import { useLocationSearch } from '../hooks/useLocationSearch';
 import { LocationPinPickerMap } from '../components/LocationPinPickerMap';
 import { LocationSearchInput } from '../components/LocationSearchInput';
+import { useLocationSearch } from '../hooks/useLocationSearch';
 
+const SCREEN_WIDTH = Dimensions.get('window').width;
 const SCREEN_HEIGHT = Dimensions.get('window').height;
 const MIN_SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.22); // Map is Full screen (~78%)
 const MED_SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.48); // Medium view (~52%)
 const MAX_SHEET_HEIGHT = Math.round(SCREEN_HEIGHT * 0.80); // Small map (~20%)
+
+const CHAT_HEAD_SIZE = 48;
+const LEFT_EDGE = 16;
+const RIGHT_EDGE = SCREEN_WIDTH - CHAT_HEAD_SIZE - 16;
 
 export default function SearchRideScreen() {
   const { rides, addRecentSearch, recentSearches, savedPlaces, getUserRating } = useApp();
@@ -127,6 +133,90 @@ export default function SearchRideScreen() {
     })
   ).current;
 
+  const chatHeadPos = useRef(new Animated.ValueXY({ x: RIGHT_EDGE, y: 170 })).current;
+  const chatHeadScale = useRef(new Animated.Value(1)).current; // NEW: tactile grab/release feedback
+  const lastChatHeadPos = useRef({ x: RIGHT_EDGE, y: 170 });
+  const isDraggingChatHead = useRef(false);
+
+  const chatHeadPanResponder = useRef(
+    PanResponder.create({
+      onStartShouldSetPanResponder: () => true,
+      onMoveShouldSetPanResponder: (_, gestureState) =>
+        Math.abs(gestureState.dx) > 2 || Math.abs(gestureState.dy) > 2,
+      // FIX: without these, the map or a scroll view underneath can steal
+      // the touch mid-drag, which is what causes the chat head to freeze
+      // or jump instead of tracking your finger smoothly.
+      onPanResponderTerminationRequest: () => false,
+      onShouldBlockNativeResponder: () => true,
+      onPanResponderGrant: () => {
+        isDraggingChatHead.current = false;
+        chatHeadPos.stopAnimation();
+        chatHeadScale.stopAnimation();
+        // Subtle "picked up" pop, Messenger-style
+        Animated.spring(chatHeadScale, {
+          toValue: 1.12,
+          useNativeDriver: true,
+          speed: 20,
+          bounciness: 6,
+        }).start();
+      },
+      onPanResponderMove: (_, gestureState) => {
+        isDraggingChatHead.current = true;
+        const newX = lastChatHeadPos.current.x + gestureState.dx;
+        const newY = Math.max(60, Math.min(SCREEN_HEIGHT - 180, lastChatHeadPos.current.y + gestureState.dy));
+        chatHeadPos.setValue({ x: newX, y: newY });
+      },
+      onPanResponderRelease: (_, gestureState) => {
+        const finalX = lastChatHeadPos.current.x + gestureState.dx;
+        const finalY = Math.max(60, Math.min(SCREEN_HEIGHT - 180, lastChatHeadPos.current.y + gestureState.dy));
+
+        // Magnetic snap to nearest edge (Left vs Right)
+        const targetX = (finalX + CHAT_HEAD_SIZE / 2) < SCREEN_WIDTH / 2 ? LEFT_EDGE : RIGHT_EDGE;
+        lastChatHeadPos.current = { x: targetX, y: finalY };
+
+        // FIX: useNativeDriver moves this animation off the JS thread, and
+        // passing the gesture's release velocity makes the snap feel like a
+        // continuation of the flick rather than a hard reset.
+        Animated.spring(chatHeadPos, {
+          toValue: { x: targetX, y: finalY },
+          velocity: { x: gestureState.vx, y: gestureState.vy },
+          useNativeDriver: true,
+          tension: 60,
+          friction: 9,
+        }).start();
+
+        Animated.spring(chatHeadScale, {
+          toValue: 1,
+          useNativeDriver: true,
+          speed: 16,
+          bounciness: 6,
+        }).start();
+
+        // Tap detected if no significant drag motion
+        if (!isDraggingChatHead.current || (Math.abs(gestureState.dx) < 5 && Math.abs(gestureState.dy) < 5)) {
+          router.push('/ai-assistant');
+        }
+      },
+      // FIX: if the gesture gets interrupted rather than released normally,
+      // still settle the bubble back into place instead of leaving it stuck
+      // wherever the interruption happened.
+      onPanResponderTerminate: () => {
+        Animated.spring(chatHeadPos, {
+          toValue: lastChatHeadPos.current,
+          useNativeDriver: true,
+          tension: 60,
+          friction: 9,
+        }).start();
+        Animated.spring(chatHeadScale, {
+          toValue: 1,
+          useNativeDriver: true,
+          speed: 16,
+          bounciness: 6,
+        }).start();
+      },
+    })
+  ).current;
+
   const handleBack = () => {
     if (router.canGoBack()) {
       router.back();
@@ -156,12 +246,41 @@ export default function SearchRideScreen() {
   };
 
   // Handle direct map selection (tap or drag on the unified map)
-  const handleMapSelectCoords = (coords: { lat: number; lng: number }) => {
-    const placeName = `${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`;
+  const handleMapSelectCoords = async (coords: { lat: number; lng: number }) => {
+    // Show something immediately so the field isn't blank while we resolve —
+    // this gets replaced a moment later once reverse geocoding finishes.
+    const fallbackName = `${coords.lat.toFixed(4)}, ${coords.lng.toFixed(4)}`;
     if (activeField === 'origin') {
-      setOriginDirect(placeName, coords);
+      setOriginDirect(fallbackName, coords);
     } else {
-      setDestDirect(placeName, coords);
+      setDestDirect(fallbackName, coords);
+    }
+
+    // FIX: previously the raw "lat, lng" string was used as the permanent
+    // display name — the map's own badge was reverse-geocoded internally,
+    // but that resolved name was never passed back up to this screen's
+    // text input, so the input always showed numbers instead of a place.
+    try {
+      const geocode = await Location.reverseGeocodeAsync({
+        latitude: coords.lat,
+        longitude: coords.lng,
+      });
+      if (geocode && geocode.length > 0) {
+        const place = geocode[0];
+        const candidates = [place.name, place.street, place.district, place.city, place.subregion];
+        const resolvedName = candidates.find(
+          c => c && typeof c === 'string' && !c.includes('+')
+        ) || fallbackName;
+
+        if (activeField === 'origin') {
+          setOriginDirect(resolvedName, coords);
+        } else {
+          setDestDirect(resolvedName, coords);
+        }
+      }
+    } catch (err) {
+      console.warn('[handleMapSelectCoords] reverse geocode error:', err);
+      // fallbackName (the coordinates) stays in place — better than nothing
     }
   };
 
@@ -377,16 +496,23 @@ export default function SearchRideScreen() {
             <Ionicons name="arrow-back" size={20} color={Colors.primary} />
             <Text style={styles.headerTitleText}>Find a Ride</Text>
           </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.floatingAiPill}
-            onPress={() => router.push('/ai-assistant')}
-            activeOpacity={0.85}
-          >
-            <Ionicons name="sparkles" size={16} color="#7C3AED" />
-            <Text style={styles.floatingAiText}>Ask AI</Text>
-          </TouchableOpacity>
         </View>
+
+        <Animated.View
+          style={[
+            styles.floatingAiChatHead,
+            {
+              transform: [
+                { translateX: chatHeadPos.x },
+                { translateY: chatHeadPos.y },
+                { scale: chatHeadScale }, // NEW
+              ],
+            },
+          ]}
+          {...chatHeadPanResponder.panHandlers}
+        >
+          <Ionicons name="sparkles" size={22} color="#FFF" />
+        </Animated.View>
 
         {/* ── 📱 SMOOTH DRAGGABLE BOTTOM SHEET WINDOW ── */}
         <KeyboardAvoidingView
@@ -698,26 +824,24 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
     color: Colors.textPrimary,
   },
-  floatingAiPill: {
-    flexDirection: 'row',
+  floatingAiChatHead: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    zIndex: 99,
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: '#7C3AED',
     alignItems: 'center',
-    gap: 6,
-    backgroundColor: '#F3E8FF',
-    paddingHorizontal: 14,
-    paddingVertical: 9,
-    borderRadius: 22,
-    elevation: 4,
+    justifyContent: 'center',
+    elevation: 8,
     shadowColor: '#7C3AED',
-    shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.15,
-    shadowRadius: 4,
-    borderWidth: 1,
-    borderColor: '#C084FC',
-  },
-  floatingAiText: {
-    fontSize: 13,
-    fontWeight: '800',
-    color: '#6B21A8',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    borderWidth: 2,
+    borderColor: '#FFFFFF',
   },
   keyboardView: {
     ...StyleSheet.absoluteFill,

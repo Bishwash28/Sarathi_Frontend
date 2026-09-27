@@ -13,7 +13,7 @@ export default function SplashScreen() {
 
   useEffect(() => {
     if (Platform.OS === 'android') {
-      SystemUI.setBackgroundColorAsync(Colors.background);
+      SystemUI.setBackgroundColorAsync('#FFFFFF');
     }
 
     Animated.timing(fadeAnim, {
@@ -58,7 +58,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    backgroundColor: Colors.background, // Deep Slate
+    backgroundColor: '#FFFFFF',
   },
   logo: {
     width: "100%",

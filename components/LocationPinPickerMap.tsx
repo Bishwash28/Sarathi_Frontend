@@ -193,9 +193,12 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
             var name = label || 'Pickup';
             return L.divIcon({
               className: 'clean-orig-pin',
-              html: '<div style="display:flex; align-items:center; gap:6px; pointer-events:none; transform:translate(-8px, -8px);">' +
-                      '<div style="width:16px; height:16px; border-radius:50%; background:#FFFFFF; border:4px solid #0F172A; box-shadow:0 2px 6px rgba(0,0,0,0.35);"></div>' +
-                      '<span style="font-size:13px; font-weight:800; color:#0F172A; font-family:-apple-system, sans-serif; text-shadow:-1px -1px 0 #FFF, 1px -1px 0 #FFF, -1px 1px 0 #FFF, 1px 1px 0 #FFF, 0 2px 4px rgba(255,255,255,0.95); white-space:nowrap;">' + name + '</span>' +
+              html: '<div style="display:inline-flex; align-items:center; gap:6px; pointer-events:none; white-space:nowrap; transform:translate(-12px, -28px);">' +
+                      '<svg width="28" height="34" viewBox="0 0 24 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 3px 6px rgba(0,0,0,0.4)); flex-shrink:0;">' +
+                        '<path d="M12 0C5.37 0 0 5.37 0 12C0 21 12 28 12 28C12 28 24 21 24 12C24 5.37 18.63 0 12 0Z" fill="#16A34A"/>' +
+                        '<circle cx="12" cy="11" r="4.5" fill="#FFFFFF"/>' +
+                      '</svg>' +
+                      '<span style="font-size:12px; font-weight:800; color:#0F172A; font-family:-apple-system, sans-serif; background:rgba(255,255,255,0.92); padding:3px 8px; border-radius:12px; box-shadow:0 2px 6px rgba(0,0,0,0.25); border:1px solid rgba(0,0,0,0.08);">' + name + '</span>' +
                     '</div>',
               iconSize: [0, 0]
             });
@@ -205,12 +208,12 @@ export const LocationPinPickerMap: React.FC<LocationPinPickerProps> = ({
             var name = label || 'Destination';
             return L.divIcon({
               className: 'clean-dest-pin',
-              html: '<div style="display:flex; align-items:center; gap:6px; pointer-events:none; transform:translate(-12px, -24px);">' +
-                      '<svg width="24" height="28" viewBox="0 0 24 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 2px 5px rgba(0,0,0,0.35));">' +
+              html: '<div style="display:inline-flex; align-items:center; gap:6px; pointer-events:none; white-space:nowrap; transform:translate(-12px, -28px);">' +
+                      '<svg width="28" height="34" viewBox="0 0 24 28" fill="none" xmlns="http://www.w3.org/2000/svg" style="filter:drop-shadow(0 3px 6px rgba(0,0,0,0.4)); flex-shrink:0;">' +
                         '<path d="M12 0C5.37 0 0 5.37 0 12C0 21 12 28 12 28C12 28 24 21 24 12C24 5.37 18.63 0 12 0Z" fill="#DC2626"/>' +
                         '<circle cx="12" cy="11" r="4.5" fill="#FFFFFF"/>' +
                       '</svg>' +
-                      '<span style="font-size:13px; font-weight:800; color:#0F172A; font-family:-apple-system, sans-serif; text-shadow:-1px -1px 0 #FFF, 1px -1px 0 #FFF, -1px 1px 0 #FFF, 1px 1px 0 #FFF, 0 2px 4px rgba(255,255,255,0.95); white-space:nowrap;">' + name + '</span>' +
+                      '<span style="font-size:12px; font-weight:800; color:#0F172A; font-family:-apple-system, sans-serif; background:rgba(255,255,255,0.92); padding:3px 8px; border-radius:12px; box-shadow:0 2px 6px rgba(0,0,0,0.25); border:1px solid rgba(0,0,0,0.08);">' + name + '</span>' +
                     '</div>',
               iconSize: [0, 0]
             });
