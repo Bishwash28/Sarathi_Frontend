@@ -2,17 +2,18 @@ import React, { useState } from 'react';
 import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
 import { router } from 'expo-router';
 import { Colors } from '../../constants/Colors';
+import { useApp } from '../../context/AppContext';
 
 export default function CompleteProfileScreen() {
-  // In a real app, this would come from the auth state
-  const autoFilledName = 'Sakar Aryal';
+  const { user } = useApp();
+  const autoFilledName = user?.name || '';
   
-  const [phone, setPhone] = useState('');
+  const [phone, setPhone] = useState(user?.phone || '');
   const [gender, setGender] = useState('');
 
   const handleCompleteProfile = () => {
     console.log('Profile Completed:', { phone, gender });
-    router.replace('/role-selection');
+    router.replace('/(tabs)');
   };
 
   return (

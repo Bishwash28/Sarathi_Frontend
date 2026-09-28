@@ -1,0 +1,821 @@
+import { Ionicons } from '@expo/vector-icons';
+import { router, useFocusEffect } from 'expo-router';
+import { useCallback, useState } from 'react';
+import { Alert, Image, Modal, ScrollView, StyleSheet, Text, TextInput, TouchableOpacity, View } from 'react-native';
+import { DepartureTimePicker } from '../../components/DepartureTimePicker';
+import { Colors } from '../../constants/Colors';
+import { Booking, Ride, useApp } from '../../context/AppContext';
+
+export default function ActivityScreen() {
+  const { bookings, rides, user, updateRide, deleteRide, fetchUserBookings, fetchActiveRides, acceptBooking, declineBooking } = useApp();
+  const [activeSection, setActiveSection] = useState<'ongoing' | 'history' | 'my_offers'>('ongoing');
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoading, setIsLoading] = useState(true);
+
+  useFocusEffect(
+    useCallback(() => {
+      (async () => {
+        setIsLoading(true);
+        await Promise.all([fetchUserBookings(), fetchActiveRides()]);
+        setIsLoading(false);
+      })();
+    }, [user?.id])
+  );
+
+  // Edit Ride Modal State
+  const [editingRide, setEditingRide] = useState<Ride | null>(null);
+  const [editPrice, setEditPrice] = useState('');
+  const [editSeats, setEditSeats] = useState('');
+  const [editDepartureTime, setEditDepartureTime] = useState('');
+
+  // Filter active offered rides created specifically by this user (rider/driver)
+  const myOffers = rides.filter(r => {
+    const isOwner =
+      (user?.id && r.riderId && r.riderId === user.id) ||
+      (user?.name && r.riderName && r.riderName === user.name) ||
+      (user?.phone && r.phone && r.phone === user.phone);
+    const isActive = r.status === 'active' || !r.status;
+    return Boolean(isOwner && isActive);
+  });
+  const myOfferIds = myOffers.map(o => o.id);
+
+  // Group bookings based on user role (Passenger vs Driver) - Independent of notification state
+  const isDriver = user?.role === 'driver';
+
+  const ongoingBookings = isDriver
+    ? bookings.filter(b => {
+      const isMyRide = (b.driverId && user?.id && b.driverId === user.id) || myOfferIds.includes(b.rideId);
+      const isActiveStatus = b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing';
+      return isMyRide && isActiveStatus;
+    })
+    : bookings.filter(b => {
+      const isMyBooking = (user?.id && b.passengerId === user.id) || (user?.email && b.passengerId === user.email);
+      const isActiveStatus = b.status === 'pending' || b.status === 'accepted' || b.status === 'ongoing';
+      return isMyBooking && isActiveStatus;
+    });
+
+  const historyBookings = isDriver
+    ? bookings.filter(b => {
+      // FIX: no longer depends on `rides`/`myOfferIds`, which only ever
+      // contain ACTIVE rides — that's why this was always empty before.
+      const isMyRide = (b.driverId && user?.id && b.driverId === user.id) || myOfferIds.includes(b.rideId);
+      const isPastStatus = b.status === 'completed' || b.status === 'cancelled';
+      return isMyRide && isPastStatus;
+    })
+    : bookings.filter(b => {
+      const isMyBooking = (user?.id && b.passengerId === user.id) || (user?.email && b.passengerId === user.email);
+      const isPastStatus = b.status === 'completed' || b.status === 'cancelled';
+      return isMyBooking && isPastStatus;
+    });
+  const handleBookingPress = (booking: Booking) => {
+    if (booking.lifecycleState === 'request_pending') {
+      router.push({ pathname: '/booking-status', params: { rideId: booking.rideId } });
+    } else {
+      router.push({ pathname: '/active-trip', params: { rideId: booking.rideId } });
+    }
+  };
+
+  const handleOpenEditRide = (ride: Ride) => {
+    setEditingRide(ride);
+    setEditPrice(String(ride.price));
+    setEditSeats(String(ride.seatsLeft));
+    setEditDepartureTime(ride.departureTime || '');
+  };
+
+  const handleSaveEditRide = async () => {
+    if (!editingRide) return;
+    const parsedPrice = parseFloat(editPrice);
+    if (isNaN(parsedPrice) || parsedPrice <= 0) {
+      Alert.alert('Invalid Price', 'Please enter a valid price in NPR.');
+      return;
+    }
+    const parsedSeats = parseInt(editSeats, 10);
+    if (isNaN(parsedSeats) || parsedSeats < 0) {
+      Alert.alert('Invalid Seats', 'Please enter valid seats.');
+      return;
+    }
+
+    const res = await updateRide(editingRide.id, {
+      price: parsedPrice,
+      seatsLeft: parsedSeats,
+      departureTime: editDepartureTime || 'Leaving soon',
+    });
+
+    if (res?.success) {
+      setEditingRide(null);
+      Alert.alert('Offer Updated', 'Your offered ride has been updated successfully in database.');
+    } else {
+      Alert.alert('Update Failed', res?.error || 'Could not update ride in database.');
+    }
+  };
+
+  const handleDeleteOffer = (rideId: string) => {
+    Alert.alert(
+      'Delete Ride Offer',
+      'Are you sure you want to cancel and remove this ride offer?',
+      [
+        { text: 'Cancel', style: 'cancel' },
+        {
+          text: 'Delete',
+          style: 'destructive',
+          onPress: async () => {
+            const res = await deleteRide(rideId);
+            if (res?.success) {
+              Alert.alert('Offer Removed', 'The ride offer was deleted from database.');
+            } else {
+              Alert.alert('Delete Failed', res?.error || 'Could not delete ride from database.');
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const getStatusColor = (status: Booking['status']) => {
+    switch (status) {
+      case 'pending': return Colors.warning;
+      case 'accepted': return Colors.success;
+      case 'ongoing': return Colors.primary;
+      case 'completed': return Colors.accent;
+      case 'cancelled': return Colors.error;
+      default: return Colors.textMuted;
+    }
+  };
+
+  const renderBookingCard = (item: Booking) => {
+    // FIX: determine viewpoint from the booking's own driverId, not a lookup
+    // into `rides` (which won't contain this ride once it's completed/cancelled).
+    const isUserRider = Boolean(item.driverId && user?.id && item.driverId === user.id);
+
+    const titleName = isUserRider
+      ? (item.passengerName || item.passengerId?.split('@')[0] || 'Passenger')
+      : (item.driverName || 'Driver');
+
+    const subText = isUserRider
+      ? 'Passenger request'
+      : `${item.vehicleName || 'Vehicle'}${item.vehicleNumber ? ' • ' + item.vehicleNumber : ''}`;
+
+    const avatarUrl = isUserRider
+      ? (item.passengerPhoto || 'https://images.unsplash.com/photo-1472099645785-5658abf4ff4e?auto=format&fit=crop&w=200&h=200&q=80')
+      : (item.driverPhoto || 'https://images.unsplash.com/photo-1539571696357-5a69c17a67c6?auto=format&fit=crop&w=200&h=200&q=80');
+
+    const originDestText = `${item.riderOriginName || 'Origin'} ➔ ${item.riderDestName || 'Destination'}`;
+    const pickupDropText = `${item.passengerPickup || 'Pickup'} ➔ ${item.passengerDropoff || 'Drop-off'}`;
+    const farePrice = item.farePrice ?? 150;
+
+    const isCompleted = item.status === 'completed';
+    const isCancelled = item.status === 'cancelled';
+
+    return (
+      <View
+        key={item.id}
+        style={[
+          styles.activityCard,
+          isCompleted && styles.completedActivityCard,
+          isCancelled && styles.cancelledActivityCard,
+        ]}
+      >
+        {/* Top Header Row */}
+        <View style={styles.cardHeader}>
+          <Image source={{ uri: avatarUrl }} style={styles.driverPhoto} />
+          <View style={styles.driverInfo}>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.driverName}>{titleName}</Text>
+              <View style={[styles.roleTagBadge, isUserRider ? { backgroundColor: '#DCFCE7' } : { backgroundColor: '#EFF6FF' }]}>
+                <Text style={[styles.roleTagBadgeText, isUserRider ? { color: '#166534' } : { color: '#1E40AF' }]}>
+                  {isUserRider ? 'PASSENGER' : 'RIDER'}
+                </Text>
+              </View>
+            </View>
+            <Text style={styles.vehicleText}>{subText}</Text>
+          </View>
+          <View style={[
+            styles.statusBadge,
+            isCompleted ? { backgroundColor: '#DCFCE7' } : isCancelled ? { backgroundColor: '#FEE2E2' } : { backgroundColor: `${getStatusColor(item.status)}12` }
+          ]}>
+            <Text style={[
+              styles.statusText,
+              isCompleted ? { color: '#15803D' } : isCancelled ? { color: '#DC2626' } : { color: getStatusColor(item.status) }
+            ]}>
+              {item.status.toUpperCase()}
+            </Text>
+          </View>
+        </View>
+
+        {/* Compact Route Pills Container */}
+        <View style={styles.compactRouteWrapper}>
+          <View style={[styles.routePillBox, isCompleted ? styles.completedRoutePill : isCancelled ? styles.cancelledRoutePill : null]}>
+            <Ionicons name="navigate-circle-outline" size={13} color={isCompleted ? '#16A34A' : isCancelled ? '#EF4444' : '#9333EA'} />
+            <Text style={[styles.routePillText, isCancelled && { color: '#991B1B' }]} numberOfLines={1}>{originDestText}</Text>
+          </View>
+
+          <View style={[styles.routePillBox, isCompleted ? styles.completedRoutePill : isCancelled ? styles.cancelledRoutePill : null]}>
+            <Ionicons name="location-outline" size={13} color={isCompleted ? '#059669' : isCancelled ? '#DC2626' : '#DB2777'} />
+            <Text style={[styles.routePillText, isCancelled && { color: '#991B1B' }]} numberOfLines={1}>{pickupDropText}</Text>
+          </View>
+        </View>
+
+        {/* Cancelled-by note if applicable */}
+        {isCancelled && item.cancelledBy && (
+          <Text style={styles.cancelledByText}>
+            Cancelled by {item.cancelledBy === 'rider' ? 'Rider' : 'Passenger'}
+          </Text>
+        )}
+
+        {/* Bottom Metadata Bar */}
+        <View style={styles.cardFooter}>
+          <Text style={styles.dateText}>
+            {isCompleted && item.completedAt
+              ? `${new Date(item.completedAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+              : isCancelled && item.cancelledAt
+                ? `${new Date(item.cancelledAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}`
+                : new Date(item.createdAt).toLocaleDateString(undefined, { month: 'short', day: 'numeric', hour: '2-digit', minute: '2-digit' })}
+          </Text>
+          <Text style={[styles.priceText, isCancelled && { color: '#94A3B8', textDecorationLine: 'line-through' }]}>NPR {farePrice}</Text>
+        </View>
+
+        {item.status === 'pending' && isUserRider ? (
+          <View style={styles.riderActionRow}>
+            <TouchableOpacity
+              style={styles.declineActionBtn}
+              onPress={() => {
+                declineBooking(item.id);
+                Alert.alert('Request Declined ✕', 'You have declined this passenger request.');
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="close-circle-outline" size={15} color="#DC2626" />
+              <Text style={styles.declineActionBtnText}>Decline</Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.acceptActionBtn}
+              onPress={() => {
+                acceptBooking(item.id);
+                router.push({
+                  pathname: '/active-trip',
+                  params: { rideId: item.rideId, bookingId: item.id }
+                });
+              }}
+              activeOpacity={0.85}
+            >
+              <Ionicons name="checkmark-circle-outline" size={15} color="#FFF" />
+              <Text style={styles.acceptActionBtnText}>Accept Request</Text>
+            </TouchableOpacity>
+          </View>
+        ) : (item.status === 'accepted' || item.status === 'ongoing') ? (
+          <TouchableOpacity
+            style={styles.openLiveTripBtn}
+            onPress={() => router.push({ pathname: '/active-trip', params: { rideId: item.rideId } })}
+          >
+            <Ionicons name="navigate-circle" size={16} color="#FFF" />
+            <Text style={styles.openLiveTripBtnText}>Open Live Trip Tracking →</Text>
+          </TouchableOpacity>
+        ) : (!isUserRider && item.status === 'pending') && (
+          <View style={styles.trackingHint}>
+            <Ionicons name="navigate-circle" size={14} color={Colors.accent} />
+            <Text style={styles.trackingHintText}>View waiting queue</Text>
+          </View>
+        )}
+      </View>
+    );
+  };
+
+  const renderOfferCard = (ride: Ride) => (
+    <View key={ride.id} style={styles.activityCard}>
+      <View style={styles.cardHeader}>
+        <View style={{ flex: 1 }}>
+          <Text style={styles.driverName} numberOfLines={1}>{ride.route.join(' → ')}</Text>
+          <Text style={styles.vehicleText}>{ride.vehicleName} • {ride.seatsLeft} seat(s) left</Text>
+        </View>
+        <View style={[styles.statusBadge, { backgroundColor: '#DCFCE7' }]}>
+          <Text style={[styles.statusText, { color: '#166534' }]}>ACTIVE OFFER</Text>
+        </View>
+      </View>
+
+      <View style={styles.routePillBox}>
+        <Ionicons name="time-outline" size={15} color="#2563EB" />
+        <Text style={styles.routePillText}>Departure: {ride.departureTime}</Text>
+      </View>
+
+      <View style={styles.cardFooter}>
+        <Text style={styles.dateText}>Offer ID: #{ride.id.slice(0, 8)}</Text>
+        <Text style={styles.priceText}>NPR {ride.price}</Text>
+      </View>
+
+      <View style={styles.offerActionsRow}>
+        <TouchableOpacity style={styles.editBtn} onPress={() => handleOpenEditRide(ride)}>
+          <Ionicons name="create-outline" size={16} color={Colors.primary} />
+          <Text style={styles.editBtnText}>Edit Offer</Text>
+        </TouchableOpacity>
+        <TouchableOpacity style={styles.deleteBtn} onPress={() => handleDeleteOffer(ride.id)}>
+          <Ionicons name="trash-outline" size={16} color="#DC2626" />
+          <Text style={styles.deleteBtnText}>Delete Offer</Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+
+  return (
+    <View style={styles.safeArea}>
+      <View style={styles.container}>
+        {/* Screen Header */}
+        <View style={styles.header}>
+          <Text style={styles.headerTitle}>
+            {user?.role === 'driver' ? 'Driver Activity & Rides' : 'Your Activity'}
+          </Text>
+        </View>
+
+        {/* Tab Selector */}
+        <View style={styles.tabSelector}>
+          <TouchableOpacity
+            style={styles.tabButton}
+            onPress={() => setActiveSection('ongoing')}
+          >
+            <Text style={[styles.tabButtonText, activeSection === 'ongoing' && styles.tabButtonTextActive]}>
+              Ongoing ({ongoingBookings.length})
+            </Text>
+            {activeSection === 'ongoing' && <View style={styles.activeTabIndicator} />}
+          </TouchableOpacity>
+
+          {(user?.role === 'driver' || myOffers.length > 0) && (
+            <TouchableOpacity
+              style={styles.tabButton}
+              onPress={() => setActiveSection('my_offers')}
+            >
+              <Text style={[styles.tabButtonText, activeSection === 'my_offers' && styles.tabButtonTextActive]}>
+                My Offers ({myOffers.length})
+              </Text>
+              {activeSection === 'my_offers' && <View style={styles.activeTabIndicator} />}
+            </TouchableOpacity>
+          )}
+
+          <TouchableOpacity
+            style={styles.tabButton}
+            onPress={() => setActiveSection('history')}
+          >
+            <Text style={[styles.tabButtonText, activeSection === 'history' && styles.tabButtonTextActive]}>
+              History ({historyBookings.length})
+            </Text>
+            {activeSection === 'history' && <View style={styles.activeTabIndicator} />}
+          </TouchableOpacity>
+        </View>
+
+        {/* Activity List */}
+        <ScrollView contentContainerStyle={styles.listScroll} showsVerticalScrollIndicator={false}>
+          {activeSection === 'my_offers' ? (
+            myOffers.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="car-sport-outline" size={48} color={Colors.textMuted} />
+                <Text style={styles.emptyTitle}>No active ride offers</Text>
+                <Text style={styles.emptySubtitle}>
+                  You haven't posted any active ride offers yet. Publish a route offer from Home screen!
+                </Text>
+              </View>
+            ) : (
+              myOffers.map(renderOfferCard)
+            )
+          ) : activeSection === 'ongoing' ? (
+            ongoingBookings.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="receipt-outline" size={48} color={Colors.textMuted} />
+                <Text style={styles.emptyTitle}>No ongoing rides</Text>
+                <Text style={styles.emptySubtitle}>
+                  {user?.role === 'driver'
+                    ? 'Rides that have been booked or accepted will appear here as ongoing trips.'
+                    : 'Your active ride requests will be logged here.'}
+                </Text>
+              </View>
+            ) : (
+              ongoingBookings.map(renderBookingCard)
+            )
+          ) : (
+            historyBookings.length === 0 ? (
+              <View style={styles.emptyContainer}>
+                <Ionicons name="time-outline" size={48} color={Colors.textMuted} />
+                <Text style={styles.emptyTitle}>No past rides</Text>
+                <Text style={styles.emptySubtitle}>Completed and cancelled ride logs will be kept here.</Text>
+              </View>
+            ) : (
+              historyBookings.map(renderBookingCard)
+            )
+          )}
+        </ScrollView>
+
+        {/* Edit Offered Ride Modal */}
+        <Modal
+          visible={!!editingRide}
+          transparent={true}
+          animationType="slide"
+          onRequestClose={() => setEditingRide(null)}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={styles.modalTitle}>Edit Ride Offer</Text>
+                <TouchableOpacity onPress={() => setEditingRide(null)}>
+                  <Ionicons name="close" size={24} color={Colors.textPrimary} />
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.inputLabel}>Price / Seat (NPR)</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Price per seat"
+                value={editPrice}
+                onChangeText={setEditPrice}
+                keyboardType="numeric"
+              />
+
+              <Text style={styles.inputLabel}>Available Seats</Text>
+              <TextInput
+                style={styles.modalInput}
+                placeholder="Available seats"
+                value={editSeats}
+                onChangeText={setEditSeats}
+                keyboardType="numeric"
+              />
+
+              <DepartureTimePicker
+                value={editDepartureTime}
+                onChange={(iso) => setEditDepartureTime(iso)}
+                label="Departure Time *"
+              />
+
+              <TouchableOpacity style={styles.saveBtn} onPress={handleSaveEditRide}>
+                <Text style={styles.saveBtnText}>Save Offer Changes</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </Modal>
+      </View>
+    </View>
+  );
+}
+
+const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: Colors.background,
+  },
+  container: {
+    flex: 1,
+  },
+  header: {
+    paddingHorizontal: 20,
+    paddingTop: 16,
+    paddingBottom: 12,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  notifBellButton: {
+    padding: 8,
+    borderRadius: 12,
+    backgroundColor: '#F1F5F9',
+  },
+  headerTitle: {
+    fontSize: 20,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  tabSelector: {
+    flexDirection: 'row',
+    backgroundColor: Colors.background,
+    borderBottomWidth: 1,
+    borderBottomColor: '#E2E8F0',
+    marginBottom: 16,
+  },
+  tabButton: {
+    flex: 1,
+    paddingVertical: 12,
+    alignItems: 'center',
+    justifyContent: 'center',
+    position: 'relative',
+  },
+  tabButtonText: {
+    fontSize: 15,
+    fontWeight: '500',
+    color: '#4A5568',
+  },
+  tabButtonTextActive: {
+    color: Colors.accent,
+    fontWeight: '700',
+  },
+  activeTabIndicator: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    height: 2.5,
+    backgroundColor: Colors.accent,
+  },
+  listScroll: {
+    paddingHorizontal: 16,
+    paddingBottom: 110,
+  },
+  activityCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 12,
+    marginBottom: 10,
+    borderWidth: 1,
+    borderColor: '#F1F5F9',
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.03,
+    shadowRadius: 3,
+    elevation: 1,
+  },
+  cardHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  driverPhoto: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    marginRight: 10,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  driverInfo: {
+    flex: 1,
+  },
+  driverName: {
+    fontSize: 14,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  roleTagBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  roleTagBadgeText: {
+    fontSize: 9,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  vehicleText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+    marginTop: 1,
+  },
+  statusBadge: {
+    paddingVertical: 4,
+    paddingHorizontal: 8,
+    borderRadius: 6,
+  },
+  statusText: {
+    fontSize: 10,
+    fontWeight: '800',
+    letterSpacing: 0.4,
+  },
+  completedActivityCard: {
+    borderColor: '#D1FAE5',
+    backgroundColor: '#FAFDFB',
+  },
+  cancelledActivityCard: {
+    borderColor: '#FEE2E2',
+    backgroundColor: '#FFFAFA',
+  },
+  compactRouteWrapper: {
+    gap: 5,
+    marginBottom: 6,
+  },
+  routePillBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: '#F8FAFC',
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 8,
+    gap: 6,
+  },
+  completedRoutePill: {
+    backgroundColor: '#F0FDF4',
+    borderWidth: 0.5,
+    borderColor: '#DCFCE7',
+  },
+  cancelledRoutePill: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 0.5,
+    borderColor: '#FEE2E2',
+  },
+  routePillText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#334155',
+  },
+  cardFooter: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginTop: 4,
+  },
+  dateText: {
+    fontSize: 11,
+    color: Colors.textMuted,
+  },
+  priceText: {
+    fontSize: 13,
+    fontWeight: 'bold',
+    color: Colors.accent,
+  },
+  trackingHint: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    gap: 6,
+  },
+  trackingHintText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: Colors.accent,
+  },
+  emptyContainer: {
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 60,
+    paddingHorizontal: 20,
+  },
+  emptyTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+    marginTop: 16,
+    marginBottom: 8,
+  },
+  emptySubtitle: {
+    fontSize: 13,
+    color: Colors.textMuted,
+    textAlign: 'center',
+    lineHeight: 18,
+  },
+  offerCard: {
+    backgroundColor: '#FFFFFF',
+    borderRadius: 14,
+    padding: 14,
+    marginBottom: 12,
+    borderWidth: 1,
+    borderColor: '#E2E8F0',
+  },
+  offerActionsRow: {
+    flexDirection: 'row',
+    gap: 12,
+    marginTop: 12,
+    paddingTop: 10,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+    justifyContent: 'flex-end',
+  },
+  editBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#EFF6FF',
+  },
+  editBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: Colors.primary,
+  },
+  deleteBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+  },
+  deleteBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: 'rgba(15, 23, 42, 0.5)',
+    justifyContent: 'flex-end',
+  },
+  modalContent: {
+    backgroundColor: '#FFFFFF',
+    borderTopLeftRadius: 24,
+    borderTopRightRadius: 24,
+    padding: 20,
+  },
+  modalHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: 16,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: 'bold',
+    color: Colors.textPrimary,
+  },
+  inputLabel: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: Colors.textPrimary,
+    marginTop: 10,
+    marginBottom: 4,
+  },
+  modalInput: {
+    backgroundColor: '#F8FAFC',
+    borderWidth: 1,
+    borderColor: '#CBD5E1',
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    fontSize: 14,
+    color: Colors.textPrimary,
+  },
+  saveBtn: {
+    backgroundColor: Colors.primary,
+    borderRadius: 12,
+    paddingVertical: 14,
+    alignItems: 'center',
+    marginTop: 20,
+  },
+  saveBtnText: {
+    color: '#FFFFFF',
+    fontSize: 15,
+    fontWeight: 'bold',
+  },
+  openLiveTripBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    backgroundColor: Colors.primary,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: 10,
+    marginTop: 10,
+    gap: 6,
+  },
+  openLiveTripBtnText: {
+    color: '#FFFFFF',
+    fontSize: 13,
+    fontWeight: 'bold',
+  },
+  cancelledByText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC2626',
+    marginTop: 2,
+    marginBottom: 6,
+  },
+  riderActionRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: '#F1F5F9',
+  },
+  declineActionBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 4,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1,
+    borderColor: '#FEE2E2',
+  },
+  declineActionBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#DC2626',
+  },
+  acceptActionBtn: {
+    flex: 2,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 5,
+    height: 36,
+    borderRadius: 8,
+    backgroundColor: '#16A34A',
+  },
+  acceptActionBtnText: {
+    fontSize: 12,
+    fontWeight: '700',
+    color: '#FFFFFF',
+  },
+});

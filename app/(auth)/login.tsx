@@ -1,142 +1,374 @@
 import React, { useState } from 'react';
-import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView } from 'react-native';
+import { StyleSheet, Text, View, TextInput, TouchableOpacity, KeyboardAvoidingView, Platform, ScrollView, ImageBackground, StatusBar, ActivityIndicator, Alert } from 'react-native';
 import { router } from 'expo-router';
+import { Ionicons } from '@expo/vector-icons';
 import { Colors } from '../../constants/Colors';
+import { useApp } from '../../context/AppContext';
+import { validateEmail, hasScriptTags, sanitizeInput } from '../../utils/validation';
+import { SafeAreaView } from 'react-native-safe-area-context';
 
 export default function LoginScreen() {
+  const { login, loginWithGoogle, resetPassword } = useApp();
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showPassword, setShowPassword] = useState(false);
+  const [isLoading, setIsLoading] = useState(false);
+  /** Holds the email address that needs verification; non-null triggers the banner. */
+  const [unverifiedEmail, setUnverifiedEmail] = useState<string | null>(null);
 
-  const handleLogin = () => {
-    // We will integrate Auth later
-    console.log('Login with:', { email, password });
-    router.push('/(auth)/complete-profile');
+  const handleForgotPassword = async () => {
+    const cleanEmail = sanitizeInput(email);
+    if (!cleanEmail) {
+      Alert.alert('Forgot Password', 'Please enter your email address in the field above first.');
+      return;
+    }
+    const emailCheck = validateEmail(cleanEmail);
+    if (!emailCheck.isValid) {
+      Alert.alert('Invalid Email', emailCheck.message);
+      return;
+    }
+
+    setIsLoading(true);
+    const result = await resetPassword(cleanEmail);
+    setIsLoading(false);
+
+    if (result.success) {
+      Alert.alert('Check Your Email', `A password reset link has been sent to ${cleanEmail}.`);
+    } else {
+      Alert.alert('Password Reset Error', result.error || 'Failed to send password reset email.');
+    }
   };
 
-  const handleGoogleLogin = () => {
-    // Google Auth integration later
-    console.log('Login with Google');
+  const handleLogin = async () => {
+    if (isLoading) return;
+    // Clear any previous verification banner when retrying
+    setUnverifiedEmail(null);
+
+    const cleanEmail = sanitizeInput(email);
+    
+    if (hasScriptTags(email) || hasScriptTags(password)) {
+      alert('Security Error: Script tags and HTML elements are not allowed.');
+      return;
+    }
+
+    const emailCheck = validateEmail(cleanEmail);
+    if (!emailCheck.isValid) {
+      alert(emailCheck.message);
+      return;
+    }
+
+    if (!password) {
+      alert('Please enter your password.');
+      return;
+    }
+
+    setIsLoading(true);
+    const result = await login(cleanEmail, password);
+    setIsLoading(false);
+
+    if (!result.success) {
+      // ── Email verification gate ──────────────────────────────────────────────
+      // AppContext returns 'EMAIL_NOT_VERIFIED' as the error sentinel when the
+      // backend signals the account hasn't been verified yet.
+      if (result.error === 'EMAIL_NOT_VERIFIED') {
+        setUnverifiedEmail(cleanEmail);
+        return; // Show the inline banner — do NOT navigate
+      }
+      alert(result.error || 'Login failed');
+      return;
+    }
+    router.replace('/(tabs)');
+  };
+
+  const handleGoogleLogin = async () => {
+    if (isLoading) return;
+    setIsLoading(true);
+    const result = await loginWithGoogle();
+    setIsLoading(false);
+
+    if (!result.success) {
+      alert(result.error || 'Google login failed');
+      return;
+    }
+    router.replace('/(tabs)');
   };
 
   return (
-    <KeyboardAvoidingView 
-      style={styles.container}
-      behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+    <ImageBackground
+      source={require('../../assets/images/white_map_bg.png')}
+      style={styles.backgroundImage}
+      resizeMode="cover"
     >
-      <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
-        
-        {/* Header Section */}
-        <View style={styles.headerContainer}>
-          <Text style={styles.title}>Welcome Back</Text>
-          <Text style={styles.subtitle}>Log in to your Sarathi account</Text>
-        </View>
+      <StatusBar barStyle="dark-content" translucent backgroundColor="transparent" />
+      <KeyboardAvoidingView 
+        style={styles.container}
+        behavior={Platform.OS === 'ios' ? 'padding' : 'height'}
+      >
+        <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right', 'bottom']}>
+          <ScrollView contentContainerStyle={styles.scrollContainer} showsVerticalScrollIndicator={false}>
+            
+            {/* Header Section */}
+            <View style={styles.headerContainer}>
+              <Text style={styles.title}>Welcome Back</Text>
+              <Text style={styles.subtitle}>Log in to continue your Sarathi journey</Text>
+            </View>
 
-        {/* Form Section */}
-        <View style={styles.formContainer}>
-          <Text style={styles.label}>Email</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your email"
-            placeholderTextColor={Colors.textMuted}
-            value={email}
-            onChangeText={setEmail}
-            keyboardType="email-address"
-            autoCapitalize="none"
-          />
+            {/* ── Email Verification Banner ─────────────────────────────── */}
+            {unverifiedEmail !== null && (
+              <View style={styles.verificationBanner}>
+                <View style={styles.verificationIconRow}>
+                  <Ionicons name="mail-unread-outline" size={24} color="#C62026" />
+                  <Text style={styles.verificationTitle}>Verify Your Email First</Text>
+                </View>
+                <Text style={styles.verificationBody}>
+                  Your account isn't verified yet. We sent a verification link to{' '}
+                  <Text style={styles.verificationEmail}>{unverifiedEmail}</Text>.
+                  {' '}Please check your inbox (and spam/junk folder) and click the link before logging in.
+                </Text>
+                <TouchableOpacity
+                  style={styles.resendButton}
+                  onPress={() => {
+                    // Resend endpoint not yet available on the backend.
+                    // When POST /api/auth/resend-verification is added, call it here.
+                    alert('Resend verification is not yet available. Please contact support if you did not receive the email.');
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Ionicons name="refresh-outline" size={15} color={Colors.primary} style={{ marginRight: 5 }} />
+                  <Text style={styles.resendButtonText}>Resend verification email</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
-          <Text style={styles.label}>Password</Text>
-          <TextInput
-            style={styles.input}
-            placeholder="Enter your password"
-            placeholderTextColor={Colors.textMuted}
-            value={password}
-            onChangeText={setPassword}
-            secureTextEntry
-          />
+            {/* Glassmorphic Form Card */}
+            <View style={styles.card}>
+              <Text style={styles.label}>Email Address</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons name="mail-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.input}
+                  placeholder="Enter your email"
+                  placeholderTextColor="#94A3B8"
+                  value={email}
+                  onChangeText={(v) => { setEmail(v); setUnverifiedEmail(null); }}
+                  keyboardType="email-address"
+                  autoCapitalize="none"
+                />
+              </View>
 
-          <TouchableOpacity style={styles.forgotPasswordContainer}>
-            <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
-          </TouchableOpacity>
+              <Text style={styles.label}>Password</Text>
+              <View style={styles.inputContainer}>
+                <Ionicons name="lock-closed-outline" size={20} color={Colors.primary} style={styles.inputIcon} />
+                <TextInput
+                  style={styles.passwordInput}
+                  placeholder="Enter your password"
+                  placeholderTextColor="#94A3B8"
+                  value={password}
+                  onChangeText={setPassword}
+                  secureTextEntry={!showPassword}
+                />
+                <TouchableOpacity 
+                  style={styles.eyeIcon} 
+                  onPress={() => setShowPassword(!showPassword)}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons 
+                    name={showPassword ? "eye-outline" : "eye-off-outline"} 
+                    size={20} 
+                    color="#64748B" 
+                  />
+                </TouchableOpacity>
+              </View>
 
-          <TouchableOpacity style={styles.loginButton} onPress={handleLogin}>
-            <Text style={styles.loginButtonText}>Log In</Text>
-          </TouchableOpacity>
-        </View>
+              <TouchableOpacity style={styles.forgotPasswordContainer} onPress={handleForgotPassword}>
+                <Text style={styles.forgotPasswordText}>Forgot Password?</Text>
+              </TouchableOpacity>
 
-        {/* Divider */}
-        <View style={styles.dividerContainer}>
-          <View style={styles.divider} />
-          <Text style={styles.dividerText}>OR</Text>
-          <View style={styles.divider} />
-        </View>
+              <TouchableOpacity
+                style={[styles.loginButton, isLoading && styles.loginButtonDisabled]}
+                onPress={handleLogin}
+                activeOpacity={0.85}
+                disabled={isLoading}
+              >
+                {isLoading ? (
+                  <ActivityIndicator size="small" color="#FFFFFF" />
+                ) : (
+                  <>
+                    <Text style={styles.loginButtonText}>Log In</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#FFFFFF" style={{ marginLeft: 6 }} />
+                  </>
+                )}
+              </TouchableOpacity>
 
-        {/* Social Auth */}
-        <TouchableOpacity style={styles.googleButton} onPress={handleGoogleLogin}>
-          {/* Note: In a real app, use an SVG icon for Google here */}
-          <Text style={styles.googleButtonText}>Continue with Google</Text>
-        </TouchableOpacity>
+              {/* Divider */}
+              <View style={styles.dividerContainer}>
+                <View style={styles.divider} />
+                <Text style={styles.dividerText}>OR</Text>
+                <View style={styles.divider} />
+              </View>
 
-        {/* Footer */}
-        <View style={styles.footerContainer}>
-          <Text style={styles.footerText}>Don't have an account? </Text>
-          <TouchableOpacity onPress={() => router.replace('/(auth)/signup')}>
-            <Text style={styles.signupText}>Sign Up</Text>
-          </TouchableOpacity>
-        </View>
+              {/* Social Auth */}
+              <TouchableOpacity style={[styles.googleButton, isLoading && { opacity: 0.5 }]} onPress={handleGoogleLogin} activeOpacity={0.85} disabled={isLoading}>
+                <Ionicons name="logo-google" size={20} color="#EA4335" style={{ marginRight: 8 }} />
+                <Text style={styles.googleButtonText}>Continue with Google</Text>
+              </TouchableOpacity>
+            </View>
 
-      </ScrollView>
-    </KeyboardAvoidingView>
+            {/* Footer */}
+            <View style={styles.footerContainer}>
+              <Text style={styles.footerText}>Don't have an account? </Text>
+              <TouchableOpacity onPress={() => router.replace('/(auth)/signup')}>
+                <Text style={styles.signupText}>Sign Up</Text>
+              </TouchableOpacity>
+            </View>
+
+          </ScrollView>
+        </SafeAreaView>
+      </KeyboardAvoidingView>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
+  backgroundImage: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+  },
   container: {
     flex: 1,
-    backgroundColor: Colors.background,
+  },
+  safeArea: {
+    flex: 1,
   },
   scrollContainer: {
     flexGrow: 1,
     paddingHorizontal: 24,
-    paddingTop: 60,
-    paddingBottom: 40,
+    paddingTop: 40,
+    paddingBottom: 30,
     justifyContent: 'center',
   },
   headerContainer: {
     alignItems: 'center',
-    marginBottom: 40,
+    marginBottom: 28,
+  },
+  logoBadge: {
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#FCA5A5',
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginBottom: 16,
+    shadowColor: '#C62026',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.15,
+    shadowRadius: 8,
+    elevation: 3,
   },
   title: {
     fontSize: 28,
     fontWeight: 'bold',
-    color: Colors.textPrimary,
-    marginBottom: 8,
+    color: Colors.primary,
+    marginBottom: 6,
+    textAlign: 'center',
   },
   subtitle: {
-    fontSize: 16,
-    color: Colors.textMuted,
+    fontSize: 15,
+    color: '#64748B',
+    textAlign: 'center',
   },
-  formContainer: {
-    marginBottom: 30,
+  // ── Email Verification Banner ────────────────────────────────────────────────
+  verificationBanner: {
+    backgroundColor: '#FEF2F2',
+    borderWidth: 1.5,
+    borderColor: '#FCA5A5',
+    borderRadius: 14,
+    padding: 16,
+    marginBottom: 20,
+  },
+  verificationIconRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginBottom: 8,
+  },
+  verificationTitle: {
+    fontSize: 15,
+    fontWeight: '700',
+    color: '#C62026',
+    marginLeft: 8,
+  },
+  verificationBody: {
+    fontSize: 13.5,
+    color: '#7F1D1D',
+    lineHeight: 20,
+    marginBottom: 12,
+  },
+  verificationEmail: {
+    fontWeight: '700',
+    color: '#991B1B',
+  },
+  resendButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    backgroundColor: '#FFF',
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: '#FCA5A5',
+  },
+  resendButtonText: {
+    fontSize: 13,
+    color: Colors.primary,
+    fontWeight: '600',
+  },
+  // ────────────────────────────────────────────────────────────────────────────
+  card: {
+    backgroundColor: 'transparent',
+    padding: 0,
+    marginBottom: 24,
   },
   label: {
     fontSize: 14,
     fontWeight: '600',
-    color: Colors.textPrimary,
+    color: '#1E293B',
     marginBottom: 8,
   },
+  inputContainer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: 'rgba(255, 255, 255, 0.85)',
+    borderBottomWidth: 1.5,
+    borderBottomColor: Colors.primary,
+    borderRadius: 8,
+    paddingHorizontal: 14,
+    marginBottom: 18,
+  },
+  inputIcon: {
+    marginRight: 10,
+  },
   input: {
-    backgroundColor: Colors.surface,
-    borderWidth: 1,
-    borderColor: '#E2E8F0', // Very light gray border
-    borderRadius: 12,
-    padding: 16,
-    fontSize: 16,
-    color: Colors.textPrimary,
-    marginBottom: 16,
+    flex: 1,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: '#0F172A',
+  },
+  passwordInput: {
+    flex: 1,
+    paddingVertical: 14,
+    fontSize: 15,
+    color: '#0F172A',
+  },
+  eyeIcon: {
+    paddingLeft: 10,
   },
   forgotPasswordContainer: {
     alignItems: 'flex-end',
-    marginBottom: 24,
+    marginBottom: 22,
   },
   forgotPasswordText: {
     color: Colors.primary,
@@ -144,20 +376,32 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
   loginButton: {
-    backgroundColor: Colors.accent,
-    padding: 16,
-    borderRadius: 12,
+    backgroundColor: Colors.primary,
+    paddingVertical: 16,
+    borderRadius: 14,
+    flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
+    shadowColor: Colors.primary,
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.25,
+    shadowRadius: 10,
+    elevation: 4,
+  },
+  loginButtonDisabled: {
+    opacity: 0.65,
+    shadowOpacity: 0,
+    elevation: 0,
   },
   loginButtonText: {
-    color: Colors.background,
+    color: '#FFFFFF',
     fontSize: 16,
     fontWeight: 'bold',
   },
   dividerContainer: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 30,
+    marginVertical: 22,
   },
   divider: {
     flex: 1,
@@ -165,23 +409,24 @@ const styles = StyleSheet.create({
     backgroundColor: '#E2E8F0',
   },
   dividerText: {
-    marginHorizontal: 15,
-    color: Colors.textMuted,
-    fontSize: 14,
+    marginHorizontal: 14,
+    color: '#94A3B8',
+    fontSize: 13,
     fontWeight: '600',
   },
   googleButton: {
-    backgroundColor: Colors.background,
+    backgroundColor: '#FFFFFF',
     borderWidth: 1,
     borderColor: '#E2E8F0',
-    padding: 16,
-    borderRadius: 12,
+    paddingVertical: 14,
+    borderRadius: 14,
+    flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: 30,
+    justifyContent: 'center',
   },
   googleButtonText: {
-    color: Colors.textPrimary,
-    fontSize: 16,
+    color: '#334155',
+    fontSize: 15,
     fontWeight: '600',
   },
   footerContainer: {
@@ -190,7 +435,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
   },
   footerText: {
-    color: Colors.textMuted,
+    color: '#64748B',
     fontSize: 15,
   },
   signupText: {
@@ -199,3 +444,4 @@ const styles = StyleSheet.create({
     fontWeight: 'bold',
   },
 });
+
